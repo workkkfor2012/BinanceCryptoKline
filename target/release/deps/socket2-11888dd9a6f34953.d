@@ -1,0 +1,11 @@
+F:\work\github\quant\src\kline_downloader_rust\target\release\deps\libsocket2-11888dd9a6f34953.rmeta: F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\lib.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockaddr.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\socket.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockref.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sys\windows.rs
+
+F:\work\github\quant\src\kline_downloader_rust\target\release\deps\libsocket2-11888dd9a6f34953.rlib: F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\lib.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockaddr.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\socket.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockref.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sys\windows.rs
+
+F:\work\github\quant\src\kline_downloader_rust\target\release\deps\socket2-11888dd9a6f34953.d: F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\lib.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockaddr.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\socket.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockref.rs F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sys\windows.rs
+
+F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\lib.rs:
+F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockaddr.rs:
+F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\socket.rs:
+F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sockref.rs:
+F:\Users\schu\.cargo\registry\src\index.crates.io-6f17d22bba15001f\socket2-0.5.9\src\sys\windows.rs:
