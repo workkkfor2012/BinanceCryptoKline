@@ -1,8 +1,8 @@
 [package]
-name = "kline_downloader_rust"
+name = "kline_server"
 version = "0.1.0"
 edition = "2021"
-description = "A Rust application to download Binance U-margined perpetual futures kline data"
+description = "A Rust server for managing and serving Binance U-margined perpetual futures kline data"
 authors = ["Quant Team"]
 
 [dependencies]

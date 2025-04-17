@@ -17,7 +17,7 @@ impl Storage {
     ) -> Result<()> {
         let path = path.as_ref();
         let file_exists = path.exists();
-        
+
         debug!(
             "{} klines to {} at {}",
             if append { "Appending" } else { "Writing" },
@@ -45,7 +45,7 @@ impl Storage {
         }
 
         writer.flush()?;
-        
+
         info!(
             "Successfully {} {} klines to {}",
             if append { "appended" } else { "wrote" },
@@ -57,6 +57,7 @@ impl Storage {
     }
 
     /// Check if a file exists and get its size
+    #[allow(dead_code)]
     pub fn get_file_size<P: AsRef<Path>>(path: P) -> Option<u64> {
         let path = path.as_ref();
         if path.exists() {

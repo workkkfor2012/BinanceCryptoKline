@@ -2,17 +2,41 @@ use crate::api::BinanceApi;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::{AppError, Result};
-use crate::models::{DownloadResult, DownloadTask, Kline, Symbol};
+use crate::models::{DownloadResult, DownloadTask, Kline};
 use crate::storage::Storage;
 use crate::utils::{
-    calculate_time_chunks, format_duration_ms, format_ms, get_default_end_time,
-    get_default_start_time, get_interval_ms,
+    format_duration_ms, format_ms, get_default_end_time,
 };
 use futures::stream::{self, StreamExt};
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+
+/// 所有周期列表
+#[allow(dead_code)]
+pub const ALL_INTERVALS: [&str; 6] = ["1m", "5m", "30m", "4h", "1d", "1w"];
+
+/// K线数量乘数因子
+pub const KLINE_MULTIPLIER: i64 = 100;
+/// 每个周期的预期K线数量
+pub const EXPECTED_COUNTS: [i64; 6] = [
+    50 * KLINE_MULTIPLIER, 50 * KLINE_MULTIPLIER, 30 * KLINE_MULTIPLIER,
+    30 * KLINE_MULTIPLIER, 20 * KLINE_MULTIPLIER, 10 * KLINE_MULTIPLIER
+];
+
+/// 获取指定周期的K线数量
+pub fn get_kline_count_for_interval(interval: &str) -> i64 {
+    match interval {
+        "1m" => EXPECTED_COUNTS[0],
+        "5m" => EXPECTED_COUNTS[1],
+        "30m" => EXPECTED_COUNTS[2],
+        "4h" => EXPECTED_COUNTS[3],
+        "1d" => EXPECTED_COUNTS[4],
+        "1w" => EXPECTED_COUNTS[5],
+        _ => EXPECTED_COUNTS[0], // 默认使用1分钟的数量
+    }
+}
 
 /// Downloader for Binance kline data
 pub struct Downloader {
@@ -218,16 +242,8 @@ impl Downloader {
                 _ => 60_000,           // 默认为1分钟
             };
 
-            // 根据周期设置不同的K线数量
-            let kline_count = match interval {
-                "1m" => 5000,
-                "5m" => 5000,
-                "30m" => 3000,
-                "4h" => 3000,
-                "1d" => 2000,
-                "1w" => 1000,  // 修改为1000，确保能下载到所有品种的所有周线
-                _ => 5000,
-            };
+            // 使用当前模块中的配置获取K线数量
+            let kline_count = get_kline_count_for_interval(interval);
 
             // 计算起始时间 = 结束时间 - (周期毫秒数 * K线数量)
             let calculated_start_time = end_time - (interval_ms * kline_count);

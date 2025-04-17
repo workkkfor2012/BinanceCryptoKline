@@ -828,7 +828,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kline_downloader_rust"
+name = "kline_server"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -24,12 +24,14 @@ pub enum AppError {
     ConfigError(String),
 
     #[error("Data error: {0}")]
+    #[allow(dead_code)]
     DataError(String),
 
     #[error("Database error: {0}")]
     DatabaseError(String),
 
     #[error("Unknown error: {0}")]
+    #[allow(dead_code)]
     Unknown(String),
 }
 

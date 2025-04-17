@@ -1,0 +1,27 @@
+# Rust编译产物目录
+/target/
+
+# Rust工具链文件
+**/*.rs.bk
+*.pdb
+
+# IDE和编辑器文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 本地配置文件
+Cargo.lock
+config.local.toml
+
+# 日志文件
+*.log
+
+# 数据文件
+/data/
+
+# 备份文件
+*.bak
+*.backup

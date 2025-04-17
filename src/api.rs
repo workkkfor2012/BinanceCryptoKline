@@ -3,90 +3,56 @@ use crate::models::{DownloadTask, ExchangeInfo, Kline};
 use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+// 移除未使用的导入
 use std::time::Duration;
 
 /// Binance API client
 pub struct BinanceApi {
-    direct_client: Client,
-    proxy_client: Client,
-    data_api_url: String,
-    fapi_url: String,
-    use_proxy: Arc<AtomicBool>,
+    client: Client,
+    api_url: String,
 }
 
 impl BinanceApi {
     /// Create a new Binance API client
-    pub fn new(base_url: String) -> Self {
-        // 创建直连客户端
-        let direct_client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create direct HTTP client");
+    pub fn new(_base_url: String) -> Self {
+        // 创建客户端
+        let client_builder = Client::builder()
+            .timeout(Duration::from_secs(30));
 
-        // 创建代理客户端
+        // 添加代理设置
         let proxy_url = "http://127.0.0.1:1080";
-        let proxy_client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .proxy(reqwest::Proxy::http(proxy_url).expect("Failed to create HTTP proxy"))
-            .proxy(reqwest::Proxy::https(proxy_url).expect("Failed to create HTTPS proxy"))
-            .build()
-            .expect("Failed to create proxy HTTP client");
+        let client = match reqwest::Proxy::all(proxy_url) {
+            Ok(proxy) => {
+                info!("Using proxy for all protocols: {}", proxy_url);
+                client_builder
+                    .proxy(proxy)
+                    .build()
+                    .expect("Failed to create HTTP client with proxy")
+            },
+            Err(e) => {
+                warn!("Failed to set proxy, will try direct connection: {}", e);
+                client_builder
+                    .build()
+                    .expect("Failed to create HTTP client")
+            }
+        };
 
-        info!("Initialized API clients with data-api and fapi endpoints");
-        info!("Will use data-api.binance.vision by default, fallback to fapi.binance.com with proxy if needed");
+        info!("Initialized API client with fapi endpoint");
+        info!("Using https://fapi.binance.com as the only API endpoint");
 
         Self {
-            direct_client,
-            proxy_client,
-            data_api_url: "https://data-api.binance.vision".to_string(),
-            fapi_url: "https://fapi.binance.com".to_string(),
-            use_proxy: Arc::new(AtomicBool::new(false)),
+            client,
+            api_url: "https://fapi.binance.com".to_string(),
         }
     }
 
-    /// Get exchange information with automatic fallback
+    /// Get exchange information
     pub async fn get_exchange_info(&self) -> Result<ExchangeInfo> {
-        // 先尝试使用data-api.binance.vision
-        if !self.use_proxy.load(Ordering::Relaxed) {
-            let data_api_url = format!("{}/api/v3/exchangeInfo", self.data_api_url);
-            debug!("Fetching exchange info from data-api: {}", data_api_url);
+        // 使用fapi.binance.com
+        let fapi_url = format!("{}/fapi/v1/exchangeInfo", self.api_url);
+        debug!("Fetching exchange info from fapi: {}", fapi_url);
 
-            match self.direct_client.get(&data_api_url)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-                .send()
-                .await {
-                    Ok(response) => {
-                        if response.status().is_success() {
-                            match response.json::<ExchangeInfo>().await {
-                                Ok(exchange_info) => {
-                                    debug!("Successfully received exchange info from data-api with {} symbols", exchange_info.symbols.len());
-                                    return Ok(exchange_info);
-                                },
-                                Err(e) => {
-                                    warn!("Failed to parse exchange info from data-api: {}", e);
-                                }
-                            }
-                        } else {
-                            warn!("Failed to get exchange info from data-api: {}", response.status());
-                        }
-                    },
-                    Err(e) => {
-                        warn!("Failed to connect to data-api: {}", e);
-                    }
-            }
-
-            // 如果失败，切换到使用代理的fapi
-            info!("Switching to fapi.binance.com with proxy");
-            self.use_proxy.store(true, Ordering::Relaxed);
-        }
-
-        // 使用fapi.binance.com和代理
-        let fapi_url = format!("{}/fapi/v1/exchangeInfo", self.fapi_url);
-        debug!("Fetching exchange info from fapi with proxy: {}", fapi_url);
-
-        let response = self.proxy_client.get(&fapi_url)
+        let response = self.client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
             .send()
             .await?;
@@ -117,7 +83,7 @@ impl BinanceApi {
         }
 
         // 使用与TypeScript代码相同的过滤条件
-        let mut symbols = exchange_info
+        let symbols = exchange_info
             .symbols
             .iter()
             .filter(|s| {
@@ -149,64 +115,17 @@ impl BinanceApi {
         Ok(symbols)
     }
 
-    /// Download klines for a specific task with automatic fallback
+    /// Download klines for a specific task
     pub async fn download_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
-        // 检查是否需要使用代理
-        if !self.use_proxy.load(Ordering::Relaxed) {
-            // 先尝试使用data-api.binance.vision
-            let data_api_url = format!(
-                "{}/api/v3/klines?symbol={}&interval={}&startTime={}&endTime={}&limit={}&timeZone=8:00",
-                self.data_api_url, task.symbol, task.interval, task.start_time, task.end_time, task.limit
-            );
-            debug!("Downloading klines from data-api: {}", data_api_url);
-
-            match self.direct_client.get(&data_api_url)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-                .send()
-                .await {
-                    Ok(response) => {
-                        if response.status().is_success() {
-                            match response.json::<Vec<Vec<Value>>>().await {
-                                Ok(raw_klines) => {
-                                    debug!("Successfully received {} klines from data-api for {}", raw_klines.len(), task.symbol);
-                                    let klines = raw_klines
-                                        .iter()
-                                        .filter_map(|raw| Kline::from_raw_kline(raw))
-                                        .collect::<Vec<Kline>>();
-
-                                    if klines.len() == raw_klines.len() {
-                                        return Ok(klines);
-                                    } else {
-                                        warn!("Failed to parse some klines from data-api for {}: parsed {}/{} klines",
-                                            task.symbol, klines.len(), raw_klines.len());
-                                    }
-                                },
-                                Err(e) => {
-                                    warn!("Failed to parse klines from data-api for {}: {}", task.symbol, e);
-                                }
-                            }
-                        } else {
-                            warn!("Failed to download klines from data-api for {}: {}", task.symbol, response.status());
-                        }
-                    },
-                    Err(e) => {
-                        warn!("Failed to connect to data-api for {}: {}", task.symbol, e);
-                    }
-            }
-
-            // 如果失败，切换到使用代理的fapi
-            info!("Switching to fapi.binance.com with proxy for {}", task.symbol);
-            self.use_proxy.store(true, Ordering::Relaxed);
-        }
-
-        // 使用fapi.binance.com和代理
+        // 使用fapi.binance.com
+        // 使用 fapi/v1/continuousKlines 获取连续合约数据
         let fapi_url = format!(
-            "{}/fapi/v1/klines?symbol={}&interval={}&startTime={}&endTime={}&limit={}&timeZone=8:00",
-            self.fapi_url, task.symbol, task.interval, task.start_time, task.end_time, task.limit
+            "{}/fapi/v1/continuousKlines?pair={}&contractType=PERPETUAL&interval={}&startTime={}&endTime={}&limit={}",
+            self.api_url, task.symbol, task.interval, task.start_time, task.end_time, task.limit
         );
-        debug!("Downloading klines from fapi with proxy: {}", fapi_url);
+        debug!("Downloading continuous klines from fapi: {}", fapi_url);
 
-        let response = self.proxy_client.get(&fapi_url)
+        let response = self.client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
             .send()
             .await?;

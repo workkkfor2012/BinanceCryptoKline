@@ -3,8 +3,9 @@ use crate::models::Kline;
 use log::{debug, info};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 use std::path::Path;
+// 移除未使用的导入
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -14,26 +15,45 @@ pub struct Database {
 }
 
 impl Database {
-    /// Create a new database connection
+    /// Create a new database connection with WAL mode and optimized settings
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let db_path = db_path.as_ref();
 
-        // Ensure parent directory exists
+        // Ensure parent directory exists for database
         if let Some(parent) = db_path.parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent)?;
             }
         }
 
-        let manager = SqliteConnectionManager::file(db_path);
-        let pool = Pool::new(manager)
+        info!("Using SQLite database with WAL mode at {}", db_path.display());
+
+        // 创建数据库连接管理器，并启用WAL模式和性能优化
+        let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+            conn.execute_batch("
+                PRAGMA journal_mode = WAL;           -- 启用WAL模式
+                PRAGMA synchronous = NORMAL;         -- 平衡性能和安全性
+                PRAGMA cache_size = -50000;          -- 约200MB缓存（负数表示KB）
+                PRAGMA mmap_size = 268435456;        -- 256MB内存映射
+                PRAGMA temp_store = MEMORY;          -- 临时表存储在内存中
+                PRAGMA wal_autocheckpoint = 1000;    -- 每1000页做一次自动检查点
+                PRAGMA busy_timeout = 5000;          -- 忙等待超时5秒
+            ")
+        });
+
+        // 创建连接池，允许多个并发连接
+        let pool = Pool::builder()
+            .max_size(10) // 最多10个并发连接，可以根据需要调整
+            .build(manager)
             .map_err(|e| AppError::DatabaseError(format!("Failed to create connection pool: {}", e)))?;
 
-        // Initialize database
+        // 初始化数据库实例
         let db = Self { pool };
+
+        // 初始化数据库表
         db.init_db()?;
 
-        info!("Database initialized at {}", db_path.display());
+        info!("SQLite database with WAL mode initialized successfully");
         Ok(db)
     }
 
@@ -62,17 +82,13 @@ impl Database {
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
-        // Create table name: lowercase symbol_interval (e.g., btc_1m)
+        // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // 去掉交易对名称中的"USDT"后缀
         let symbol_lower = symbol.to_lowercase().replace("usdt", "");
         let interval_lower = interval.to_lowercase();
 
-        // 对数字开头的品种添加"k_"前缀
-        let table_name = if symbol_lower.chars().next().unwrap_or('a').is_digit(10) {
-            format!("k_{symbol_lower}_{interval_lower}")
-        } else {
-            format!("{symbol_lower}_{interval_lower}")
-        };
+        // 统一使用 k_ 前缀
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
 
         // Create table for this symbol and interval
         let create_table_sql = format!(
@@ -122,17 +138,13 @@ impl Database {
         // Ensure table exists for this symbol and interval
         self.ensure_symbol_table(symbol, interval)?;
 
-        // Create table name: lowercase symbol_interval (e.g., btc_1m)
+        // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // 去掉交易对名称中的"USDT"后缀
         let symbol_lower = symbol.to_lowercase().replace("usdt", "");
         let interval_lower = interval.to_lowercase();
 
-        // 对数字开头的品种添加"k_"前缀
-        let table_name = if symbol_lower.chars().next().unwrap_or('a').is_digit(10) {
-            format!("k_{symbol_lower}_{interval_lower}")
-        } else {
-            format!("{symbol_lower}_{interval_lower}")
-        };
+        // 统一使用 k_ 前缀
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
 
         let mut conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -192,17 +204,13 @@ impl Database {
 
     /// Get the latest kline timestamp for a symbol and interval
     pub fn get_latest_kline_timestamp(&self, symbol: &str, interval: &str) -> Result<Option<i64>> {
-        // Create table name: lowercase symbol_interval (e.g., btc_1m)
+        // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // 去掉交易对名称中的"USDT"后缀
         let symbol_lower = symbol.to_lowercase().replace("usdt", "");
         let interval_lower = interval.to_lowercase();
 
-        // 对数字开头的品种添加"k_"前缀
-        let table_name = if symbol_lower.chars().next().unwrap_or('a').is_digit(10) {
-            format!("k_{symbol_lower}_{interval_lower}")
-        } else {
-            format!("{symbol_lower}_{interval_lower}")
-        };
+        // 统一使用 k_ 前缀
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
 
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -231,17 +239,13 @@ impl Database {
 
     /// Get the count of klines for a symbol and interval
     pub fn get_kline_count(&self, symbol: &str, interval: &str) -> Result<i64> {
-        // Create table name: lowercase symbol_interval (e.g., btc_1m)
+        // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // 去掉交易对名称中的"USDT"后缀
         let symbol_lower = symbol.to_lowercase().replace("usdt", "");
         let interval_lower = interval.to_lowercase();
 
-        // 对数字开头的品种添加"k_"前缀
-        let table_name = if symbol_lower.chars().next().unwrap_or('a').is_digit(10) {
-            format!("k_{symbol_lower}_{interval_lower}")
-        } else {
-            format!("{symbol_lower}_{interval_lower}")
-        };
+        // 统一使用 k_ 前缀
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
 
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -268,7 +272,7 @@ impl Database {
     }
 
     /// 不再限制K线数量，保留所有数据
-    pub fn trim_klines(&self, symbol: &str, interval: &str, max_count: i64) -> Result<usize> {
+    pub fn trim_klines(&self, symbol: &str, interval: &str, _max_count: i64) -> Result<usize> {
         // 不再限制K线数量，直接返回0
         debug!("K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
         Ok(0)

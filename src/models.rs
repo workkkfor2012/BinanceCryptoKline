@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+// 移除未使用的导入
 
 /// Represents a Binance kline/candlestick
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +198,9 @@ pub struct DownloadResult {
     pub symbol: String,
     pub interval: String,
     pub klines: Vec<Kline>,
+    // 这些字段在当前代码中未使用，但可能在未来的扩展中使用
+    #[allow(dead_code)]
     pub start_time: i64,
+    #[allow(dead_code)]
     pub end_time: i64,
 }

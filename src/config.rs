@@ -24,8 +24,11 @@ pub struct Config {
     /// Specific symbols to download
     pub symbols: Option<Vec<String>>,
     /// Base URL for Binance API
+    /// API基础URL
+    #[allow(dead_code)]
     pub api_base_url: String,
     /// Maximum number of klines per request
+    #[allow(dead_code)]
     pub max_limit: i32,
     /// Maximum number of klines to keep per symbol and interval
     pub max_klines_per_symbol: i32,
@@ -87,11 +90,7 @@ impl Config {
         });
 
         // Set database path
-        let db_path = if use_sqlite {
-            PathBuf::from(format!("{}/klines.db", output_dir.display()))
-        } else {
-            PathBuf::from(":memory:")
-        };
+        let db_path = PathBuf::from(format!("{}/klines.db", output_dir.display()));
 
         // 处理max_klines参数，0表示无限制
         let max_klines_per_symbol = match max_klines.unwrap_or(0) {

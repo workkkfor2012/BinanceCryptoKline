@@ -19,6 +19,7 @@ pub fn format_ms(ms: i64) -> String {
 }
 
 /// Calculate time chunks for downloading data
+#[allow(dead_code)]
 pub fn calculate_time_chunks(
     start_time: i64,
     end_time: i64,
@@ -46,6 +47,7 @@ pub fn calculate_time_chunks(
 }
 
 /// Get interval duration in milliseconds
+#[allow(dead_code)]
 pub fn get_interval_ms(interval: &str) -> i64 {
     match interval {
         "1s" => 1_000,
@@ -68,6 +70,7 @@ pub fn get_interval_ms(interval: &str) -> i64 {
 }
 
 /// Get default start time (30 days ago)
+#[allow(dead_code)]
 pub fn get_default_start_time() -> i64 {
     let now = Utc::now();
     let thirty_days_ago = now - Duration::days(30);
@@ -98,6 +101,7 @@ pub fn format_duration_ms(ms: i64) -> String {
 }
 
 /// Format file size in bytes as a human-readable string
+#[allow(dead_code)]
 pub fn format_file_size(size: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
