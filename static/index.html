@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC K线实时显示</title>
+    <!-- 使用本地库而不是CDN -->
+    <script>
+        // 内联轻量级图表库的基本功能
+        window.LightweightCharts = {
+            createChart: function(container, options) {
+                console.log('Creating chart with options:', options);
+
+                // 创建一个简单的图表对象
+                const chart = {
+                    applyOptions: function(opts) {
+                        console.log('Applying options:', opts);
+                    },
+                    addCandlestickSeries: function(opts) {
+                        console.log('Adding candlestick series with options:', opts);
+                        return {
+                            setData: function(data) {
+                                console.log('Setting data with', data.length, 'items');
+                                // 在容器中显示一些基本信息
+                                const info = document.createElement('div');
+                                info.style.padding = '10px';
+                                info.style.color = '#333';
+                                info.innerHTML = `<strong>数据点数量:</strong> ${data.length}<br>`;
+                                if (data.length > 0) {
+                                    info.innerHTML += `<strong>第一个数据点:</strong> ${new Date(data[0].time * 1000).toLocaleString()}<br>`;
+                                    info.innerHTML += `<strong>最后一个数据点:</strong> ${new Date(data[data.length-1].time * 1000).toLocaleString()}<br>`;
+                                    info.innerHTML += `<strong>最新价格:</strong> ${data[data.length-1].close}`;
+                                }
+
+                                // 清除容器并添加信息
+                                container.innerHTML = '';
+                                container.appendChild(info);
+
+                                // 添加一个简单的图表显示
+                                if (data.length > 0) {
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = container.clientWidth;
+                                    canvas.height = 200;
+                                    canvas.style.marginTop = '10px';
+                                    container.appendChild(canvas);
+
+                                    try {
+                                        const ctx = canvas.getContext('2d');
+                                        ctx.fillStyle = '#f8f8f8';
+                                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                                        // 找出最高价和最低价
+                                        let maxPrice = Math.max(...data.map(d => d.high));
+                                        let minPrice = Math.min(...data.map(d => d.low));
+                                        let range = maxPrice - minPrice;
+
+                                        // 增加一点空间
+                                        maxPrice += range * 0.05;
+                                        minPrice -= range * 0.05;
+                                        range = maxPrice - minPrice;
+
+                                        // 绘制每个K线
+                                        const barWidth = Math.max(2, (canvas.width / data.length) * 0.8);
+                                        const spacing = (canvas.width - barWidth * data.length) / (data.length + 1);
+
+                                        data.forEach((item, index) => {
+                                            const x = spacing + index * (barWidth + spacing);
+
+                                            // 计算价格对应的Y坐标
+                                            const openY = canvas.height - ((item.open - minPrice) / range) * canvas.height;
+                                            const closeY = canvas.height - ((item.close - minPrice) / range) * canvas.height;
+                                            const highY = canvas.height - ((item.high - minPrice) / range) * canvas.height;
+                                            const lowY = canvas.height - ((item.low - minPrice) / range) * canvas.height;
+
+                                            // 绘制彩色K线
+                                            ctx.strokeStyle = item.close >= item.open ? '#4CAF50' : '#f44336';
+                                            ctx.fillStyle = item.close >= item.open ? '#4CAF50' : '#f44336';
+
+                                            // 绘制影线
+                                            ctx.beginPath();
+                                            ctx.moveTo(x + barWidth/2, highY);
+                                            ctx.lineTo(x + barWidth/2, lowY);
+                                            ctx.stroke();
+
+                                            // 绘制实体
+                                            ctx.fillRect(x, Math.min(openY, closeY), barWidth, Math.abs(closeY - openY) || 1);
+                                        });
+
+                                        // 绘制价格范围
+                                        ctx.fillStyle = '#333';
+                                        ctx.font = '10px Arial';
+                                        ctx.fillText(maxPrice.toFixed(2), 5, 15);
+                                        ctx.fillText(minPrice.toFixed(2), 5, canvas.height - 5);
+                                    } catch (e) {
+                                        console.error('Error drawing chart:', e);
+                                    }
+                                }
+                            }
+                        };
+                    }
+                };
+
+                return chart;
+            },
+            CrosshairMode: {
+                Normal: 'normal'
+            }
+        };
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .price-info {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+        .price-up {
+            color: #4CAF50;
+        }
+        .price-down {
+            color: #f44336;
+        }
+        .kline-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .kline-section {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        .kline-section h2 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 18px;
+            color: #333;
+            text-align: center;
+        }
+        .chart-container {
+            height: 300px;
+            width: 100%;
+        }
+        #debug-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            display: none;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .error-message {
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        .success-message {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BTC/USDT 实时K线</h1>
+
+        <div class="price-info">
+            <span id="current-price">当前价格: 加载中...</span>
+            <button id="debug-button" style="margin-left: 20px;">显示调试信息</button>
+        </div>
+
+        <div class="kline-container" id="kline-container">
+            <!-- K线图表将在这里动态生成 -->
+        </div>
+
+        <div id="debug-info"></div>
+    </div>
+
+    <script>
+        // 全局变量
+        let lastPrice = null;
+        let debugMode = false;
+        const intervals = ['1m', '5m', '30m', '4h', '1d', '1w'];
+        const intervalNames = {
+            '1m': '1分钟',
+            '5m': '5分钟',
+            '30m': '30分钟',
+            '4h': '4小时',
+            '1d': '1天',
+            '1w': '1周'
+        };
+        const charts = {};
+        const candleSeries = {};
+        const websockets = {};
+        const klineData = {};
+
+        // 币安API URL
+        const BINANCE_WS_URL = 'wss://fstream.binance.com/ws';
+        const BINANCE_REST_API_URL = 'https://fapi.binance.com';
+
+        // 币安K线历史数据限制
+        const KLINE_LIMIT = 1000; // 每次请求的最大K线数量
+
+        // 调试信息输出
+        function debug(message, type = 'info') {
+            if (debugMode) {
+                const debugInfo = document.getElementById('debug-info');
+                debugInfo.style.display = 'block';
+
+                const line = document.createElement('div');
+                if (type === 'error') {
+                    line.className = 'error-message';
+                    line.textContent = '错误: ' + message;
+                } else if (type === 'success') {
+                    line.className = 'success-message';
+                    line.textContent = '成功: ' + message;
+                } else {
+                    line.textContent = message;
+                }
+
+                debugInfo.appendChild(line);
+                debugInfo.scrollTop = debugInfo.scrollHeight; // 滚动到底部
+
+                if (type === 'error') {
+                    console.error(message);
+                } else {
+                    console.log(message);
+                }
+            }
+        }
+
+        // 切换调试模式
+        function toggleDebug() {
+            debugMode = !debugMode;
+            const debugInfo = document.getElementById('debug-info');
+            if (!debugMode) {
+                debugInfo.style.display = 'none';
+            } else {
+                debugInfo.style.display = 'block';
+            }
+        }
+
+        // 创建K线图表
+        function createCharts() {
+            const container = document.getElementById('kline-container');
+            container.innerHTML = '';
+
+            intervals.forEach(interval => {
+                // 创建图表容器
+                const section = document.createElement('div');
+                section.className = 'kline-section';
+                section.id = `kline-section-${interval}`;
+
+                const title = document.createElement('h2');
+                title.textContent = `${intervalNames[interval]}周期`;
+                section.appendChild(title);
+
+                const chartContainer = document.createElement('div');
+                chartContainer.id = `chart-${interval}`;
+                chartContainer.className = 'chart-container';
+                section.appendChild(chartContainer);
+
+                container.appendChild(section);
+
+                // 初始化图表
+                initChart(interval);
+            });
+        }
+
+        // 初始化单个图表
+        function initChart(interval) {
+            try {
+                const chartContainer = document.getElementById(`chart-${interval}`);
+
+                // 创建图表
+                charts[interval] = LightweightCharts.createChart(chartContainer, {
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight,
+                    layout: {
+                        backgroundColor: '#ffffff',
+                        textColor: '#333',
+                    },
+                    grid: {
+                        vertLines: {
+                            color: '#f0f0f0',
+                        },
+                        horzLines: {
+                            color: '#f0f0f0',
+                        },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#cccccc',
+                    },
+                    timeScale: {
+                        borderColor: '#cccccc',
+                        timeVisible: true,
+                        secondsVisible: false,
+                    },
+                });
+
+                // 添加K线图系列
+                candleSeries[interval] = charts[interval].addCandlestickSeries({
+                    upColor: '#4CAF50',
+                    downColor: '#f44336',
+                    borderDownColor: '#f44336',
+                    borderUpColor: '#4CAF50',
+                    wickDownColor: '#f44336',
+                    wickUpColor: '#4CAF50',
+                });
+
+                // 添加响应式调整
+                window.addEventListener('resize', () => {
+                    if (charts[interval]) {
+                        charts[interval].applyOptions({
+                            width: chartContainer.clientWidth,
+                        });
+                    }
+                });
+
+                debug(`Chart initialized for ${interval}`);
+            } catch (error) {
+                console.error(`Error initializing chart for ${interval}:`, error);
+                debug(`Error initializing chart for ${interval}: ${error.message}`);
+            }
+        }
+
+        // 初始化WebSocket连接
+        function initWebSockets() {
+            debug('开始初始化WebSocket连接...');
+
+            // 关闭现有的WebSocket连接
+            for (const interval in websockets) {
+                if (websockets[interval] && websockets[interval].readyState !== WebSocket.CLOSED) {
+                    debug(`关闭${interval}周期的WebSocket连接`);
+                    websockets[interval].close();
+                }
+            }
+
+            // 保留现有的历史数据，不清空数据存储
+            debug('保留现有的历史K线数据，开始创建WebSocket连接');
+
+            // 输出当前数据状态
+            intervals.forEach(interval => {
+                debug(`${interval} 周期当前有 ${klineData[interval] ? klineData[interval].length : 0} 条数据`);
+            });
+
+            // 创建并连接WebSocket
+            intervals.forEach(interval => {
+                connectWebSocket(interval);
+            });
+        }
+
+        // 连接币安WebSocket
+        function connectWebSocket(interval) {
+            try {
+                debug(`连接${interval}周期的WebSocket...`);
+
+                // 创建WebSocket连接
+                const ws = new WebSocket(BINANCE_WS_URL);
+                websockets[interval] = ws;
+
+                // 连接打开时发送订阅请求
+                ws.onopen = () => {
+                    debug(`${interval}周期的WebSocket连接已打开`, 'success');
+
+                    // 发送订阅请求
+                    const subscribeMsg = {
+                        method: 'SUBSCRIBE',
+                        params: [`btcusdt_perpetual@continuousKline_${interval}`],
+                        id: Date.now()
+                    };
+
+                    ws.send(JSON.stringify(subscribeMsg));
+                    debug(`已发送${interval}周期的订阅请求`, 'success');
+                };
+
+                // 接收消息
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        debug(`收到${interval}周期的WebSocket消息: ${event.data.substring(0, 100)}...`);
+
+                        // 如果是订阅确认消息
+                        if (data.result === null && data.id) {
+                            debug(`${interval}周期的订阅成功`, 'success');
+                            return;
+                        }
+
+                        // 如果是K线数据
+                        if (data.e === 'continuous_kline') {
+                            const kline = data.k;
+                            debug(`收到${interval}周期的K线数据: 开盘时间=${new Date(kline.t).toLocaleString()}, 收盘价=${kline.c}`);
+
+                            // 处理K线数据
+                            processKlineData(interval, kline);
+                        }
+                    } catch (error) {
+                        debug(`解析${interval}周期的WebSocket消息时出错: ${error.message}`, 'error');
+                        debug(`原始消息: ${event.data.substring(0, 200)}...`);
+                    }
+                };
+
+                // 错误处理
+                ws.onerror = (error) => {
+                    debug(`${interval}周期的WebSocket错误: ${error.message}`, 'error');
+                };
+
+                // 连接关闭时的重连逻辑
+                ws.onclose = () => {
+                    debug(`${interval}周期的WebSocket连接已关闭，将在几秒后重连...`);
+
+                    // 延时重连
+                    setTimeout(() => {
+                        connectWebSocket(interval);
+                    }, 5000); // 5秒后重连
+                };
+            } catch (error) {
+                debug(`创建${interval}周期的WebSocket连接时出错: ${error.message}`, 'error');
+            }
+        }
+
+        // 处理K线数据
+        function processKlineData(interval, kline) {
+            try {
+                // 转换数据格式
+                const formattedKline = {
+                    time: Math.floor(kline.t / 1000), // 转换为秒
+                    open: parseFloat(kline.o),
+                    high: parseFloat(kline.h),
+                    low: parseFloat(kline.l),
+                    close: parseFloat(kline.c),
+                    volume: parseFloat(kline.v),
+                    closed: kline.x // 是否已关闭
+                };
+
+                // 更新当前价格
+                if (interval === '1m') {
+                    updatePrice(formattedKline.close);
+                }
+
+                debug(`处理 ${interval} 周期的WebSocket K线数据: 时间=${new Date(formattedKline.time * 1000).toLocaleString()}, 是否关闭=${formattedKline.closed}`);
+
+                // 如果是已关闭的K线，添加到数据数组
+                if (formattedKline.closed) {
+                    // 检查是否已存在相同时间的K线
+                    const existingIndex = klineData[interval].findIndex(k => k.time === formattedKline.time);
+
+                    if (existingIndex >= 0) {
+                        // 替换现有数据
+                        debug(`更新 ${interval} 周期的现有K线数据: 索引=${existingIndex}, 时间=${new Date(formattedKline.time * 1000).toLocaleString()}`);
+                        klineData[interval][existingIndex] = formattedKline;
+                    } else {
+                        // 添加新数据
+                        debug(`添加 ${interval} 周期的新K线数据: 时间=${new Date(formattedKline.time * 1000).toLocaleString()}`);
+                        klineData[interval].push(formattedKline);
+
+                        // 按时间戳排序
+                        klineData[interval].sort((a, b) => a.time - b.time);
+
+                        // 保持数组大小限制，防止内存溢出
+                        if (klineData[interval].length > 1000) {
+                            klineData[interval] = klineData[interval].slice(-1000);
+                        }
+                    }
+                } else {
+                    // 如果是未关闭的K线，更新最后一根K线
+                    const lastIndex = klineData[interval].length - 1;
+
+                    if (lastIndex >= 0 && klineData[interval][lastIndex].time === formattedKline.time) {
+                        debug(`更新 ${interval} 周期的未关闭 K线: 时间=${new Date(formattedKline.time * 1000).toLocaleString()}`);
+                        klineData[interval][lastIndex] = formattedKline;
+                    } else {
+                        // 如果没有相同时间的K线，添加一根新的
+                        debug(`添加 ${interval} 周期的新未关闭 K线: 时间=${new Date(formattedKline.time * 1000).toLocaleString()}`);
+                        klineData[interval].push(formattedKline);
+
+                        // 按时间戳排序
+                        klineData[interval].sort((a, b) => a.time - b.time);
+                    }
+                }
+
+                // 更新图表，但不清除现有数据
+                updateChartData(interval, klineData[interval], false);
+
+                debug(`已更新${interval}周期的K线数据，当前有${klineData[interval].length}条数据`);
+            } catch (error) {
+                debug(`处理${interval}周期的K线数据时出错: ${error.message}`, 'error');
+                console.error(`Error processing ${interval} kline data:`, error);
+            }
+        }
+
+        // 从币安API获取历史K线数据
+        async function fetchBinanceKlines(symbol, interval, limit = KLINE_LIMIT) {
+            try {
+                debug(`从币安API获取${symbol} ${interval}周期的历史K线数据...`);
+
+                // 构建URL - 使用正确的币安API端点
+                const url = `${BINANCE_REST_API_URL}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+                debug(`请求URL: ${url}`);
+
+                // 发送请求
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP请求失败: ${response.status} ${response.statusText}`);
+                }
+
+                // 解析响应
+                const data = await response.json();
+                debug(`成功获取${data.length}条K线数据`, 'success');
+                debug(`数据样本: ${JSON.stringify(data[0])}`);
+
+                // 转换数据格式
+                const formattedData = data.map(item => {
+                    const timestamp = Math.floor(item[0] / 1000); // 开盘时间，转换为秒
+                    const open = parseFloat(item[1]);       // 开盘价
+                    const high = parseFloat(item[2]);       // 最高价
+                    const low = parseFloat(item[3]);        // 最低价
+                    const close = parseFloat(item[4]);      // 收盘价
+                    const volume = parseFloat(item[5]);     // 交易量
+
+                    debug(`处理K线数据: 时间=${new Date(timestamp * 1000).toLocaleString()}, 开=${open}, 高=${high}, 低=${low}, 收=${close}`);
+
+                    return {
+                        time: timestamp,
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                        volume: volume,
+                        closed: true
+                    };
+                });
+
+                debug(`格式化后的第一条数据: ${JSON.stringify(formattedData[0])}`);
+                debug(`格式化后的最后一条数据: ${JSON.stringify(formattedData[formattedData.length - 1])}`);
+
+                return formattedData;
+            } catch (error) {
+                debug(`获取${symbol} ${interval}周期的历史K线数据时出错: ${error.message}`, 'error');
+                console.error('Error fetching klines:', error);
+                throw error;
+            }
+        }
+
+        // 加载所有周期K线数据 (直接从币安API获取历史数据)
+        async function loadAllKlineData() {
+            try {
+                debug('开始加载所有周期的历史K线数据...');
+
+                // 初始化每个周期的K线数据存储
+                intervals.forEach(interval => {
+                    klineData[interval] = [];
+                    debug(`初始化 ${interval} 周期的K线数据存储`);
+                });
+
+                // 并行加载所有周期的数据
+                const promises = intervals.map(interval => {
+                    debug(`请求BTCUSDT ${interval}周期的历史数据...`);
+                    return fetchBinanceKlines('BTCUSDT', interval)
+                        .then(data => {
+                            debug(`成功获取 BTCUSDT ${interval} 周期的历史数据，共 ${data.length} 条`);
+                            return { interval, data };
+                        })
+                        .catch(error => {
+                            debug(`获取${interval}周期数据时出错: ${error.message}`, 'error');
+                            return { interval, data: [] }; // 返回空数据以避免中断整个过程
+                        });
+                });
+
+                debug('等待所有数据请求完成...');
+                const results = await Promise.all(promises);
+                debug('所有数据请求已完成', 'success');
+
+                // 处理所有结果
+                results.forEach(result => {
+                    const { interval, data } = result;
+
+                    if (!data || !Array.isArray(data) || data.length === 0) {
+                        debug(`${interval}周期没有可用的历史数据`, 'error');
+                        return;
+                    }
+
+                    debug(`收到${interval}周期的${data.length}条历史K线数据`, 'success');
+
+                    // 存储历史数据
+                    klineData[interval] = data;
+                    debug(`已存储 ${interval} 周期的历史数据，共 ${data.length} 条`);
+
+                    // 更新当前价格 (只使用1分钟周期的最新价格)
+                    if (interval === '1m' && data.length > 0) {
+                        const latestKline = data[data.length - 1];
+                        updatePrice(latestKline.close);
+                        debug(`更新当前价格为 ${latestKline.close} USDT`, 'success');
+                    }
+
+                    // 更新图表数据，使用true参数确保清除现有数据
+                    updateChartData(interval, data, true);
+                });
+
+                // 延迟初始化WebSocket连接，确保历史数据已经完全加载和显示
+                setTimeout(() => {
+                    debug('开始初始化WebSocket连接...');
+                    initWebSockets();
+                }, 1000); // 等待1秒，确保图表已经完全渲染
+
+            } catch (error) {
+                console.error('Error loading kline data:', error);
+                debug(`加载K线数据时出错: ${error.message}`, 'error');
+            }
+        }
+
+        // 更新图表数据
+        function updateChartData(interval, klines, clearExisting = true) {
+            debug(`更新${interval}周期的K线数据，共${klines.length}条，清除现有数据=${clearExisting}`);
+
+            if (!candleSeries[interval]) {
+                debug(`找不到${interval}周期的K线系列`, 'error');
+                return;
+            }
+
+            if (!charts[interval]) {
+                debug(`找不到${interval}周期的图表`, 'error');
+                return;
+            }
+
+            try {
+                // 检查数据是否为空
+                if (klines.length === 0) {
+                    debug(`${interval}周期没有可用的数据`, 'error');
+                    return;
+                }
+
+                // 转换数据格式
+                const chartData = [];
+
+                for (let i = 0; i < klines.length; i++) {
+                    const item = klines[i];
+
+                    try {
+                        // 确保时间戳是正确的格式 (Unix 时间戳，单位为秒)
+                        let timestamp = item.time;
+
+                        if (isNaN(timestamp)) {
+                            debug(`第${i}条数据的时间戳无效: ${item.time}`, 'error');
+                            continue;
+                        }
+
+                        const open = item.open;
+                        const high = item.high;
+                        const low = item.low;
+                        const close = item.close;
+
+                        if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+                            debug(`第${i}条数据的价格无效: open=${open}, high=${high}, low=${low}, close=${close}`, 'error');
+                            continue;
+                        }
+
+                        chartData.push({
+                            time: timestamp,
+                            open: open,
+                            high: high,
+                            low: low,
+                            close: close
+                        });
+                    } catch (itemError) {
+                        debug(`处理第${i}条数据时出错: ${itemError.message}`, 'error');
+                    }
+                }
+
+                // 按时间戳排序
+                chartData.sort((a, b) => a.time - b.time);
+
+                // 调试输出第一个和最后一个数据点
+                if (chartData.length > 0) {
+                    debug(`${interval}周期的第一条数据: ${JSON.stringify(chartData[0])}`);
+                    debug(`${interval}周期的最后一条数据: ${JSON.stringify(chartData[chartData.length - 1])}`);
+                    debug(`${interval}周期的数据范围: ${new Date(chartData[0].time * 1000).toLocaleString()} 至 ${new Date(chartData[chartData.length - 1].time * 1000).toLocaleString()}`);
+
+                    // 根据参数决定是否清除现有数据
+                    if (clearExisting) {
+                        debug(`清除 ${interval} 周期的现有数据并设置新数据`);
+                        // 先清除现有数据，然后设置新数据
+                        candleSeries[interval].setData([]);
+                        // 设置新数据
+                        candleSeries[interval].setData(chartData);
+
+                        // 调整图表视图以显示所有数据
+                        charts[interval].timeScale().fitContent();
+                    } else {
+                        debug(`直接更新 ${interval} 周期的图表数据，不清除现有数据`);
+                        // 直接设置数据，不清除现有数据
+                        candleSeries[interval].setData(chartData);
+                    }
+
+                    debug(`成功更新${interval}周期的图表数据，共${chartData.length}条`, 'success');
+                } else {
+                    debug(`${interval}周期没有有效的数据点`, 'error');
+                }
+            } catch (error) {
+                console.error(`Error updating chart data for ${interval}:`, error);
+                debug(`更新${interval}周期的图表数据时出错: ${error.message}`, 'error');
+            }
+        }
+
+        // 更新价格显示
+        function updatePrice(price) {
+            const priceElement = document.getElementById('current-price');
+            const currentPrice = parseFloat(price);
+
+            // 移除之前的颜色类
+            priceElement.classList.remove('price-up', 'price-down');
+
+            // 添加新的颜色类
+            if (lastPrice !== null) {
+                if (currentPrice > lastPrice) {
+                    priceElement.classList.add('price-up');
+                } else if (currentPrice < lastPrice) {
+                    priceElement.classList.add('price-down');
+                }
+            }
+
+            // 更新价格文本
+            priceElement.textContent = `当前价格: ${currentPrice.toFixed(2)} USDT`;
+
+            // 保存最后价格
+            lastPrice = currentPrice;
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 默认开启调试模式
+            debugMode = true;
+            document.getElementById('debug-info').style.display = 'block';
+            debug('页面加载完成', 'success');
+            debug('开始初始化图表...');
+
+            // 清除调试信息
+            document.getElementById('debug-info').innerHTML = '';
+
+            // 检查 LightweightCharts 是否加载
+            if (typeof LightweightCharts === 'undefined') {
+                debug('LightweightCharts库加载失败！', 'error');
+                document.getElementById('current-price').textContent = '错误: 图表库加载失败';
+            } else {
+                debug('LightweightCharts库加载成功', 'success');
+            }
+
+            // 启用调试模式（双击标题切换）
+            document.querySelector('h1').addEventListener('dblclick', toggleDebug);
+
+            // 调试按钮
+            document.getElementById('debug-button').addEventListener('click', toggleDebug);
+
+            try {
+                // 创建K线图表
+                debug('开始创建K线图表...');
+                createCharts();
+                debug('K线图表创建成功', 'success');
+
+                // 加载初始数据
+                debug('开始加载初始数据...');
+                loadAllKlineData();
+
+                // 不需要定时刷新，因为WebSocket会自动推送数据
+                debug('WebSocket已连接，将自动接收实时数据', 'success');
+            } catch (error) {
+                debug(`初始化过程中出错: ${error.message}`, 'error');
+                console.error('Initialization error:', error);
+            }
+        });
+    </script>
+</body>
+</html>

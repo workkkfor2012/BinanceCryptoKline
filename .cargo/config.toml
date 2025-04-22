@@ -1,0 +1,18 @@
+[build]
+# 启用增量编译
+incremental = true
+
+# 并行编译任务数，根据CPU核心数调整
+jobs = 8
+
+
+[profile.dev]
+# 开发模式下的优化级别
+opt-level = 0
+debug = true
+
+[profile.release]
+# 发布模式下使用更多的codegen-units加速编译
+codegen-units = 16
+# 使用thin LTO而不是full LTO，编译更快
+lto = "thin"

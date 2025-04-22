@@ -30,25 +30,139 @@ cargo build --release
 
 ## 使用方法
 
-程序提供了启动批处理文件：
+程序提供了多种启动方式：
 
 ```batch
-# 启动程序
-.\start_app.bat
+# 一键启动所有服务（如果数据库不存在，会先下载历史数据）
+.\start_all.bat
+
+# 下载历史K线数据
+.\download_klines.bat
+
+# 启动K线服务器（实时更新K线数据）
+.\start_server.bat
+
+# 启动网页服务器（提供Web界面）
+.\start_web_server.bat
+```
+
+或者使用命令行参数：
+
+```batch
+# 下载历史K线数据
+cargo run --release --bin kline_downloader
+
+# 启动K线服务器（实时更新K线数据）
+cargo run --release --bin kline_server
+
+# 启动网页服务器（提供Web界面）
+cargo run --release --bin kline_web_server
+
+# 测试模式启动K线服务器
+cargo run --release --bin kline_server -- test
+
+# 跳过数据库检查启动K线服务器
+cargo run --release --bin kline_server -- --skip-check
 ```
 
 程序会自动使用SQLite的WAL模式，提供高性能的数据库操作。
 
+### 程序组件
+
+程序分为三个独立的可执行文件：
+
+1. **K线下载器 (kline_downloader)**: 用于下载历史K线数据并保存到SQLite数据库。
+   ```bash
+   cargo run --release --bin kline_downloader
+   ```
+   或者使用批处理文件：
+   ```batch
+   .\download_klines.bat
+   ```
+   下载器会下载所有币安U本位永续合约的历史K线数据，并存储到SQLite数据库中。
+
+2. **K线服务器 (kline_server)**: 启动WebSocket客户端和K线合成器，实时更新K线数据。
+   ```bash
+   cargo run --release --bin kline_server
+   ```
+   或者使用批处理文件：
+   ```batch
+   .\start_server.bat
+   ```
+   服务器会启动K线合成器和WebSocket客户端，实时更新K线数据。
+
+3. **网页服务器 (kline_web_server)**: 启动Web服务器，从数据库读取K线数据并提供Web界面。
+   ```bash
+   cargo run --release --bin kline_web_server
+   ```
+   或者使用批处理文件：
+   ```batch
+   .\start_web_server.bat
+   ```
+   网页服务器会启动Web服务器，从数据库读取K线数据并提供Web界面。
+
+### 运行模式
+
+#### K线服务器运行模式
+
+K线服务器支持以下运行模式：
+
+1. **正常模式**: 启动K线服务器，实时更新K线数据。
+   ```bash
+   cargo run --release --bin kline_server
+   ```
+
+2. **跳过检查模式**: 启动K线服务器，但跳过数据库检查。
+   ```bash
+   cargo run --release --bin kline_server -- --skip-check
+   ```
+
+3. **测试模式**: 用于测试连续合约K线客户端的特定功能。
+   ```bash
+   cargo run --release --bin kline_server -- test
+   ```
+   此模式会执行 `src/test_continuous_kline_client.rs` 中的逻辑。
+
+#### 网页服务器运行模式
+
+网页服务器支持以下运行模式：
+
+1. **正常模式**: 启动网页服务器，从数据库读取K线数据并提供Web界面。
+   ```bash
+   cargo run --release --bin kline_web_server
+   ```
 ## 启动流程
 
-程序启动后会执行以下检查流程：
+### K线下载器启动流程
 
-1. 检查数据库文件是否存在
-   - 如果数据库不存在，直接执行历史K线下载
+1. 初始化日志系统
+2. 解析命令行参数（周期、并发数等）
+3. 创建下载器配置
+4. 下载所有币安U本位永续合约的历史K线数据
+5. 将数据存储到SQLite数据库中
+6. 下载完成后自动退出
 
-2. 如果数据库存在，检查BTC 1分钟K线数量是否大于4000根
-   - 如果K线数量不足，执行历史K线下载
-   - 如果满足条件，程序继续执行后续流程
+### K线服务器启动流程
+
+1. 初始化日志系统
+2. 解析命令行参数（测试模式、跳过检查等）
+3. 创建数据库连接
+4. 检查数据库文件是否存在
+   - 如果数据库不存在，提示错误并退出
+5. 如果没有跳过检查，检查BTC 1分钟K线数量
+   - 如果K线数量不足，提示错误并退出
+6. 启动K线合成器
+7. 启动WebSocket客户端，订阅实时K线数据
+
+### 网页服务器启动流程
+
+1. 初始化日志系统
+2. 创建数据库连接
+3. 检查数据库文件是否存在
+   - 如果数据库不存在，提示错误并退出
+4. 检查BTC 1分钟K线数量
+   - 如果K线数量不足，提示错误并退出
+5. 启动Web服务器，从数据库读取K线数据并提供Web界面
 
 程序使用SQLite的WAL模式，提供高性能的数据库操作，同时确保数据的持久性和可靠性。
 
@@ -112,6 +226,7 @@ cargo build --release
 3. **高频数据查询**：对于需要频繁查询历史K线数据的场景，WAL模式提供高效的读取性能
 
 要了解更多关于SQLite WAL模式的详细信息，请参阅[SQLite WAL模式详解](docs/sqlite_wal_mode.md)文档。
+
 
 ## 注意事项
 

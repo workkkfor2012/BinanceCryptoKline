@@ -5,6 +5,19 @@ edition = "2021"
 description = "A Rust server for managing and serving Binance U-margined perpetual futures kline data"
 authors = ["Quant Team"]
 
+[[bin]]
+name = "kline_server"
+path = "src/bin/kline_server.rs"
+
+[[bin]]
+name = "kline_downloader"
+path = "src/bin/kline_downloader.rs"
+
+
+[lib]
+name = "kline_server"
+path = "src/lib.rs"
+
 [dependencies]
 tokio = { version = "1.28", features = ["full"] }
 reqwest = { version = "0.11", features = ["json"] }
@@ -17,6 +30,7 @@ env_logger = "0.10"
 anyhow = "1.0"
 thiserror = "1.0"
 futures = "0.3"
+futures-util = "0.3.28"
 tokio-stream = "0.1"
 csv = "1.2"
 tracing = "0.1"
@@ -24,3 +38,29 @@ tracing-subscriber = "0.3"
 rusqlite = { version = "0.29", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.22"
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+async-tungstenite = { version = "0.23", features = ["tokio-runtime", "tokio-native-tls"] }
+tungstenite = { version = "0.20", features = ["native-tls"] }
+ws = "0.9"
+url = "2.4"
+socks = "0.3"
+fastwebsockets = { version = "0.10", features = ["upgrade"] }
+tokio-socks = "0.5"
+base64 = "0.13"
+bytes = "1.5"
+futures-channel = "0.3"
+http = "0.2"
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+tokio-rustls = "0.24"
+rustls = { version = "0.21", features = ["dangerous_configuration"] } # dangerous_configuration might be needed for custom cert verification if required later
+rustls-native-certs = "0.6"
+webpki = "0.22"
+webpki-roots = "0.22"
+awc = { version = "3", features = ["rustls"] }
+actix-rt = "2"
+ring = "=0.17.13" # Pin ring version to try and fix build issues
+once_cell = "1.18"
+axum = "0.6"
+tower-http = { version = "0.4", features = ["fs", "trace"] }
+tokio-util = "0.7"
