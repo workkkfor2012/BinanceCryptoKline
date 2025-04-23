@@ -1,5 +1,5 @@
-﻿use super::error::{AppError, Result};
-use super::models::Kline;
+use crate::klcommon::error::{AppError, Result};
+use crate::klcommon::models::Kline;
 use log::{debug, info};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -537,6 +537,47 @@ impl Database {
             // Update last log time
             *last_log_time = now;
         }
+    }
+
+    /// Get all symbols from the database
+    pub fn get_all_symbols(&self) -> Result<Vec<String>> {
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        // Query all symbols from the symbols table
+        let mut stmt = conn.prepare("SELECT symbol FROM symbols")?;
+        let symbols = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut result = Vec::new();
+        for symbol in symbols {
+            result.push(symbol?);
+        }
+
+        // If no symbols in the symbols table, try to get them from the table names
+        if result.is_empty() {
+            // Query all table names that start with k_
+            let mut stmt = conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'k_%'"
+            )?;
+            let tables = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+            let mut symbols = std::collections::HashSet::new();
+            for table in tables {
+                let table_name = table?;
+                // Extract symbol from table name (format: k_symbol_interval)
+                if let Some(symbol_interval) = table_name.strip_prefix("k_") {
+                    if let Some(symbol) = symbol_interval.split('_').next() {
+                        // Add USDT suffix back
+                        let symbol = format!("{}{}", symbol.to_uppercase(), "USDT");
+                        symbols.insert(symbol);
+                    }
+                }
+            }
+
+            result = symbols.into_iter().collect();
+        }
+
+        Ok(result)
     }
 
     /// Get the latest klines

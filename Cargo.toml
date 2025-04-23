@@ -5,13 +5,16 @@ edition = "2021"
 description = "A Rust server for managing and serving Binance U-margined perpetual futures kline data"
 authors = ["Quant Team"]
 
+[lints.rust]
+deprecated = "allow"
+
 [[bin]]
 name = "kline_server"
 path = "src/bin/kline_server.rs"
 
 [[bin]]
-name = "kline_downloader"
-path = "src/bin/kline_downloader.rs"
+name = "kline_data_service"
+path = "src/bin/kline_data_service.rs"
 
 
 [lib]

@@ -1,9 +1,7 @@
-﻿use super::error::{AppError, Result};
-use super::models::{DownloadTask, ExchangeInfo, Kline, Symbol};
+﻿use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result, Symbol};
 use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde_json::Value;
-// 移除未使用的导入
 use std::time::Duration;
 
 /// Binance API client
@@ -78,7 +76,8 @@ impl BinanceApi {
             rate_limits: Vec::new(),
             exchange_filters: Vec::new(),
             symbols: Vec::new(),
-            extra: None,
+            assets: Vec::new(),
+            extra: std::collections::HashMap::new(),
         };
 
         // 解析交易对
@@ -159,10 +158,25 @@ impl BinanceApi {
     pub async fn download_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
         // 使用fapi.binance.com
         // 使用 fapi/v1/continuousKlines 获取连续合约数据
-        let fapi_url = format!(
-            "{}/fapi/v1/continuousKlines?pair={}&contractType=PERPETUAL&interval={}&startTime={}&endTime={}&limit={}",
-            self.api_url, task.symbol, task.interval, task.start_time, task.end_time, task.limit
+
+        // 构建URL参数
+        let mut url_params = format!(
+            "pair={}&contractType=PERPETUAL&interval={}&limit={}",
+            task.symbol, task.interval, task.limit
         );
+
+        // 添加可选的起始时间
+        if let Some(start_time) = task.start_time {
+            url_params.push_str(&format!("&startTime={}", start_time));
+        }
+
+        // 添加可选的结束时间
+        if let Some(end_time) = task.end_time {
+            url_params.push_str(&format!("&endTime={}", end_time));
+        }
+
+        // 使用fapi.binance.com
+        let fapi_url = format!("{}/fapi/v1/continuousKlines?{}", self.api_url, url_params);
         debug!("Downloading continuous klines from fapi: {}", fapi_url);
 
         let response = self.client.get(&fapi_url)

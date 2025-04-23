@@ -6,9 +6,7 @@ use axum::{
     Router,
 };
 use tower_http::services::ServeDir;
-use super::super::db::Database;
-use crate::klserver::error::Result;
-use crate::klserver::error::AppError;
+use crate::klcommon::{Database, Result, AppError};
 use log::{info, error};
 
 use super::handlers;

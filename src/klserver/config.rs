@@ -1,7 +1,7 @@
 ﻿use chrono::{DateTime, NaiveDate, Utc};
 use log::{debug, info};
 use std::path::PathBuf;
-use crate::klserver::error::{AppError, Result};
+use crate::klcommon::{AppError, Result};
 
 /// Supported kline intervals
 pub const SUPPORTED_INTERVALS: [&str; 15] = [

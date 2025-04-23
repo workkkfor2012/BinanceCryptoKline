@@ -1,7 +1,5 @@
-﻿use crate::kldownload::config::Config;
-use super::db::Database;
-use crate::kldownload::{Downloader, downloader::EXPECTED_COUNTS};
-use super::error::Result;
+﻿use crate::kldata::{Config, Downloader};
+use crate::klcommon::{Database, Result};
 use log::{info, error};
 use std::path::PathBuf;
 
@@ -33,7 +31,7 @@ impl StartupCheck {
         info!("BTC 1-week kline count: {}", btc_1w_count);
 
         // Determine if kline count meets requirements
-        let min_1m_count = (EXPECTED_COUNTS[0] as f64 * 0.9) as i64; // Use 90% of expected value as minimum requirement
+        let min_1m_count = 900; // Use 90% of expected value (1000) as minimum requirement
         let min_1w_count = 1; // At least 1 weekly kline required
         if btc_1m_count < min_1m_count || btc_1w_count < min_1w_count {
             info!("BTC kline count does not meet requirements, will download historical klines");
@@ -66,7 +64,7 @@ impl StartupCheck {
         // Create downloader instance
         let downloader = match Downloader::new(config) {
             Ok(d) => d,
-            Err(e) => return Err(super::error::AppError::ApiError(format!("Failed to create downloader: {}", e))),
+            Err(e) => return Err(crate::klcommon::AppError::ApiError(format!("Failed to create downloader: {}", e))),
         };
 
         // Run download process
@@ -77,7 +75,7 @@ impl StartupCheck {
             },
             Err(e) => {
                 error!("Historical kline download failed: {}", e);
-                Err(super::error::AppError::ApiError(format!("Historical kline download failed: {}", e)))
+                Err(crate::klcommon::AppError::ApiError(format!("Historical kline download failed: {}", e)))
             }
         }
     }

@@ -36,32 +36,29 @@ cargo build --release
 # 一键启动所有服务（如果数据库不存在，会先下载历史数据）
 .\start_all.bat
 
-# 下载历史K线数据
-.\download_klines.bat
+# 启动K线数据服务（下载历史数据并实时更新）
+.\start_kldata_service.bat
 
-# 启动K线服务器（实时更新K线数据）
-.\start_server.bat
-
-# 启动网页服务器（提供Web界面）
-.\start_web_server.bat
+# 启动Web服务器（提供Web界面）
+.\start_klserver.bat
 ```
 
 或者使用命令行参数：
 
 ```batch
-# 下载历史K线数据
-cargo run --release --bin kline_downloader
+# 启动K线数据服务（下载历史数据并实时更新）
+cargo run --release --bin kline_data_service
 
-# 启动K线服务器（实时更新K线数据）
+# 仅下载历史数据，不启动实时更新
+cargo run --release --bin kline_data_service -- --download-only
+
+# 仅启动实时更新，不下载历史数据
+cargo run --release --bin kline_data_service -- --stream-only
+
+# 启动Web服务器
 cargo run --release --bin kline_server
 
-# 启动网页服务器（提供Web界面）
-cargo run --release --bin kline_web_server
-
-# 测试模式启动K线服务器
-cargo run --release --bin kline_server -- test
-
-# 跳过数据库检查启动K线服务器
+# 跳过数据库检查启动Web服务器
 cargo run --release --bin kline_server -- --skip-check
 ```
 
@@ -69,100 +66,87 @@ cargo run --release --bin kline_server -- --skip-check
 
 ### 程序组件
 
-程序分为三个独立的可执行文件：
+程序分为两个独立的可执行文件：
 
-1. **K线下载器 (kline_downloader)**: 用于下载历史K线数据并保存到SQLite数据库。
+1. **K线数据服务 (kline_data_service)**: 用于下载历史K线数据、实时更新和合成其他周期的K线。
    ```bash
-   cargo run --release --bin kline_downloader
+   cargo run --release --bin kline_data_service
    ```
    或者使用批处理文件：
    ```batch
-   .\download_klines.bat
+   .\start_kldata_service.bat
    ```
-   下载器会下载所有币安U本位永续合约的历史K线数据，并存储到SQLite数据库中。
+   数据服务会下载历史K线数据，并通过WebSocket实时更新K线数据。它还会在本地合成其他周期的K线。
 
-2. **K线服务器 (kline_server)**: 启动WebSocket客户端和K线合成器，实时更新K线数据。
+2. **Web服务器 (kline_server)**: 启动Web服务器，从数据库读取K线数据并提供Web界面。
    ```bash
    cargo run --release --bin kline_server
    ```
    或者使用批处理文件：
    ```batch
-   .\start_server.bat
+   .\start_klserver.bat
    ```
-   服务器会启动K线合成器和WebSocket客户端，实时更新K线数据。
-
-3. **网页服务器 (kline_web_server)**: 启动Web服务器，从数据库读取K线数据并提供Web界面。
-   ```bash
-   cargo run --release --bin kline_web_server
-   ```
-   或者使用批处理文件：
-   ```batch
-   .\start_web_server.bat
-   ```
-   网页服务器会启动Web服务器，从数据库读取K线数据并提供Web界面。
+   Web服务器会启动Web服务，从数据库读取K线数据并提供Web界面。
 
 ### 运行模式
 
-#### K线服务器运行模式
+#### K线数据服务运行模式
 
-K线服务器支持以下运行模式：
+K线数据服务支持以下运行模式：
 
-1. **正常模式**: 启动K线服务器，实时更新K线数据。
+1. **完整模式**: 下载历史数据并启动实时更新。
+   ```bash
+   cargo run --release --bin kline_data_service
+   ```
+
+2. **仅下载模式**: 仅下载历史数据，不启动实时更新。
+   ```bash
+   cargo run --release --bin kline_data_service -- --download-only
+   ```
+
+3. **仅实时模式**: 仅启动实时更新，不下载历史数据。
+   ```bash
+   cargo run --release --bin kline_data_service -- --stream-only
+   ```
+
+#### Web服务器运行模式
+
+Web服务器支持以下运行模式：
+
+1. **正常模式**: 启动Web服务器，从数据库读取K线数据并提供Web界面。
    ```bash
    cargo run --release --bin kline_server
    ```
 
-2. **跳过检查模式**: 启动K线服务器，但跳过数据库检查。
+2. **跳过检查模式**: 启动Web服务器，但跳过数据库检查。
    ```bash
    cargo run --release --bin kline_server -- --skip-check
    ```
-
-3. **测试模式**: 用于测试连续合约K线客户端的特定功能。
-   ```bash
-   cargo run --release --bin kline_server -- test
-   ```
-   此模式会执行 `src/test_continuous_kline_client.rs` 中的逻辑。
-
-#### 网页服务器运行模式
-
-网页服务器支持以下运行模式：
-
-1. **正常模式**: 启动网页服务器，从数据库读取K线数据并提供Web界面。
-   ```bash
-   cargo run --release --bin kline_web_server
-   ```
 ## 启动流程
 
-### K线下载器启动流程
+### K线数据服务启动流程
 
 1. 初始化日志系统
-2. 解析命令行参数（周期、并发数等）
-3. 创建下载器配置
-4. 下载所有币安U本位永续合约的历史K线数据
-5. 将数据存储到SQLite数据库中
-6. 下载完成后自动退出
+2. 解析命令行参数（周期、并发数、运行模式等）
+3. 创建数据库连接
+4. 如果不是仅实时模式，则下载历史K线数据
+   - 创建下载器配置
+   - 下载指定交易对的历史K线数据
+   - 将数据存储到SQLite数据库中
+5. 如果是仅下载模式，则退出
+6. 创建并启动K线聚合器，用于合成其他周期的K线
+7. 创建并启动WebSocket客户端，订阅实时K线数据
 
-### K线服务器启动流程
+### Web服务器启动流程
 
 1. 初始化日志系统
-2. 解析命令行参数（测试模式、跳过检查等）
+2. 解析命令行参数（跳过检查等）
 3. 创建数据库连接
 4. 检查数据库文件是否存在
    - 如果数据库不存在，提示错误并退出
 5. 如果没有跳过检查，检查BTC 1分钟K线数量
    - 如果K线数量不足，提示错误并退出
-6. 启动K线合成器
-7. 启动WebSocket客户端，订阅实时K线数据
-
-### 网页服务器启动流程
-
-1. 初始化日志系统
-2. 创建数据库连接
-3. 检查数据库文件是否存在
-   - 如果数据库不存在，提示错误并退出
-4. 检查BTC 1分钟K线数量
-   - 如果K线数量不足，提示错误并退出
-5. 启动Web服务器，从数据库读取K线数据并提供Web界面
+6. 启动Web服务器，从数据库读取K线数据并提供Web界面
 
 程序使用SQLite的WAL模式，提供高性能的数据库操作，同时确保数据的持久性和可靠性。
 

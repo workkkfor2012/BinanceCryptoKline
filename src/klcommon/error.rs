@@ -1,4 +1,4 @@
-﻿use thiserror::Error;
+use thiserror::Error;
 use std::net::AddrParseError;
 
 #[derive(Error, Debug)]
@@ -58,4 +58,3 @@ pub enum AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
-

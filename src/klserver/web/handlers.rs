@@ -6,7 +6,7 @@ use log::{error, info};
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::klserver::db::Database;
+use crate::klcommon::Database;
 
 /// Kline response
 #[derive(Serialize)]
