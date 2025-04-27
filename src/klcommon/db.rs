@@ -45,7 +45,7 @@ impl Database {
             conn.execute_batch("
                 PRAGMA journal_mode = WAL;           -- Enable WAL mode
                 PRAGMA synchronous = NORMAL;         -- Balance performance and safety
-                PRAGMA cache_size = -50000;          -- About 200MB cache (negative means KB)
+                PRAGMA cache_size = -102400;         -- Set cache to 100MB (100 * 1024 KiB)
                 PRAGMA mmap_size = 268435456;        -- 256MB memory mapping
                 PRAGMA temp_store = MEMORY;          -- Store temp tables in memory
                 PRAGMA wal_autocheckpoint = 1000;    -- Checkpoint every 1000 pages
@@ -166,42 +166,101 @@ impl Database {
             .map_err(|e| AppError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
 
         let mut count = 0;
+        let mut updated = 0;
 
-        // Create SQL with dynamic table name
-        let insert_sql = format!(
-            "INSERT OR REPLACE INTO {} (
-                open_time, open, high, low, close, volume,
-                close_time, quote_asset_volume, number_of_trades,
-                taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            table_name
-        );
+        // 检查表是否存在
+        let table_exists: bool = tx.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+            params![table_name],
+            |row| row.get::<_, i64>(0).map(|count| count > 0),
+        ).unwrap_or(false);
 
         for kline in klines {
-            let result = tx.execute(
-                &insert_sql,
-                params![
-                    kline.open_time,
-                    kline.open,
-                    kline.high,
-                    kline.low,
-                    kline.close,
-                    kline.volume,
-                    kline.close_time,
-                    kline.quote_asset_volume,
-                    kline.number_of_trades,
-                    kline.taker_buy_base_asset_volume,
-                    kline.taker_buy_quote_asset_volume,
-                    kline.ignore,
-                ],
-            );
+            // 检查是否已存在相同时间戳的K线
+            let exists = if table_exists {
+                tx.query_row(
+                    &format!("SELECT 1 FROM {} WHERE open_time = ?", table_name),
+                    params![kline.open_time],
+                    |_| Ok(true),
+                ).unwrap_or(false)
+            } else {
+                false
+            };
 
-            match result {
-                Ok(_) => count += 1,
-                Err(e) => {
-                    // Rollback transaction on error
-                    let _ = tx.rollback();
-                    return Err(AppError::DatabaseError(format!("Failed to save kline to {}: {}", table_name, e)));
+            if exists {
+                // 更新现有K线
+                let result = tx.execute(
+                    &format!("UPDATE {} SET
+                        open = ?,
+                        high = ?,
+                        low = ?,
+                        close = ?,
+                        volume = ?,
+                        close_time = ?,
+                        quote_asset_volume = ?,
+                        number_of_trades = ?,
+                        taker_buy_base_asset_volume = ?,
+                        taker_buy_quote_asset_volume = ?,
+                        ignore = ?
+                        WHERE open_time = ?", table_name),
+                    params![
+                        kline.open,
+                        kline.high,
+                        kline.low,
+                        kline.close,
+                        kline.volume,
+                        kline.close_time,
+                        kline.quote_asset_volume,
+                        kline.number_of_trades,
+                        kline.taker_buy_base_asset_volume,
+                        kline.taker_buy_quote_asset_volume,
+                        kline.ignore,
+                        kline.open_time
+                    ],
+                );
+
+                match result {
+                    Ok(_) => {
+                        updated += 1;
+                        count += 1;
+                    },
+                    Err(e) => {
+                        // Rollback transaction on error
+                        let _ = tx.rollback();
+                        return Err(AppError::DatabaseError(format!("Failed to update kline in {}: {}", table_name, e)));
+                    }
+                }
+            } else {
+                // 插入新K线
+                let result = tx.execute(
+                    &format!("INSERT INTO {} (
+                        open_time, open, high, low, close, volume,
+                        close_time, quote_asset_volume, number_of_trades,
+                        taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                    params![
+                        kline.open_time,
+                        kline.open,
+                        kline.high,
+                        kline.low,
+                        kline.close,
+                        kline.volume,
+                        kline.close_time,
+                        kline.quote_asset_volume,
+                        kline.number_of_trades,
+                        kline.taker_buy_base_asset_volume,
+                        kline.taker_buy_quote_asset_volume,
+                        kline.ignore,
+                    ],
+                );
+
+                match result {
+                    Ok(_) => count += 1,
+                    Err(e) => {
+                        // Rollback transaction on error
+                        let _ = tx.rollback();
+                        return Err(AppError::DatabaseError(format!("Failed to insert kline to {}: {}", table_name, e)));
+                    }
                 }
             }
         }
@@ -210,7 +269,7 @@ impl Database {
         tx.commit()
             .map_err(|e| AppError::DatabaseError(format!("Failed to commit transaction: {}", e)))?;
 
-        debug!("Saved {} klines for {}/{} to table {}", count, symbol, interval, table_name);
+        info!("保存到数据库: {}/{} -> 成功: {} 条K线 (更新: {})", symbol, interval, count, updated);
         Ok(count)
     }
 
@@ -628,5 +687,89 @@ impl Database {
         result.sort_by_key(|k| k.open_time);
 
         Ok(result)
+    }
+
+    /// 根据开始时间获取K线
+    pub fn get_kline_by_time(&self, symbol: &str, interval: &str, open_time: i64) -> Result<Option<Kline>> {
+        // 确保表存在
+        self.ensure_symbol_table(symbol, interval)?;
+
+        // 创建表名
+        let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+        let interval_lower = interval.to_lowercase();
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        // 查询指定时间的K线
+        let mut stmt = conn.prepare(&format!(
+            "SELECT open_time, open, high, low, close, volume, close_time,
+             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
+             taker_buy_quote_asset_volume, ignore
+             FROM {} WHERE open_time = ?",
+            table_name
+        ))?;
+
+        let kline = stmt.query_row([open_time], |row| {
+            Ok(Kline {
+                open_time: row.get(0)?,
+                open: row.get(1)?,
+                high: row.get(2)?,
+                low: row.get(3)?,
+                close: row.get(4)?,
+                volume: row.get(5)?,
+                close_time: row.get(6)?,
+                quote_asset_volume: row.get(7)?,
+                number_of_trades: row.get(8)?,
+                taker_buy_base_asset_volume: row.get(9)?,
+                taker_buy_quote_asset_volume: row.get(10)?,
+                ignore: row.get(11)?,
+            })
+        }).optional()?;
+
+        Ok(kline)
+    }
+
+    /// 获取指定时间之前的最后一根K线
+    pub fn get_last_kline_before(&self, symbol: &str, interval: &str, open_time: i64) -> Result<Option<Kline>> {
+        // 确保表存在
+        self.ensure_symbol_table(symbol, interval)?;
+
+        // 创建表名
+        let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+        let interval_lower = interval.to_lowercase();
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        // 查询指定时间之前的最后一根K线
+        let mut stmt = conn.prepare(&format!(
+            "SELECT open_time, open, high, low, close, volume, close_time,
+             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
+             taker_buy_quote_asset_volume, ignore
+             FROM {} WHERE open_time < ? ORDER BY open_time DESC LIMIT 1",
+            table_name
+        ))?;
+
+        let kline = stmt.query_row([open_time], |row| {
+            Ok(Kline {
+                open_time: row.get(0)?,
+                open: row.get(1)?,
+                high: row.get(2)?,
+                low: row.get(3)?,
+                close: row.get(4)?,
+                volume: row.get(5)?,
+                close_time: row.get(6)?,
+                quote_asset_volume: row.get(7)?,
+                number_of_trades: row.get(8)?,
+                taker_buy_base_asset_volume: row.get(9)?,
+                taker_buy_quote_asset_volume: row.get(10)?,
+                ignore: row.get(11)?,
+            })
+        }).optional()?;
+
+        Ok(kline)
     }
 }

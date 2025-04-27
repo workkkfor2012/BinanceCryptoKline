@@ -16,6 +16,32 @@ path = "src/bin/kline_server.rs"
 name = "kline_data_service"
 path = "src/bin/kline_data_service.rs"
 
+# 测试文件配置
+[[test]]
+name = "test_binance_ws"
+path = "tests/test_binance_ws.rs"
+harness = false
+
+[[test]]
+name = "test_binance_kline_ws"
+path = "tests/test_binance_kline_ws.rs"
+harness = false
+
+[[test]]
+name = "test_binance_continuous_kline_ws"
+path = "tests/test_binance_continuous_kline_ws.rs"
+harness = false
+
+[[test]]
+name = "test_binance_ws_multi_libs"
+path = "tests/test_binance_ws_multi_libs.rs"
+harness = false
+
+[[test]]
+name = "test_binance_async_tungstenite"
+path = "tests/test_binance_async_tungstenite.rs"
+harness = false
+
 
 [lib]
 name = "kline_server"
@@ -29,7 +55,8 @@ serde_json = "1.0"
 chrono = "0.4"
 clap = { version = "4.3", features = ["derive"] }
 log = "0.4"
-env_logger = "0.10"
+# env_logger = "0.10" # Comment out env_logger
+fern = "0.6" # Add fern
 anyhow = "1.0"
 thiserror = "1.0"
 futures = "0.3"
@@ -44,6 +71,7 @@ r2d2_sqlite = "0.22"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 async-tungstenite = { version = "0.23", features = ["tokio-runtime", "tokio-native-tls"] }
 tungstenite = { version = "0.20", features = ["native-tls"] }
+tokio-native-tls = "0.3"
 ws = "0.9"
 url = "2.4"
 socks = "0.3"

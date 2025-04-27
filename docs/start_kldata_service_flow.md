@@ -145,6 +145,32 @@ K 线数据服务使用硬编码的代理设置（127.0.0.1:1080）来访问币�
 2. 在 `ContinuousKlineClient` 中配置 WebSocket 连接
 3. 设置环境变量以兼容其他可能使用环境变量的组件
 
+## WebSocket连接格式
+
+合约K线WebSocket连接使用以下格式：
+
+```
+wss://fstream.binance.com/ws/<pair>_<contractType>@continuousKline_<interval>
+```
+
+例如，订阅BTCUSDT永续合约的1分钟K线：
+
+```
+wss://fstream.binance.com/ws/btcusdt_perpetual@continuousKline_1m
+```
+
+对于组合流订阅，使用以下格式：
+
+```
+wss://fstream.binance.com/stream?streams=<pair1>_<contractType>@continuousKline_<interval1>/<pair2>_<contractType>@continuousKline_<interval2>
+```
+
+例如，同时订阅BTCUSDT和ETHUSDT永续合约的1分钟K线：
+
+```
+wss://fstream.binance.com/stream?streams=btcusdt_perpetual@continuousKline_1m/ethusdt_perpetual@continuousKline_1m
+```
+
 ## 完整数据处理流程
 
 以下是完整的K线数据处理流程，这是一个固定的流程，没有“是否仅为流模式”的判断：

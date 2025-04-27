@@ -1,5 +1,5 @@
 use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result};
-use log::{debug, error};
+use log::{debug, error, info};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -64,10 +64,44 @@ impl BinanceApi {
             )));
         }
 
-        let exchange_info: ExchangeInfo = response.json().await?;
-        debug!("获取到 {} 个交易对", exchange_info.symbols.len());
+        // 解析响应为ExchangeInfo
+        let mut exchange_info: ExchangeInfo = response.json().await?;
+
+        // 过滤出状态为TRADING的交易对
+        let total_symbols = exchange_info.symbols.len();
+        exchange_info.symbols.retain(|symbol| symbol.status == "TRADING");
+
+        let trading_symbols = exchange_info.symbols.len();
+        debug!("获取到 {} 个交易对，其中 {} 个状态为TRADING", total_symbols, trading_symbols);
 
         Ok(exchange_info)
+    }
+
+    /// 获取正在交易的U本位永续合约
+    pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
+        // 测试模式标志，设置为true时只返回BTCUSDT一个品种
+        let istest = true;
+
+        // 测试模式下，直接返回BTCUSDT
+        if istest {
+            debug!("测试模式：仅返回BTCUSDT一个品种");
+            return Ok(vec!["BTCUSDT".to_string()]);
+        }
+
+        // 获取交易所信息
+        let exchange_info = self.get_exchange_info().await?;
+
+        // 过滤出以USDT结尾的交易对
+        // 注意：get_exchange_info已经过滤了状态为TRADING的交易对
+        let usdt_symbols: Vec<String> = exchange_info.symbols
+            .iter()
+            .filter(|symbol| symbol.symbol.ends_with("USDT"))
+            .map(|symbol| symbol.symbol.clone())
+            .collect();
+
+        debug!("获取到 {} 个正在交易的U本位永续合约", usdt_symbols.len());
+
+        Ok(usdt_symbols)
     }
 
     /// 下载K线数据
@@ -90,7 +124,7 @@ impl BinanceApi {
 
         // 使用fapi.binance.com
         let fapi_url = format!("{}/fapi/v1/klines?{}", self.api_url, url_params);
-        debug!("从fapi下载K线: {}", fapi_url);
+        let url_for_log = fapi_url.clone();
 
         let response = self.client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -100,10 +134,7 @@ impl BinanceApi {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await?;
-            error!(
-                "从fapi下载 {} 的K线失败: {} - {}",
-                task.symbol, status, text
-            );
+            info!("{} -> 失败: {} - {}", url_for_log, status, text);
             return Err(AppError::ApiError(format!(
                 "从fapi下载 {} 的K线失败: {} - {}",
                 task.symbol, status, text
@@ -111,11 +142,7 @@ impl BinanceApi {
         }
 
         let raw_klines: Vec<Vec<Value>> = response.json().await?;
-        debug!(
-            "收到 {} 条 {} 的K线",
-            raw_klines.len(),
-            task.symbol
-        );
+        info!("{} -> 成功: 收到 {} 条K线", url_for_log, raw_klines.len());
 
         let klines = raw_klines
             .iter()

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use chrono::Utc;
+use tokio::time::{interval, Duration, Instant as TokioInstant};
 
 /// 将时间间隔转换为毫秒数
 /// 例如: "1m" -> 60000, "1h" -> 3600000
@@ -360,5 +361,97 @@ impl Downloader {
 
         debug!("K线数据已保存到 {}", output_path.display());
         Ok(())
+    }
+}
+
+/// 启动定时更新任务，每分钟获取所有配置品种和周期的最新K线
+pub async fn start_periodic_update(db: Arc<Database>, intervals: Vec<String>) {
+    info!("启动定时更新任务 (每分钟获取最新K线)");
+    let api = BinanceApi::new(); // Create API client for the timer
+
+    // 等待一段时间，避免正好在分钟切换时启动，导致第一次获取不到数据
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let mut timer = interval(Duration::from_secs(60));
+    timer.tick().await; // Consume the initial immediate tick
+
+    loop {
+        timer.tick().await;
+        let cycle_start_time = TokioInstant::now();
+        debug!("定时任务触发，开始获取最新K线");
+
+        // 从数据库获取交易对列表
+        let symbols = match db.get_all_symbols() { // 假设此方法存在于 Database
+           Ok(s) => s,
+           Err(e) => {
+               error!("定时任务：无法从数据库获取交易对列表: {}", e);
+               // 等待下一个周期
+               continue;
+           }
+        };
+
+        if symbols.is_empty() {
+            warn!("定时任务：数据库中没有找到交易对，跳过本次更新");
+            continue;
+        }
+
+        let mut tasks = Vec::new();
+        for symbol in &symbols {
+            for interval_str in &intervals {
+                tasks.push(DownloadTask {
+                    symbol: symbol.clone(),
+                    interval: interval_str.clone(),
+                    start_time: None, // 不指定开始时间
+                    end_time: None,   // 不指定结束时间
+                    limit: 1,         // 只获取最新的1根K线
+                });
+            }
+        }
+
+        debug!("定时任务：为 {} 个交易对和 {} 个周期创建了 {} 个最新K线下载任务",
+               symbols.len(), intervals.len(), tasks.len());
+
+        let task_count = tasks.len();
+        let mut success_count = 0;
+        let mut no_new_data_count = 0;
+        let mut save_error_count = 0;
+        let mut download_error_count = 0;
+
+        // 顺序执行下载和保存，简化处理逻辑
+        for task in tasks {
+            match api.download_klines(&task).await {
+                Ok(klines) => {
+                    if !klines.is_empty() {
+                        // 保存获取到的单根K线
+                        // 确保 save_klines 能处理重复插入 (例如使用 INSERT OR IGNORE 或类似逻辑)
+                        match db.save_klines(&task.symbol, &task.interval, &klines) {
+                            Ok(count) => {
+                                if count > 0 {
+                                    success_count += 1;
+                                } else {
+                                    no_new_data_count += 1;
+                                }
+                            },
+                            Err(e) => {
+                                error!("{}/{}: 定时任务保存K线失败: {}", task.symbol, task.interval, e);
+                                save_error_count += 1;
+                            },
+                        }
+                    } else {
+                        debug!("{}/{}: 定时任务未获取到新的K线数据", task.symbol, task.interval);
+                        no_new_data_count += 1;
+                    }
+                }
+                Err(e) => {
+                    error!("{}/{}: 定时任务下载最新K线失败: {}", task.symbol, task.interval, e);
+                    download_error_count += 1;
+                }
+            }
+            // 添加短暂休眠，避免过于频繁请求API（尽管请求量不大）
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        debug!(
+            "定时任务完成一轮更新: 总任务={}, 成功保存={}, 无新数据/已存在={}, 下载失败={}, 保存失败={}, 耗时: {:?}",
+            task_count, success_count, no_new_data_count, download_error_count, save_error_count, cycle_start_time.elapsed()
+        );
     }
 }

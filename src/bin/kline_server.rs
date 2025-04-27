@@ -78,8 +78,37 @@ async fn main() -> Result<()> {
 
 /// 初始化日志
 fn init_logging(verbose: bool) {
-    let env = env_logger::Env::default()
-        .filter_or("LOG_LEVEL", if verbose { "debug" } else { "info" });
+    // 设置RUST_BACKTRACE为1，以便更好地报告错误
+    std::env::set_var("RUST_BACKTRACE", "1");
 
-    env_logger::init_from_env(env);
+    // 确保日志目录存在
+    let log_dir = "logs";
+    std::fs::create_dir_all(log_dir).unwrap_or_else(|e| {
+        eprintln!("Failed to create logs directory: {}", e);
+    });
+
+    let dispatch = fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), // 添加毫秒
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(if verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info })
+        // 过滤掉过于频繁的第三方库日志
+        .level_for("hyper", log::LevelFilter::Warn)
+        .level_for("reqwest", log::LevelFilter::Warn)
+        .chain(std::io::stdout()) // 输出到控制台
+        .chain(fern::log_file(format!("{}/kline_server.log", log_dir)).expect("Failed to open log file")); // 输出到日志文件
+
+    match dispatch.apply() {
+        Ok(_) => log::info!("日志系统 (fern) 已初始化"),
+        Err(e) => eprintln!("日志系统初始化失败: {}", e),
+    }
+
+    // 输出一条日志，确认日志系统已初始化
+    log::info!("日志系统已初始化，UTF-8编码测试：中文、日文、韩文");
 }

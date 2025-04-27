@@ -1,5 +1,5 @@
 use crate::klcommon::{Database, KlineData, Result};
-use crate::kldata::aggregator::KlineAggregator;
+use crate::kldata::aggregator;
 use crate::kldata::streamer::WebSocketConnection;
 use log::{error, info};
 use serde_json::Value;
@@ -69,51 +69,173 @@ pub async fn process_messages(
 
 /// 解析WebSocket消息
 fn parse_message(text: &str) -> Result<Option<(String, String, KlineData)>> {
+    // 输出原始消息内容，便于调试
+    info!("收到WebSocket消息: {}", text);
+
     // 解析JSON
-    let json: Value = serde_json::from_str(text)?;
-
-    // 检查是否是K线消息
-    if let Some(data) = json.get("data") {
-        if let Some(k) = data.get("k") {
-            // 获取交易对和周期
-            let symbol = data.get("s").and_then(|s| s.as_str()).unwrap_or("").to_uppercase();
-            let interval = k.get("i").and_then(|i| i.as_str()).unwrap_or("");
-
-            // 解析K线数据
-            let kline_data: KlineData = serde_json::from_value(k.clone())?;
-
-            return Ok(Some((symbol, interval.to_string(), kline_data)));
+    let json: Value = match serde_json::from_str(text) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("解析JSON失败: {}, 原始消息: {}", e, text);
+            return Err(e.into());
         }
+    };
+
+    // 检查是否是连续合约K线消息
+    let e_value = json.get("e").and_then(|e| e.as_str());
+    info!("e字段值: {:?}", e_value);
+
+    // 直接打印整个JSON结构的关键部分，便于调试
+    if let Some(k) = json.get("k") {
+        info!("k字段: {}", k);
+    }
+
+    if e_value == Some("continuous_kline") {
+        info!("Found continuous kline message");
+
+        // 获取交易对
+        let symbol = json.get("ps").and_then(|s| s.as_str()).unwrap_or("").to_uppercase();
+        info!("Symbol: {}", symbol);
+
+        // 获取K线数据
+        if let Some(k) = json.get("k") {
+            info!("Found k field: {}", k);
+
+            // 获取周期
+            let interval = k.get("i").and_then(|i| i.as_str()).unwrap_or("").to_string();
+            info!("Interval: {}", interval);
+
+            // 创建KlineData结构体
+            let start_time = k.get("t").and_then(|t| t.as_i64()).unwrap_or(0);
+            let end_time = k.get("T").and_then(|t| t.as_i64()).unwrap_or(0);
+            let is_closed = k.get("x").and_then(|x| x.as_bool()).unwrap_or(false);
+            let open = k.get("o").and_then(|o| o.as_str()).unwrap_or("0").to_string();
+            let high = k.get("h").and_then(|h| h.as_str()).unwrap_or("0").to_string();
+            let low = k.get("l").and_then(|l| l.as_str()).unwrap_or("0").to_string();
+            let close = k.get("c").and_then(|c| c.as_str()).unwrap_or("0").to_string();
+            let volume = k.get("v").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+            let quote_volume = k.get("q").and_then(|q| q.as_str()).unwrap_or("0").to_string();
+            let number_of_trades = k.get("n").and_then(|n| n.as_i64()).unwrap_or(0);
+            let taker_buy_volume = k.get("V").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+            let taker_buy_quote_volume = k.get("Q").and_then(|q| q.as_str()).unwrap_or("0").to_string();
+            let ignore = k.get("B").and_then(|b| b.as_str()).unwrap_or("0").to_string();
+
+            let kline_data = KlineData {
+                start_time,
+                end_time,
+                interval: interval.clone(),
+                first_trade_id: k.get("f").and_then(|f| f.as_i64()).unwrap_or(0),
+                last_trade_id: k.get("L").and_then(|l| l.as_i64()).unwrap_or(0),
+                is_closed,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                quote_volume,
+                number_of_trades,
+                taker_buy_volume,
+                taker_buy_quote_volume,
+                ignore,
+            };
+
+            info!("Successfully parsed kline data: is_closed={}, start_time={}, end_time={}",
+                  kline_data.is_closed, kline_data.start_time, kline_data.end_time);
+
+            return Ok(Some((symbol, interval, kline_data)));
+        } else {
+            info!("k field not found");
+        }
+    } else if let Some(data) = json.get("data") {
+        // 检查是否是普通K线消息（旧格式）
+        info!("Found data field: {}", data);
+        if let Some(k) = data.get("k") {
+            info!("Found k field: {}", k);
+            // 获取交易对和周期
+            // 从stream字段中提取交易对和周期
+            // 格式：<pair>_perpetual@continuousKline_<interval>
+            let stream = json.get("stream").and_then(|s| s.as_str()).unwrap_or("");
+            info!("Stream field: {}", stream);
+            let parts: Vec<&str> = stream.split('@').collect();
+            info!("Stream parts: {:?}", parts);
+
+            if parts.len() >= 2 {
+                let pair_parts: Vec<&str> = parts[0].split('_').collect();
+                info!("Pair parts: {:?}", pair_parts);
+                let symbol = if pair_parts.len() >= 1 {
+                    pair_parts[0].to_uppercase()
+                } else {
+                    data.get("s").and_then(|s| s.as_str()).unwrap_or("").to_uppercase()
+                };
+                info!("Symbol: {}", symbol);
+
+                let interval_parts: Vec<&str> = parts[1].split('_').collect();
+                info!("Interval parts: {:?}", interval_parts);
+                let interval = if interval_parts.len() >= 2 {
+                    interval_parts[1].to_string()
+                } else {
+                    k.get("i").and_then(|i| i.as_str()).unwrap_or("").to_string()
+                };
+                info!("Interval: {}", interval);
+
+                // 解析K线数据
+                let kline_data: KlineData = match serde_json::from_value(k.clone()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        error!("Failed to parse kline data: {}, k field: {}", e, k);
+                        return Err(e.into());
+                    }
+                };
+                info!("Successfully parsed kline data: is_closed={}, start_time={}, end_time={}",
+                      kline_data.is_closed, kline_data.start_time, kline_data.end_time);
+
+                return Ok(Some((symbol, interval, kline_data)));
+            } else {
+                // 回退到旧的解析方式
+                info!("Using old parsing method");
+                let symbol = data.get("s").and_then(|s| s.as_str()).unwrap_or("").to_uppercase();
+                info!("Symbol from s field: {}", symbol);
+                let interval = k.get("i").and_then(|i| i.as_str()).unwrap_or("");
+                info!("Interval from i field: {}", interval);
+
+                // 解析K线数据
+                let kline_data: KlineData = match serde_json::from_value(k.clone()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        error!("Failed to parse kline data: {}, k field: {}", e, k);
+                        return Err(e.into());
+                    }
+                };
+                info!("Successfully parsed kline data: is_closed={}, start_time={}, end_time={}",
+                      kline_data.is_closed, kline_data.start_time, kline_data.end_time);
+
+                return Ok(Some((symbol, interval.to_string(), kline_data)));
+            }
+        } else {
+            info!("k field not found");
+        }
+    } else {
+        info!("data field not found or e field is not continuous_kline");
     }
 
     // 不是K线消息
+    info!("Not a kline message");
     Ok(None)
 }
 
 /// 处理K线数据
 async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData, db: &Arc<Database>) {
-    // 转换为标准K线格式
-    let kline = kline_data.to_kline();
+    // 输出处理K线数据的详细信息
+    info!("开始处理K线数据: symbol={}, interval={}, is_closed={}, start_time={}, end_time={}",
+          symbol, interval, kline_data.is_closed, kline_data.start_time, kline_data.end_time);
 
-    // 根据is_closed决定是插入新记录还是更新现有记录
-    if kline_data.is_closed {
-        // K线已关闭，插入新记录
-        if let Err(e) = db.insert_kline(symbol, interval, &kline) {
-            error!("插入K线失败: {}", e);
-        }
-
-        // 如果是1分钟K线，通知聚合器
-        if interval == "1m" {
-            if let Some(aggregator) = KlineAggregator::get_instance() {
-                if let Err(e) = aggregator.process_kline(symbol, &kline).await {
-                    error!("处理K线进行聚合失败: {}", e);
-                }
-            }
-        }
-    } else {
-        // K线未关闭，更新现有记录
-        if let Err(e) = db.update_kline(symbol, interval, &kline) {
-            error!("更新K线失败: {}", e);
+    // 使用新的K线合成逻辑处理K线数据
+    match aggregator::process_kline_data(symbol, interval, kline_data, db).await {
+        Ok(_) => {
+            info!("成功处理K线数据: symbol={}, interval={}", symbol, interval);
+        },
+        Err(e) => {
+            error!("处理K线数据失败: {}", e);
         }
     }
 }

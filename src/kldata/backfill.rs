@@ -1,4 +1,4 @@
-use crate::klcommon::{Database, Result, Kline};
+use crate::klcommon::{Database, Result};
 use crate::klcommon::models::DownloadTask;
 use crate::kldata::downloader::BinanceApi;
 use log::{info, warn, error};
@@ -25,22 +25,15 @@ impl KlineBackfiller {
         info!("开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
-        // 1. 获取所有U本位永续合约交易对
+        // 1. 获取所有正在交易的U本位永续合约交易对
         let api = BinanceApi::new();
-        let all_symbols = match api.get_exchange_info().await {
-            Ok(exchange_info) => {
-                // 从交易所获取所有U本位永续合约交易对
-                let mut symbols = Vec::new();
-                for symbol_info in &exchange_info.symbols {
-                    if symbol_info.symbol.ends_with("USDT") && symbol_info.status == "TRADING" {
-                        symbols.push(symbol_info.symbol.clone());
-                    }
-                }
-                info!("从交易所获取到 {} 个U本位永续合约交易对", symbols.len());
+        let all_symbols = match api.get_trading_usdt_perpetual_symbols().await {
+            Ok(symbols) => {
+                info!("从交易所获取到 {} 个正在交易的U本位永续合约", symbols.len());
                 symbols
             },
             Err(e) => {
-                warn!("获取交易所信息失败: {}，使用默认交易对列表", e);
+                warn!("获取正在交易的U本位永续合约失败: {}，使用默认交易对列表", e);
                 vec![
                     "BTCUSDT".to_string(),
                     "ETHUSDT".to_string(),
@@ -163,11 +156,14 @@ impl KlineBackfiller {
         // 4. 执行下载任务
         let semaphore = Arc::new(tokio::sync::Semaphore::new(15)); // 使用15个并发
         let mut handles = Vec::new();
+        let failed_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
         for task in tasks {
             let api_clone = self.api.clone();
             let semaphore_clone = semaphore.clone();
             let db_clone = self.db.clone();
+            let failed_tasks_clone = failed_tasks.clone();
+            let task_clone = task.clone();
 
             let handle = tokio::spawn(async move {
                 // 获取信号量许可
@@ -189,13 +185,14 @@ impl KlineBackfiller {
                         sorted_klines.sort_by_key(|k| k.open_time);
 
                         // 保存到数据库
-                        let count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
-                        info!("{}/{}: 成功补齐 {} 条K线数据", symbol, interval, count);
+                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
 
                         Ok(())
                     }
                     Err(e) => {
                         error!("{}/{}: 补齐K线数据失败: {}", symbol, interval, e);
+                        // 将失败的任务添加到失败列表中
+                        failed_tasks_clone.lock().await.push(task_clone);
                         Err(e)
                     }
                 }
@@ -225,8 +222,99 @@ impl KlineBackfiller {
 
         let elapsed = start_time.elapsed();
         info!(
-            "K线补齐完成，成功: {}，失败: {}，耗时: {:?}",
+            "第一轮K线补齐完成，成功: {}，失败: {}，耗时: {:?}",
             success_count, error_count, elapsed
+        );
+
+        // 获取失败的任务列表
+        let retry_tasks = failed_tasks.lock().await.clone();
+
+        // 如果有失败的任务，进行重试
+        if !retry_tasks.is_empty() {
+            info!("开始重试 {} 个失败的下载任务...", retry_tasks.len());
+
+            let retry_start_time = Instant::now();
+            let mut retry_handles = Vec::new();
+            let retry_failed_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+            for task in retry_tasks {
+                let api_clone = self.api.clone();
+                let semaphore_clone = semaphore.clone();
+                let db_clone = self.db.clone();
+                let retry_failed_tasks_clone = retry_failed_tasks.clone();
+                let task_clone = task.clone();
+
+                let handle = tokio::spawn(async move {
+                    // 获取信号量许可
+                    let _permit = semaphore_clone.acquire().await.unwrap();
+
+                    let symbol = task.symbol.clone();
+                    let interval = task.interval.clone();
+
+                    info!("重试下载 {}/{} 的K线数据", symbol, interval);
+
+                    // 下载任务
+                    match api_clone.download_klines(&task).await {
+                        Ok(klines) => {
+                            if klines.is_empty() {
+                                info!("{}/{}: 重试下载 - 没有新的K线数据", symbol, interval);
+                                return Ok(());
+                            }
+
+                            // 按时间排序
+                            let mut sorted_klines = klines.clone();
+                            sorted_klines.sort_by_key(|k| k.open_time);
+
+                            // 保存到数据库
+                            let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
+
+                            info!("{}/{}: 重试下载成功", symbol, interval);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("{}/{}: 重试下载失败: {}", symbol, interval, e);
+                            // 将再次失败的任务添加到失败列表中
+                            retry_failed_tasks_clone.lock().await.push(task_clone);
+                            Err(e)
+                        }
+                    }
+                });
+
+                retry_handles.push(handle);
+            }
+
+            // 等待所有重试任务完成
+            let mut retry_success_count = 0;
+            let mut retry_error_count = 0;
+
+            for handle in retry_handles {
+                match handle.await {
+                    Ok(result) => {
+                        match result {
+                            Ok(_) => retry_success_count += 1,
+                            Err(_) => retry_error_count += 1,
+                        }
+                    }
+                    Err(e) => {
+                        error!("重试任务执行失败: {}", e);
+                        retry_error_count += 1;
+                    }
+                }
+            }
+
+            let retry_elapsed = retry_start_time.elapsed();
+            let final_failed_tasks = retry_failed_tasks.lock().await.len();
+
+            info!(
+                "重试下载完成，成功: {}，失败: {}，最终失败: {}，耗时: {:?}",
+                retry_success_count, retry_error_count, final_failed_tasks, retry_elapsed
+            );
+        }
+
+        let total_elapsed = start_time.elapsed();
+        info!(
+            "K线补齐全部完成，总耗时: {:?}",
+            total_elapsed
         );
 
         Ok(())

@@ -1,9 +1,10 @@
 use serde_json::json;
 
 /// 币安WebSocket URL
-pub const BINANCE_WS_URL: &str = "wss://fstream.binance.com/stream";
+pub const BINANCE_WS_URL: &str = "wss://fstream.binance.com/ws";
 
 /// 每个连接的最大流数量
+/// 在测试环境下，设置为1，以简化K线聚合测试并使日志更易读
 pub const MAX_STREAMS_PER_CONNECTION: usize = 1;
 
 /// 连续合约K线配置

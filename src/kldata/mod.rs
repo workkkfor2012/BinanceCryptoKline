@@ -7,5 +7,4 @@ pub mod backfill;
 // 重新导出常用模块，方便使用
 pub use downloader::{Downloader, Config};
 pub use streamer::{ContinuousKlineClient, ContinuousKlineConfig};
-pub use aggregator::KlineAggregator;
 pub use backfill::KlineBackfiller;

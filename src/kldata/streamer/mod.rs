@@ -77,8 +77,10 @@ impl ContinuousKlineClient {
 
         for symbol in &self.config.symbols {
             for interval in &self.config.intervals {
-                // 使用连续合约K线格式
-                let stream = format!("{}@continuousKline_{}", symbol.to_lowercase(), interval);
+                // 使用连续合约K线格式：<pair>_perpetual@continuousKline_<interval>
+                // 根据测试结果，这个格式可以成功连接
+                let stream = format!("{}_perpetual@continuousKline_{}", symbol.to_lowercase(), interval);
+                info!("创建流: {}", stream);
                 streams.push(stream);
             }
         }
