@@ -1,8 +1,7 @@
 // 导出下载器相关模块
-mod api;
 mod config;
 
-use crate::klcommon::{Database, DownloadResult, DownloadTask, Kline, Result};
+use crate::klcommon::{BinanceApi, Database, DownloadResult, DownloadTask, Kline, Result};
 use log::{debug, error, info, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +25,6 @@ fn interval_to_milliseconds(interval: &str) -> i64 {
 }
 
 // 重新导出
-pub use api::BinanceApi;
 pub use config::Config;
 
 // 预期的K线数量（用于验证）

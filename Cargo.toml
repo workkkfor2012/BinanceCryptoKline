@@ -42,6 +42,18 @@ name = "test_binance_async_tungstenite"
 path = "tests/test_binance_async_tungstenite.rs"
 harness = false
 
+# 聚合交易测试
+[[test]]
+name = "test_binance_aggtrade_fastws"
+path = "tests/test_binance_aggtrade_fastws.rs"
+harness = false
+
+# fastwebsockets 测试
+[[test]]
+name = "test_binance_fasws"
+path = "tests/test_binance_fasws.rs"
+harness = false
+
 
 [lib]
 name = "kline_server"
@@ -55,7 +67,7 @@ serde_json = "1.0"
 chrono = "0.4"
 clap = { version = "4.3", features = ["derive"] }
 log = "0.4"
-# env_logger = "0.10" # Comment out env_logger
+env_logger = "0.10"
 fern = "0.6" # Add fern
 anyhow = "1.0"
 thiserror = "1.0"
@@ -75,7 +87,7 @@ tokio-native-tls = "0.3"
 ws = "0.9"
 url = "2.4"
 socks = "0.3"
-fastwebsockets = { version = "0.10", features = ["upgrade"] }
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"] }
 tokio-socks = "0.5"
 base64 = "0.13"
 bytes = "1.5"
@@ -83,6 +95,7 @@ futures-channel = "0.3"
 http = "0.2"
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
 tokio-rustls = "0.24"
 rustls = { version = "0.21", features = ["dangerous_configuration"] } # dangerous_configuration might be needed for custom cert verification if required later
 rustls-native-certs = "0.6"

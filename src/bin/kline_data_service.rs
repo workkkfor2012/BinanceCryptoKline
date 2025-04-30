@@ -2,7 +2,7 @@
 use kline_server::klcommon::{Database, Result};
 use kline_server::kldata::streamer::{ContinuousKlineClient, ContinuousKlineConfig};
 use kline_server::kldata::backfill::KlineBackfiller;
-use kline_server::kldata::downloader; // 导入 downloader 模块
+
 use log::{info, error}; // 移除 debug, warn, 由 downloader 内部处理
 use std::sync::Arc;
 // 移除 std::time::Duration, kline_server::kldata::downloader::{BinanceApi, DownloadTask}, tokio::time::{interval, Instant}

@@ -1,5 +1,5 @@
 use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -23,14 +23,14 @@ impl BinanceApi {
         let proxy_url = "http://127.0.0.1:1080";
         let client = match reqwest::Proxy::all(proxy_url) {
             Ok(proxy) => {
-                log::info!("使用代理: {}", proxy_url);
+                info!("使用代理: {}", proxy_url);
                 client_builder
                     .proxy(proxy)
                     .build()
                     .expect("创建带代理的HTTP客户端失败")
             },
             Err(e) => {
-                log::warn!("设置代理失败，将尝试直接连接: {}", e);
+                warn!("设置代理失败，将尝试直接连接: {}", e);
                 client_builder
                     .build()
                     .expect("创建HTTP客户端失败")
@@ -39,6 +39,34 @@ impl BinanceApi {
 
         // 使用fapi.binance.com作为API端点
         let api_url = "https://fapi.binance.com".to_string();
+
+        Self { client, api_url }
+    }
+
+    /// 创建新的API客户端实例（带自定义URL）
+    pub fn new_with_url(api_url: String) -> Self {
+        // 创建带有超时设置的HTTP客户端
+        let client_builder = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10));
+
+        // 添加代理设置
+        let proxy_url = "http://127.0.0.1:1080";
+        let client = match reqwest::Proxy::all(proxy_url) {
+            Ok(proxy) => {
+                info!("使用代理: {}", proxy_url);
+                client_builder
+                    .proxy(proxy)
+                    .build()
+                    .expect("创建带代理的HTTP客户端失败")
+            },
+            Err(e) => {
+                warn!("设置代理失败，将尝试直接连接: {}", e);
+                client_builder
+                    .build()
+                    .expect("创建HTTP客户端失败")
+            }
+        };
 
         Self { client, api_url }
     }
@@ -79,8 +107,8 @@ impl BinanceApi {
 
     /// 获取正在交易的U本位永续合约
     pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
-        // 测试模式标志，设置为true时只返回BTCUSDT一个品种
-        let istest = true;
+        // 测试模式标志，设置为false时返回所有交易品种
+        let istest = false;
 
         // 测试模式下，直接返回BTCUSDT
         if istest {
@@ -100,6 +128,21 @@ impl BinanceApi {
             .collect();
 
         debug!("获取到 {} 个正在交易的U本位永续合约", usdt_symbols.len());
+
+        // 如果没有找到交易对，手动添加一些常用的
+        if usdt_symbols.is_empty() {
+            info!("从API获取不到交易对，使用默认列表");
+            return Ok(vec![
+                "BTCUSDT".to_string(),
+                "ETHUSDT".to_string(),
+                "BNBUSDT".to_string(),
+                "ADAUSDT".to_string(),
+                "DOGEUSDT".to_string(),
+                "XRPUSDT".to_string(),
+                "SOLUSDT".to_string(),
+                "DOTUSDT".to_string(),
+            ]);
+        }
 
         Ok(usdt_symbols)
     }
@@ -152,6 +195,70 @@ impl BinanceApi {
         if klines.len() != raw_klines.len() {
             error!(
                 "解析 {} 的部分K线失败: 解析了 {}/{} 条K线",
+                task.symbol,
+                klines.len(),
+                raw_klines.len()
+            );
+        }
+
+        Ok(klines)
+    }
+
+    /// 下载连续合约K线数据
+    pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
+        // 构建URL参数
+        let mut url_params = format!(
+            "pair={}&contractType=PERPETUAL&interval={}&limit={}",
+            task.symbol, task.interval, task.limit
+        );
+
+        // 添加可选的起始时间
+        if let Some(start_time) = task.start_time {
+            url_params.push_str(&format!("&startTime={}", start_time));
+        }
+
+        // 添加可选的结束时间
+        if let Some(end_time) = task.end_time {
+            url_params.push_str(&format!("&endTime={}", end_time));
+        }
+
+        // 使用fapi.binance.com
+        let fapi_url = format!("{}/fapi/v1/continuousKlines?{}", self.api_url, url_params);
+        debug!("下载连续合约K线: {}", fapi_url);
+
+        let response = self.client.get(&fapi_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await?;
+            error!(
+                "下载 {} 的连续合约K线失败: {} - {}",
+                task.symbol, status, text
+            );
+            return Err(AppError::ApiError(format!(
+                "下载 {} 的连续合约K线失败: {} - {}",
+                task.symbol, status, text
+            )));
+        }
+
+        let raw_klines: Vec<Vec<Value>> = response.json().await?;
+        debug!(
+            "收到 {} 条 {} 的连续合约K线",
+            raw_klines.len(),
+            task.symbol
+        );
+
+        let klines = raw_klines
+            .iter()
+            .filter_map(|raw| Kline::from_raw_kline(raw))
+            .collect::<Vec<Kline>>();
+
+        if klines.len() != raw_klines.len() {
+            error!(
+                "解析 {} 的部分连续合约K线失败: 解析了 {}/{} 条K线",
                 task.symbol,
                 klines.len(),
                 raw_klines.len()

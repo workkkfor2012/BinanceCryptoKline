@@ -1,6 +1,4 @@
-use crate::klcommon::{Database, Result};
-use crate::klcommon::models::DownloadTask;
-use crate::kldata::downloader::BinanceApi;
+use crate::klcommon::{BinanceApi, Database, DownloadTask, Result};
 use log::{info, warn, error};
 use std::sync::Arc;
 use std::collections::HashMap;

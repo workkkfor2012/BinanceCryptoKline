@@ -2,8 +2,10 @@
 pub mod models;
 pub mod db;
 pub mod error;
+pub mod api;
 
 // 重新导出常用类型，方便使用
 pub use models::{Kline, Symbol, ExchangeInfo, DownloadTask, DownloadResult, KlineData};
 pub use db::Database;
 pub use error::{Result, AppError};
+pub use api::BinanceApi;
