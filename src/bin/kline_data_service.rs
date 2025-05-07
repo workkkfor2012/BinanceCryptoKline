@@ -1,9 +1,12 @@
 // K线数据服务主程序
-use kline_server::klcommon::{Database, Result};
-use kline_server::kldata::streamer::{ContinuousKlineClient, ContinuousKlineConfig};
-use kline_server::kldata::backfill::KlineBackfiller;
+use kline_server::klcommon::{
+    AppError, Database, Result,
+    WebSocketClient, AggTradeClient, AggTradeConfig,
+    PROXY_HOST, PROXY_PORT
+};
+use kline_server::kldata::{KlineBackfiller, KlineAggregator, ServerTimeSyncManager, LatestKlineUpdater};
 
-use log::{info, error}; // 移除 debug, warn, 由 downloader 内部处理
+use log::{info, error}; // 移除 debug 和 warn, 由 downloader 内部处理
 use std::sync::Arc;
 // 移除 std::time::Duration, kline_server::kldata::downloader::{BinanceApi, DownloadTask}, tokio::time::{interval, Instant}
 
@@ -11,12 +14,15 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     // 硬编码参数
     let intervals = "1m,5m,30m,4h,1d,1w".to_string();
-    let _concurrency = 15; // 不再使用并发数，因为补齐器内部已经设置了并发数
-    let download_only = false;
-    let stream_only = false;
+    let concurrency = 100; // 最新K线更新器的并发数
+    let use_aggtrade = false; // 设置为true，启用WebSocket连接获取高频数据(eggtrade)用于合成K线
+    let use_latest_kline_updater = false; // 设置为false，仅下载历史数据，不启动最新K线更新器
+
+    // 将周期字符串转换为列表
+    let interval_list = intervals.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
 
     // 初始化日志
-    init_logging(true);
+    init_logging(true, &interval_list);
 
     info!("启动币安U本位永续合约K线数据服务");
 
@@ -24,81 +30,131 @@ async fn main() -> Result<()> {
     let db_path = std::path::PathBuf::from("./data/klines.db");
     let db = Arc::new(Database::new(&db_path)?);
 
-    // 如果不是仅流模式，则补齐历史数据
-    if !stream_only {
-        info!("开始补齐K线数据...");
-        info!("使用周期: {}", intervals);
+    // 首先启动服务器时间同步
+    info!("首先进行服务器时间同步...");
 
-        // 将周期字符串转换为列表
-        let interval_list = intervals.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
+    // 创建服务器时间同步管理器
+    let time_sync_manager = Arc::new(ServerTimeSyncManager::new());
 
-        // 创建补齐器实例
-        let backfiller = KlineBackfiller::new(db.clone(), interval_list.clone());
-
-        // 运行一次性补齐流程
-        match backfiller.run_once().await {
-            Ok(_) => {
-                info!("历史K线补齐完成");
-
-                // // 启动定时更新任务
-                // let timer_db = db.clone();
-                // let timer_intervals = interval_list.clone();
-                // tokio::spawn(async move {
-                //     // 调用 downloader 中的函数来处理定时任务
-                //     downloader::start_periodic_update(timer_db, timer_intervals).await;
-                // });
-
-            },
-            Err(e) => {
-                error!("历史K线补齐失败: {}", e);
-                return Err(e);
-            }
+    // 只进行一次时间同步，不启动定时任务
+    match time_sync_manager.sync_time_once().await {
+        Ok((time_diff, network_delay)) => {
+            info!("服务器时间同步成功，时间差值: {}毫秒，网络延迟: {}毫秒，继续执行后续任务",
+                time_diff, network_delay);
+        },
+        Err(e) => {
+            error!("服务器时间同步失败: {}", e);
+            return Err(e);
         }
     }
 
-    // 如果是仅下载模式，则退出
-    if download_only {
-        info!("仅下载模式，程序退出");
+    // 启动时间同步任务（每分钟的第30秒运行）
+    let time_sync_manager_clone = time_sync_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = time_sync_manager_clone.start().await {
+            error!("服务器时间同步任务启动失败: {}", e);
+        }
+    });
+
+    // 补齐历史数据
+    info!("开始补齐K线数据...");
+    info!("使用周期: {}", intervals);
+
+    // 创建补齐器实例
+    let backfiller = KlineBackfiller::new(db.clone(), interval_list.clone());
+
+    // 运行一次性补齐流程
+    match backfiller.run_once().await {
+        Ok(_) => {
+            info!("历史K线补齐完成");
+
+            // 获取所有交易对
+            let symbols = match db.get_all_symbols() {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("无法从数据库获取交易对列表: {}", e);
+                    return Err(AppError::DatabaseError(format!("无法从数据库获取交易对列表: {}", e)));
+                }
+            };
+
+            // 服务器时间同步任务已经在程序开始时启动，这里不需要再次启动
+
+            // 启动K线聚合任务
+            let aggregator_db = db.clone();
+            let aggregator_intervals = interval_list.clone();
+            let aggregator_symbols = symbols.clone();
+            tokio::spawn(async move {
+                let aggregator = KlineAggregator::new(aggregator_db, aggregator_intervals, aggregator_symbols);
+                if let Err(e) = aggregator.start().await {
+                    error!("K线聚合任务启动失败: {}", e);
+                }
+            });
+
+            // 如果启用最新K线更新器，则启动最新K线更新任务
+            if use_latest_kline_updater {
+                info!("启动最新K线更新任务（每分钟更新一次所有品种、所有周期的最新一根K线）");
+                let updater_db = db.clone();
+                let updater_intervals = interval_list.clone();
+                let updater_time_sync_manager = time_sync_manager.clone();
+                tokio::spawn(async move {
+                    let updater = LatestKlineUpdater::new(
+                        updater_db,
+                        updater_intervals,
+                        updater_time_sync_manager,
+                        concurrency
+                    );
+                    if let Err(e) = updater.start().await {
+                        error!("最新K线更新任务启动失败: {}", e);
+                    }
+                });
+            } else {
+                info!("未启用最新K线更新任务，仅下载历史数据");
+            }
+        },
+        Err(e) => {
+            error!("历史K线补齐失败: {}", e);
+            return Err(e);
+        }
+    }
+
+    // 如果不启用高频数据WebSocket连接，则退出
+    if !use_aggtrade {
+        info!("未启用高频数据WebSocket连接，程序退出");
         return Ok(());
     }
 
-    // 注意：K线聚合器已移除，现在使用新的K线合成算法
-    info!("使用新的K线合成算法，每次接收WebSocket推送的1分钟K线数据时触发合成");
+    // 启用归集交易功能，获取高频数据用于合成K线
+    info!("使用归集交易数据生成K线，实时性更高");
 
     // 只使用BTCUSDT交易对
     let symbols = vec!["BTCUSDT".to_string()];
     info!("只使用BTCUSDT交易对进行测试");
 
-    // 创建连续合约K线配置（硬编码代理设置）
-    let continuous_config = ContinuousKlineConfig {
+    // 创建归集交易配置（使用集中代理设置）
+    let agg_trade_config = AggTradeConfig {
         use_proxy: true,
-        proxy_addr: "127.0.0.1".to_string(),
-        proxy_port: 1080,
+        proxy_addr: PROXY_HOST.to_string(),
+        proxy_port: PROXY_PORT,
         symbols, // 使用从数据库获取的所有交易对
-        intervals: vec!["1m".to_string()] // 只订阅一分钟周期，其他周期通过本地合成
     };
 
-    // 设置HTTP代理环境变量（为了兼容可能使用环境变量的其他组件）
-    std::env::set_var("https_proxy", "http://127.0.0.1:1080");
-    std::env::set_var("http_proxy", "http://127.0.0.1:1080");
-    std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1080");
-    std::env::set_var("HTTP_PROXY", "http://127.0.0.1:1080");
+    info!("使用归集交易数据生成1分钟K线，其他周期通过本地聚合");
 
-    info!("只订阅一分钟周期，其他周期通过本地合成");
+    // 创建归集交易客户端
+    let mut agg_trade_client = AggTradeClient::new(agg_trade_config, db.clone(), "1m".to_string());
 
-    // 创建连续合约K线客户端
-    let mut continuous_client = ContinuousKlineClient::new(continuous_config, db.clone());
-
-    // 启动连续合约K线客户端
-    match continuous_client.start().await {
-        Ok(_) => info!("连续合约K线实时更新完成"),
-        Err(e) => error!("连续合约K线实时更新失败: {}", e),
+    // 启动归集交易客户端
+    match agg_trade_client.start().await {
+        Ok(_) => info!("归集交易实时更新完成"),
+        Err(e) => error!("归集交易实时更新失败: {}", e),
     }
+
+    info!("归集交易功能已启用，程序将持续运行");
 
     Ok(())
 }
 
-fn init_logging(verbose: bool) {
+fn init_logging(verbose: bool, intervals: &[String]) {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
     std::env::set_var("RUST_BACKTRACE", "1");
 
@@ -128,40 +184,60 @@ fn init_logging(verbose: bool) {
         .level_for("tokio_tungstenite", log::LevelFilter::Warn)
         .level_for("tungstenite", log::LevelFilter::Warn);
 
-    // 通用日志文件
-    let general_log_path = format!("{}/kline_data_service.log", log_dir);
-    let file_dispatch = fern::Dispatch::new()
-        .chain(fern::log_file(&general_log_path).expect("Failed to open general log file"));
+    // 定义聚合器目标列表
+    let aggregator_targets: Vec<String> = intervals.iter()
+        .map(|interval| format!("kline_aggregator_{}", interval))
+        .collect();
 
-    // 各周期聚合日志文件
-    let mut dispatch = base_config;
+    // 创建日志文件路径
+    let log_file_path = format!("{}/kldata.log", log_dir);
 
-    let intervals = ["5m", "30m", "4h", "1d", "1w"];
-    for interval in intervals {
-        let target_name = format!("aggregator_{}", interval);
-        let log_path = format!("{}/aggregate_{}.log", log_dir, interval);
-        let interval_dispatch = fern::Dispatch::new()
-            .filter(move |metadata| metadata.target() == target_name)
-            .chain(fern::log_file(&log_path).expect(&format!("Failed to open log file for {}", interval)));
-        dispatch = dispatch.chain(interval_dispatch);
-    }
+    // 尝试删除已存在的日志文件
+    let delete_result = if std::path::Path::new(&log_file_path).exists() {
+        match std::fs::remove_file(&log_file_path) {
+            Ok(_) => format!("已删除旧的日志文件: {}", log_file_path),
+            Err(e) => format!("无法删除旧的日志文件 {}: {}", log_file_path, e),
+        }
+    } else {
+        String::new()
+    };
 
-    // 将不匹配任何周期 target 的日志（包括默认日志）发送到通用文件和控制台
+    // 创建主分发器
+    let dispatch = base_config;
+
+    // 创建默认分发器
     let default_dispatch = fern::Dispatch::new()
-        .filter(move |metadata| !intervals.iter().any(|i| metadata.target() == format!("aggregator_{}", i)))
-        .chain(std::io::stdout()) // 输出到控制台
-        .chain(file_dispatch); // 输出到通用日志文件
+        .filter(move |metadata| {
+            let target = metadata.target();
+            !aggregator_targets.iter().any(|t| target == t.as_str())
+        });
 
-    dispatch = dispatch.chain(default_dispatch);
+    // 尝试添加文件日志
+    let default_dispatch = match fern::log_file(&log_file_path) {
+        Ok(file_log) => default_dispatch.chain(file_log),
+        Err(e) => {
+            // 如果无法创建日志文件，则输出错误信息到控制台并退出程序
+            eprintln!("错误: 无法创建日志文件 {}: {}", log_file_path, e);
+            std::process::exit(1);
+        }
+    };
 
+    let final_dispatch = dispatch.chain(default_dispatch);
 
-    match dispatch.apply() {
-        Ok(_) => log::info!("日志系统 (fern) 已初始化"),
-        Err(e) => eprintln!("日志系统初始化失败: {}", e),
+    match final_dispatch.apply() {
+        Ok(_) => {
+            // 如果有删除日志文件的结果，记录到日志中
+            if !delete_result.is_empty() {
+                log::info!("{}", delete_result);
+            }
+            log::info!("日志系统 (fern) 已初始化");
+            log::info!("日志系统已初始化，UTF-8编码测试：中文、日文、韩文");
+        },
+        Err(e) => {
+            eprintln!("错误: 日志系统初始化失败: {}", e);
+            std::process::exit(1);
+        },
     }
-
-    // 输出一条日志，确认日志系统已初始化
-    log::info!("日志系统已初始化，UTF-8编码测试：中文、日文、韩文");
 }
 
 

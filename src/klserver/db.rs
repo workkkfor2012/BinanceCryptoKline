@@ -238,6 +238,19 @@ impl Database {
             return Ok(None);
         }
 
+        // 首先检查表是否有数据
+        let has_data: bool = conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", table_name),
+            [],
+            |row| row.get(0),
+        ).unwrap_or(false);
+
+        if !has_data {
+            // 表存在但没有数据
+            return Ok(None);
+        }
+
+        // 表存在且有数据，获取最大时间戳
         let query = format!("SELECT MAX(open_time) FROM {}", table_name);
         let result: Option<i64> = conn.query_row(
             &query,

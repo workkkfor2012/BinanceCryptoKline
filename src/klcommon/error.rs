@@ -38,7 +38,7 @@ pub enum AppError {
     UrlParseError(#[from] url::ParseError),
 
     #[error("WebSocket protocol error: {0}")]
-    WebSocketProtocolError(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocketProtocolError(String),
 
     #[error("HTTP request error: {0}")]
     HttpRequestError(#[from] http::Error),
@@ -51,6 +51,9 @@ pub enum AppError {
 
     #[error("Web server error: {0}")]
     WebServerError(String),
+
+    #[error("Aggregation error: {0}")]
+    AggregationError(String),
 
     #[error("Unknown error: {0}")]
     #[allow(dead_code)]

@@ -1,7 +1,8 @@
-﻿use crate::kldata::{Config, Downloader};
+﻿use crate::kldata::KlineBackfiller;
 use crate::klcommon::{Database, Result};
 use log::{info, error};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Startup check module, used to check database and historical kline data
 pub struct StartupCheck;
@@ -48,27 +49,25 @@ impl StartupCheck {
     pub async fn download_historical_klines() -> Result<()> {
         info!("Starting to download historical kline data...");
 
-        // Initialize downloader configuration
-        let config = Config::new(
-            Some("./data".to_string()),
-            Some(15),                                  // Concurrency
-            Some(vec!["1m".to_string(), "5m".to_string(), "30m".to_string(), "4h".to_string(), "1d".to_string(), "1w".to_string()]), // Kline intervals
-            None,                                // Start time (auto calculate)
-            None,                                // End time (current time)
-            None,                                // Symbols (download all USDT-M perpetual contracts)
-            Some(true),                          // Use SQLite file storage
-            Some(0),                             // No limit on kline count
-            Some(false),                         // Don't use update mode
-        );
+        // Create database connection
+        let db_path = PathBuf::from("./data/klines.db");
+        let db = Arc::new(Database::new(&db_path)?);
 
-        // Create downloader instance
-        let downloader = match Downloader::new(config) {
-            Ok(d) => d,
-            Err(e) => return Err(crate::klcommon::AppError::ApiError(format!("Failed to create downloader: {}", e))),
-        };
+        // Define intervals to download
+        let intervals = vec![
+            "1m".to_string(),
+            "5m".to_string(),
+            "30m".to_string(),
+            "4h".to_string(),
+            "1d".to_string(),
+            "1w".to_string()
+        ];
 
-        // Run download process
-        match downloader.run().await {
+        // Create backfiller instance
+        let backfiller = KlineBackfiller::new(db, intervals);
+
+        // Run backfill process
+        match backfiller.run_once().await {
             Ok(_) => {
                 info!("Historical kline download completed, data saved to database");
                 Ok(())

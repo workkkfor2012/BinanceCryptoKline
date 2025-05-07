@@ -9,6 +9,7 @@
 - 仅使用币安的fapi端点，简化访问逻辑
 - 支持多种K线周期（1分钟、5分钟、30分钟、4小时、1天、1周）
 - 自动处理API限制和错误重试
+- 集中式代理配置，便于统一管理和修改
 - 采用SQLite的WAL模式，提供接近内存数据库的性能
   - 高性能：读写速度接近内存数据库
   - 数据持久化：所有数据安全存储在磁盘上
@@ -49,8 +50,8 @@ cargo build --release
 # 启动K线数据服务（下载历史数据并实时更新）
 cargo run --release --bin kline_data_service
 
-# 仅下载历史数据，不启动实时更新
-cargo run --release --bin kline_data_service -- --download-only
+# 仅下载历史数据，不启动最新K线更新器
+cargo run --release --bin kline_data_service -- --no-latest-kline-updater
 
 # 仅启动实时更新，不下载历史数据
 cargo run --release --bin kline_data_service -- --stream-only
@@ -99,9 +100,9 @@ K线数据服务支持以下运行模式：
    cargo run --release --bin kline_data_service
    ```
 
-2. **仅下载模式**: 仅下载历史数据，不启动实时更新。
+2. **仅下载模式**: 仅下载历史数据，不启动最新K线更新器。
    ```bash
-   cargo run --release --bin kline_data_service -- --download-only
+   cargo run --release --bin kline_data_service -- --no-latest-kline-updater
    ```
 
 3. **仅实时模式**: 仅启动实时更新，不下载历史数据。
@@ -133,9 +134,9 @@ Web服务器支持以下运行模式：
    - 创建下载器配置
    - 下载指定交易对的历史K线数据
    - 将数据存储到SQLite数据库中
-5. 如果是仅下载模式，则退出
-6. 创建并启动K线聚合器，用于合成其他周期的K线
-7. 创建并启动WebSocket客户端，订阅实时K线数据
+5. 创建并启动K线聚合器，用于合成其他周期的K线
+6. 如果启用了最新K线更新器，则创建并启动最新K线更新任务
+7. 如果启用了高频数据(eggtrade)，则创建并启动WebSocket客户端，订阅实时交易数据
 
 ### Web服务器启动流程
 
@@ -189,9 +190,10 @@ Web服务器支持以下运行模式：
 
 1. 直接访问`https://fapi.binance.com`端点
 2. 使用标准HTTP请求获取交易所信息和K线数据
-3. 简化了代码逻辑，提高了程序的可维护性
+3. 通过配置的代理服务器访问API（默认为127.0.0.1:1080）
+4. 简化了代码逻辑，提高了程序的可维护性
 
-这种方式简化了程序的访问逻辑，使得代码更加清晰和易于维护。
+所有网络请求（包括HTTP API和WebSocket连接）都通过集中配置的代理服务器进行，确保在网络环境受限的情况下也能正常访问币安API。
 
 ## SQLite WAL模式
 
@@ -212,13 +214,37 @@ Web服务器支持以下运行模式：
 要了解更多关于SQLite WAL模式的详细信息，请参阅[SQLite WAL模式详解](docs/sqlite_wal_mode.md)文档。
 
 
+## 代理设置
+
+本项目使用集中式代理配置，所有需要访问网络的组件都从同一个配置源获取代理设置。代理配置位于`src/klcommon/proxy.rs`文件中：
+
+```rust
+/// 代理服务器地址
+pub const PROXY_HOST: &str = "127.0.0.1";
+
+/// 代理服务器端口
+pub const PROXY_PORT: u16 = 1080;
+```
+
+如需修改代理设置，只需编辑上述文件中的常量值即可。这种集中式配置方式确保了：
+
+1. **统一管理**：所有组件使用相同的代理设置
+2. **易于维护**：只需在一处修改即可更新所有组件的代理设置
+3. **配置清晰**：明确指定代理地址和端口，避免硬编码
+
+代理设置应用于以下组件：
+
+- API请求（历史K线下载、交易对信息获取等）
+- WebSocket连接（实时K线数据、归集交易数据等）
+
 ## 注意事项
 
 - 该工具使用币安的公共API，请注意API使用限制
 - 下载大量数据可能需要较长时间
 - 数据存储在SQLite数据库中，位于`./data/klines.db`
 - 采用WAL模式提供高性能的数据库操作，同时确保数据安全
+- 确保代理服务器正常运行，否则将无法连接到币安API
 
 ## 流程图
 
-详细的启动流程可以在`docs/startup_flow.md`文件中查看。
+详细的启动流程可以在`docs\kline_data_download_flow.md`文件中查看。
