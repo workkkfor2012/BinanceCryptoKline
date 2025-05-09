@@ -110,6 +110,9 @@ pub struct Symbol {
     pub liquidation_fee: String,
     #[serde(default)]
     pub market_take_bound: String,
+    /// 合约类型，对应API返回的contractType字段
+    #[serde(default, rename = "contractType")]
+    pub contract_type: String,
     // 添加其他可能的字段
     #[serde(skip)]
     pub extra: Option<HashMap<String, serde_json::Value>>,

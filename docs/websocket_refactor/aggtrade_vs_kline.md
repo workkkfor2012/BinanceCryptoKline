@@ -1,5 +1,23 @@
 # 归集交易(aggTrade)与连续合约K线(continuousKline)对比
 
+## 归集交易数据流描述
+
+归集交易(aggTrade)是币安提供的一种高频交易数据流，具有以下特点：
+
+- **数据聚合**：同一价格、同一方向、同一时间(100ms计算)的trade会被聚合为一条
+- **Stream名称**：`<symbol>@aggTrade`（例如：`btcusdt@aggTrade`）
+- **更新速度**：约100ms
+
+### WebSocket连接方式
+
+- **单一stream**：`wss://fstream.binance.com/ws/<streamName>`
+  例如：`wss://fstream.binance.com/ws/btcusdt@aggTrade`
+
+- **组合streams**：`wss://fstream.binance.com/stream?streams=<streamName1>/<streamName2>/<streamName3>`
+  例如：`wss://fstream.binance.com/stream?streams=btcusdt@aggTrade/ethusdt@aggTrade`
+
+> 注意：组合streams时，事件payload会以这样的格式封装 `{"stream":"<streamName>","data":<rawPayload>}`
+
 ## 数据结构对比
 
 ### 连续合约K线(continuousKline)
@@ -97,7 +115,7 @@ fn process_agg_trade(trade: &AggTrade, kline_map: &mut HashMap<i64, KlineBuilder
     // 计算K线周期
     let interval_ms = 60 * 1000; // 1分钟 = 60,000毫秒
     let open_time = (trade.trade_time / interval_ms) * interval_ms;
-    
+
     // 获取或创建K线构建器
     let kline_builder = kline_map.entry(open_time).or_insert_with(|| {
         KlineBuilder::new(
@@ -106,10 +124,10 @@ fn process_agg_trade(trade: &AggTrade, kline_map: &mut HashMap<i64, KlineBuilder
             open_time,
         )
     });
-    
+
     // 添加交易数据
     kline_builder.add_trade(trade);
-    
+
     Ok(())
 }
 ```
@@ -127,3 +145,12 @@ fn process_agg_trade(trade: &AggTrade, kline_map: &mut HashMap<i64, KlineBuilder
 1. **需要自行聚合K线**：需要实现从交易数据到K线数据的转换逻辑
 2. **需要处理时间戳**：需要根据时间戳确定K线周期
 3. **需要处理数据一致性**：确保生成的K线数据与币安官方K线数据一致
+
+## WebSocket连接注意事项
+
+1. **连接有效期**：每个连接有效期不超过24小时，请妥善处理断线重连
+2. **心跳机制**：服务端每3分钟会发送ping帧，客户端应当在10分钟内回复pong帧，否则服务端会主动断开连接
+3. **订阅限制**：
+   - Websocket服务器每秒最多接受10个订阅消息
+   - 单个连接最多可以订阅1024个Streams
+4. **大小写敏感**：stream名称中所有交易对均为小写

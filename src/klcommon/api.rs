@@ -1,5 +1,5 @@
 use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result, get_proxy_url};
-use log::{error, warn, info};
+use log::{debug, error, warn, info};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -128,9 +128,15 @@ impl BinanceApi {
         let request = client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
 
+        // 打印完整请求信息（仅调试级别）
+        debug!("发送请求: GET {}", fapi_url);
+
         // 发送请求
         let response = match request.send().await {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                debug!("获取交易所信息响应状态码: {}", resp.status());
+                resp
+            },
             Err(e) => {
                 // 只在错误时记录请求URL
                 error!("获取交易所信息失败: URL={}, 错误: {}", fapi_url, e);
@@ -148,27 +154,50 @@ impl BinanceApi {
             )));
         }
 
+        // 获取响应文本
+        let response_text = response.text().await?;
+
+        // 打印响应的前1000个字符（仅调试级别）
+        debug!("交易所信息响应前1000个字符: {}", &response_text[..response_text.len().min(1000)]);
+
         // 解析响应为ExchangeInfo
-        let mut exchange_info: ExchangeInfo = response.json().await?;
-
-        // 过滤出状态为TRADING的交易对
-        exchange_info.symbols.retain(|symbol| symbol.status == "TRADING");
-
+        let exchange_info: ExchangeInfo = match serde_json::from_str::<ExchangeInfo>(&response_text) {
+            Ok(info) => {
+                //debug!("成功解析交易所信息JSON，获取到 {} 个交易对", info.symbols.len());
+                info
+            },
+            Err(e) => {
+                error!("解析交易所信息JSON失败: {}, 响应前1000个字符: {}",
+                    e, &response_text[..response_text.len().min(1000)]);
+                return Err(AppError::JsonError(e));
+            }
+        };
 
         Ok(exchange_info)
     }
 
     /// 获取正在交易的U本位永续合约
-    /// 如果失败会重试最多5次，如果5次都失败则返回错误
+    ///
+    /// 此方法从币安API获取所有正在交易的U本位永续合约交易对。
+    /// 如果失败会重试最多5次，如果5次都失败则返回错误。
+    ///
+    /// # 返回值
+    ///
+    /// 成功时返回一个包含所有正在交易的U本位永续合约交易对的字符串向量。
+    /// 例如：["BTCUSDT", "ETHUSDT", "BNBUSDT", ...]
+    ///
+    /// # 错误
+    ///
+    /// 如果无法获取交易所信息或者没有找到任何符合条件的交易对，返回相应的错误。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// let api = BinanceApi::new();
+    /// let symbols = api.get_trading_usdt_perpetual_symbols().await?;
+    /// println!("获取到 {} 个交易对", symbols.len());
+    /// ```
     pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
-        // 测试模式标志，设置为false时返回所有交易品种
-        let istest = false;
-
-        // 测试模式下，直接返回BTCUSDT
-        if istest {
-            return Ok(vec!["BTCUSDT".to_string()]);
-        }
-
         // 最大重试次数
         const MAX_RETRIES: usize = 5;
         // 重试间隔（秒）
@@ -179,25 +208,32 @@ impl BinanceApi {
             // 获取交易所信息
             match self.get_exchange_info().await {
                 Ok(exchange_info) => {
-                    // 过滤出以USDT结尾的交易对
-                    // 注意：get_exchange_info已经过滤了状态为TRADING的交易对
-                    let usdt_symbols: Vec<String> = exchange_info.symbols
+                    // 过滤出U本位永续合约交易对
+                    // 条件：
+                    // 1. 以USDT结尾（U本位）
+                    // 2. 状态为TRADING（正在交易）
+                    // 3. 合约类型为PERPETUAL（永续合约）
+                    let usdt_perpetual_symbols: Vec<String> = exchange_info.symbols
                         .iter()
-                        .filter(|symbol| symbol.symbol.ends_with("USDT"))
+                        .filter(|symbol| {
+                            let is_usdt = symbol.symbol.ends_with("USDT");
+                            let is_trading = symbol.status == "TRADING";
+                            let is_perpetual = symbol.contract_type == "PERPETUAL";
+                            is_usdt && is_trading && is_perpetual
+                        })
                         .map(|symbol| symbol.symbol.clone())
                         .collect();
 
                     // 如果没有找到交易对，只打印信息
-                    if usdt_symbols.is_empty() {
-                        warn!("从API获取不到交易对 (尝试 {}/{})", retry + 1, MAX_RETRIES);
+                    if usdt_perpetual_symbols.is_empty() {
+                        warn!("从API获取不到U本位永续合约交易对 (尝试 {}/{})", retry + 1, MAX_RETRIES);
                         if retry == MAX_RETRIES - 1 {
-                            return Err(AppError::ApiError("获取交易对失败，已重试5次但未获取到任何交易对".to_string()));
+                            return Err(AppError::ApiError("获取U本位永续合约交易对失败，已重试5次但未获取到任何交易对".to_string()));
                         }
                     } else {
-                        if retry > 0 {
-                            info!("获取交易对成功，重试次数: {}, 获取到 {} 个交易对", retry, usdt_symbols.len());
-                        }
-                        return Ok(usdt_symbols);
+                        // 只输出过滤后的交易对数量
+                        info!("获取U本位永续合约交易对成功，获取到 {} 个交易对", usdt_perpetual_symbols.len());
+                        return Ok(usdt_perpetual_symbols);
                     }
                 },
                 Err(e) => {
@@ -215,7 +251,7 @@ impl BinanceApi {
         }
 
         // 这里理论上不会执行到，因为在最后一次重试失败时已经返回错误
-        Err(AppError::ApiError("获取交易对失败，已达到最大重试次数".to_string()))
+        Err(AppError::ApiError("获取U本位永续合约交易对失败，已达到最大重试次数".to_string()))
     }
 
     /// 下载K线数据

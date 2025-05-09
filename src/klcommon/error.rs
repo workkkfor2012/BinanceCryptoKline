@@ -55,6 +55,15 @@ pub enum AppError {
     #[error("Aggregation error: {0}")]
     AggregationError(String),
 
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    #[error("Channel error: {0}")]
+    ChannelError(String),
+
+    #[error("Actor error: {0}")]
+    ActorError(String),
+
     #[error("Unknown error: {0}")]
     #[allow(dead_code)]
     Unknown(String),

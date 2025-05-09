@@ -3,11 +3,11 @@ use log::{info, warn, error, debug};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use chrono::Utc;
+use chrono::{Utc, TimeZone};
 use tokio::sync::Semaphore;
 
 /// 最新K线更新器
-/// 
+///
 /// 负责每分钟下载一次所有品种、所有周期的最新一根K线
 pub struct LatestKlineUpdater {
     db: Arc<Database>,
@@ -20,16 +20,16 @@ pub struct LatestKlineUpdater {
 impl LatestKlineUpdater {
     /// 创建新的最新K线更新器实例
     pub fn new(
-        db: Arc<Database>, 
-        intervals: Vec<String>, 
+        db: Arc<Database>,
+        intervals: Vec<String>,
         time_sync_manager: Arc<ServerTimeSyncManager>,
         concurrency: usize,
     ) -> Self {
         let api = BinanceApi::new();
-        Self { 
-            db, 
-            api, 
-            intervals, 
+        Self {
+            db,
+            api,
+            intervals,
             time_sync_manager,
             concurrency,
         }
@@ -42,7 +42,7 @@ impl LatestKlineUpdater {
         loop {
             // 计算下一分钟的开始时间（第1毫秒）
             let next_minute_start = self.calculate_next_minute_start();
-            
+
             // 等待到下一分钟的开始
             let wait_time = next_minute_start - Utc::now().timestamp_millis();
             if wait_time > 0 {
@@ -106,7 +106,18 @@ impl LatestKlineUpdater {
 
         // 2. 创建下载任务
         let mut tasks = Vec::new();
-        let current_time = Utc::now().timestamp_millis();
+
+        // 获取当前本地时间
+        let local_time = Utc::now().timestamp_millis();
+
+        // 应用时间差，获取校准后的服务器时间
+        let time_diff = self.time_sync_manager.get_time_diff();
+        let current_time = local_time + time_diff;
+
+        info!("当前本地时间: {}, 时间差: {}毫秒, 校准后的服务器时间: {}",
+              self.format_timestamp(local_time),
+              time_diff,
+              self.format_timestamp(current_time));
 
         for symbol in &all_symbols {
             for interval in &self.intervals {
@@ -176,10 +187,10 @@ impl LatestKlineUpdater {
 
                         // 保存到数据库
                         let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
-                        
+
                         // 增加成功计数
                         success_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        
+
                         debug!("{}/{}: 更新最新K线成功", symbol, interval);
                         Ok(())
                     }
@@ -200,5 +211,11 @@ impl LatestKlineUpdater {
 
         let total_success = success_count.load(std::sync::atomic::Ordering::SeqCst);
         Ok(total_success)
+    }
+
+    /// 将毫秒时间戳格式化为可读的日期时间字符串
+    fn format_timestamp(&self, timestamp_ms: i64) -> String {
+        let dt = chrono::Utc.timestamp_millis(timestamp_ms);
+        dt.format("%Y-%m-%d %H:%M:%S.%3f").to_string()
     }
 }

@@ -22,9 +22,11 @@ static DB_OPERATIONS: Lazy<(AtomicUsize, AtomicUsize, std::sync::Mutex<Instant>)
 // Output database operation statistics every 10 seconds
 const DB_LOG_INTERVAL: u64 = 10;
 
+// 数据库连接池类型
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 /// 写入任务结构体，表示一个待执行的数据库写入操作
+#[derive(Debug)]
 struct WriteTask {
     symbol: String,
     interval: String,
@@ -32,7 +34,10 @@ struct WriteTask {
     result_sender: Sender<Result<usize>>,
 }
 
+
+
 /// 数据库写入队列处理器
+#[derive(Debug)]
 struct DbWriteQueueProcessor {
     receiver: Receiver<WriteTask>,
     pool: DbPool,
@@ -87,7 +92,7 @@ impl DbWriteQueueProcessor {
     }
 
     /// 处理单个写入任务
-    fn process_write_task(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
+    pub fn process_write_task(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);
         }
@@ -109,7 +114,7 @@ impl DbWriteQueueProcessor {
             .map_err(|e| AppError::DatabaseError(format!("开始事务失败: {}", e)))?;
 
         let mut count = 0;
-        let mut updated = 0;
+        let mut _updated = 0;
 
         // 处理每个K线
         for kline in klines {
@@ -146,7 +151,7 @@ impl DbWriteQueueProcessor {
 
                 match result {
                     Ok(_) => {
-                        updated += 1;
+                        _updated += 1;
                         count += 1;
                     },
                     Err(e) => {
@@ -228,6 +233,7 @@ impl DbWriteQueueProcessor {
 }
 
 /// Database handler for kline data
+#[derive(Debug)]
 pub struct Database {
     pool: DbPool,
     write_queue_sender: Sender<WriteTask>,
@@ -253,7 +259,7 @@ impl Database {
             conn.execute_batch("
                 PRAGMA journal_mode = WAL;           -- Enable WAL mode
                 PRAGMA synchronous = NORMAL;         -- Balance performance and safety
-                PRAGMA cache_size = -102400;         -- Set cache to 100MB (100 * 1024 KiB)
+                PRAGMA cache_size = -204800;         -- Set cache to 200MB (200 * 1024 KiB)
                 PRAGMA mmap_size = 268435456;        -- 256MB memory mapping
                 PRAGMA temp_store = MEMORY;          -- Store temp tables in memory
                 PRAGMA wal_autocheckpoint = 1000;    -- Checkpoint every 1000 pages
@@ -263,7 +269,7 @@ impl Database {
 
         // Create connection pool with multiple concurrent connections
         let pool = Pool::builder()
-            .max_size(10) // Maximum 10 concurrent connections, adjust as needed
+            .max_size(10) // 减少到10个并发连接，减少锁竞争
             .build(manager)
             .map_err(|e| AppError::DatabaseError(format!("Failed to create connection pool: {}", e)))?;
 
@@ -311,7 +317,7 @@ impl Database {
     }
 
     /// Ensure table exists for a specific symbol and interval
-    fn ensure_symbol_table(&self, symbol: &str, interval: &str) -> Result<()> {
+    pub fn ensure_symbol_table(&self, symbol: &str, interval: &str) -> Result<()> {
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
@@ -371,6 +377,7 @@ impl Database {
         // 确保表存在（这一步仍然需要，因为可能会有其他地方需要查询这个表）
         self.ensure_symbol_table(symbol, interval)?;
 
+        // 如果DbWriteQueue不可用，则使用原来的写入队列
         // 创建一个K线数据的副本，以便在队列中安全地传递
         let klines_copy: Vec<Kline> = klines.to_vec();
 
@@ -507,7 +514,7 @@ impl Database {
 
     /// 关闭写入队列处理器
     pub fn shutdown(&self) {
-        info!("正在关闭数据库写入队列处理器...");
+        info!("正在关闭数据库写入队列...");
 
         // 设置运行标志为false，通知处理器停止
         if let Ok(mut running) = self.queue_processor_running.lock() {
@@ -517,7 +524,7 @@ impl Database {
         // 等待所有剩余的任务处理完成
         // 这里我们不等待，因为处理器会在接收到关闭信号后自行退出
 
-        info!("数据库写入队列处理器已关闭");
+        info!("数据库写入队列已关闭");
     }
 }
 

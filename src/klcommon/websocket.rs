@@ -178,23 +178,23 @@ pub async fn process_messages<H: MessageHandler>(
     info!("启动WebSocket消息处理器");
 
     // 统计信息
-    let mut message_count = 0;
+    let mut _message_count = 0;
     let mut last_stats_time = Instant::now();
     let stats_interval = Duration::from_secs(30);
 
     // 处理消息
     while let Some((connection_id, text)) = rx.recv().await {
-        message_count += 1;
+        _message_count += 1;
 
         // 每30秒输出一次统计信息
         let now = Instant::now();
         if now.duration_since(last_stats_time) >= stats_interval {
-            info!("WebSocket统计: 已处理 {} 条消息", message_count);
+            //info!("WebSocket统计: 已处理 {} 条消息", message_count);
 
             // 输出每个连接的统计信息
             let connections_guard = connections.lock().await;
-            for (id, conn) in connections_guard.iter() {
-                info!("连接 {}: {} 条消息, 状态: {}", id, conn.message_count, conn.status);
+            for (_id, _conn) in connections_guard.iter() {
+               //info!("连接 {}: {} 条消息, 状态: {}", id, conn.message_count, conn.status);
             }
 
             last_stats_time = now;
@@ -270,6 +270,7 @@ impl ConnectionManager {
         };
 
         info!("连接到WebSocket: {}:{}{}", host, port, path);
+        info!("订阅的流: {}", streams.join(", "));
 
         // 建立TCP连接（通过代理或直接）
         let tcp_stream = if self.use_proxy {
@@ -777,18 +778,19 @@ pub struct AggTradeClient {
     db: Arc<Database>,
     connection_id_counter: AtomicUsize,
     connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
-    interval: String, // 用于生成K线的时间周期
+    #[allow(dead_code)]
+    intervals: Vec<String>, // 支持的时间周期列表
 }
 
 impl AggTradeClient {
     /// 创建新的归集交易客户端
-    pub fn new(config: AggTradeConfig, db: Arc<Database>, interval: String) -> Self {
+    pub fn new(config: AggTradeConfig, db: Arc<Database>, intervals: Vec<String>) -> Self {
         Self {
             config,
             db,
             connection_id_counter: AtomicUsize::new(1),
             connections: Arc::new(TokioMutex::new(HashMap::new())),
-            interval,
+            intervals,
         }
     }
 }
@@ -837,10 +839,10 @@ impl WebSocketClient for AggTradeClient {
             }
 
             // 创建消息处理器
-            let handler = Arc::new(crate::klcommon::AggTradeMessageHandler::new(
-                self.db.clone(),
-                self.interval.clone(),
-            ));
+            // 使用旧的AggTradeMessageHandler
+            let handler = Arc::new(crate::klcommon::aggkline::models::DummyMessageHandler {
+                db: self.db.clone(),
+            });
             let connections_clone = self.connections.clone();
 
             let message_handler = tokio::spawn(async move {

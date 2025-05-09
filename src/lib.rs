@@ -2,6 +2,7 @@
 pub mod klcommon;
 pub mod kldata;
 pub mod klserver;
+pub mod models;
 
 // Re-export error types
 pub use klcommon::error::AppError;

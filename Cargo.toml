@@ -16,6 +16,16 @@ path = "src/bin/kline_server.rs"
 name = "kline_data_service"
 path = "src/bin/kline_data_service.rs"
 
+
+
+[[bin]]
+name = "kline_actor_service"
+path = "src/bin/kline_actor_service.rs"
+
+[[bin]]
+name = "compare_klines"
+path = "src/bin/compare_klines.rs"
+
 # 测试文件配置
 [[test]]
 name = "test_binance_ws"
@@ -122,3 +132,4 @@ tower-http = { version = "0.4", features = ["fs", "trace"] }
 tokio-util = "0.7"
 scopeguard = "1.2"
 crossbeam-channel = "0.5"
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros"] }

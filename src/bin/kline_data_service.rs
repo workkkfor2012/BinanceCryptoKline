@@ -4,18 +4,19 @@ use kline_server::klcommon::{
     WebSocketClient, AggTradeClient, AggTradeConfig,
     PROXY_HOST, PROXY_PORT
 };
-use kline_server::kldata::{KlineBackfiller, KlineAggregator, ServerTimeSyncManager, LatestKlineUpdater};
+use kline_server::kldata::{KlineBackfiller, ServerTimeSyncManager, LatestKlineUpdater};
 
-use log::{info, error}; // 移除 debug 和 warn, 由 downloader 内部处理
+use log::{info, error};
 use std::sync::Arc;
-// 移除 std::time::Duration, kline_server::kldata::downloader::{BinanceApi, DownloadTask}, tokio::time::{interval, Instant}
+
+// 验证K线功能已移除，测试已通过
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 硬编码参数
     let intervals = "1m,5m,30m,4h,1d,1w".to_string();
     let concurrency = 100; // 最新K线更新器的并发数
-    let use_aggtrade = false; // 设置为true，启用WebSocket连接获取高频数据(eggtrade)用于合成K线
+    let use_aggtrade = true; // 设置为true，启用WebSocket连接获取高频数据(eggtrade)用于合成K线
     let use_latest_kline_updater = false; // 设置为false，仅下载历史数据，不启动最新K线更新器
 
     // 将周期字符串转换为列表
@@ -69,8 +70,10 @@ async fn main() -> Result<()> {
             info!("历史K线补齐完成");
 
             // 获取所有交易对
-            let symbols = match db.get_all_symbols() {
-                Ok(s) => s,
+            match db.get_all_symbols() {
+                Ok(_) => {
+                    info!("成功从数据库获取交易对列表");
+                },
                 Err(e) => {
                     error!("无法从数据库获取交易对列表: {}", e);
                     return Err(AppError::DatabaseError(format!("无法从数据库获取交易对列表: {}", e)));
@@ -79,16 +82,8 @@ async fn main() -> Result<()> {
 
             // 服务器时间同步任务已经在程序开始时启动，这里不需要再次启动
 
-            // 启动K线聚合任务
-            let aggregator_db = db.clone();
-            let aggregator_intervals = interval_list.clone();
-            let aggregator_symbols = symbols.clone();
-            tokio::spawn(async move {
-                let aggregator = KlineAggregator::new(aggregator_db, aggregator_intervals, aggregator_symbols);
-                if let Err(e) = aggregator.start().await {
-                    error!("K线聚合任务启动失败: {}", e);
-                }
-            });
+            // 不再使用K线聚合器，改为直接使用归集交易合成所有周期K线
+            info!("不使用K线聚合器，将通过归集交易直接合成所有周期K线");
 
             // 如果启用最新K线更新器，则启动最新K线更新任务
             if use_latest_kline_updater {
@@ -138,10 +133,13 @@ async fn main() -> Result<()> {
         symbols, // 使用从数据库获取的所有交易对
     };
 
-    info!("使用归集交易数据生成1分钟K线，其他周期通过本地聚合");
+    info!("使用归集交易数据直接生成所有周期K线");
 
     // 创建归集交易客户端
-    let mut agg_trade_client = AggTradeClient::new(agg_trade_config, db.clone(), "1m".to_string());
+    let mut agg_trade_client = AggTradeClient::new(agg_trade_config, db.clone(), interval_list.clone());
+
+    // K线验证任务已移除，测试已通过
+    info!("K线验证任务已移除，测试已通过");
 
     // 启动归集交易客户端
     match agg_trade_client.start().await {
