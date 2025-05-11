@@ -1,5 +1,5 @@
 // 交易解析器 - 解析原始WebSocket消息
-use crate::klcommon::aggkline::models::{BinanceRawAggTrade, AppAggTrade};
+use crate::klcommon::models::{BinanceRawAggTrade, AppAggTrade};
 use crate::klcommon::{AppError, Result};
 use log::{info, error, debug};
 use tokio::sync::mpsc;

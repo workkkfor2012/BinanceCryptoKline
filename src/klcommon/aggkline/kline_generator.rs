@@ -1,5 +1,5 @@
 // K线生成器 - 从交易数据生成K线
-use crate::klcommon::aggkline::models::{AppAggTrade, KlineBar, KlineBarDataInternal};
+use crate::klcommon::models::{AppAggTrade, KlineBar, KlineBarDataInternal};
 // use log::debug;
 
 /// K线生成器 - 用于从交易数据生成特定周期的K线

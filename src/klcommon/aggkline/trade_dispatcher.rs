@@ -1,5 +1,5 @@
 // 交易分发器 - 将解析后的交易数据分发给对应的KlineActor
-use crate::klcommon::aggkline::models::AppAggTrade;
+use crate::klcommon::models::AppAggTrade;
 use crate::klcommon::{Result};
 use log::{info, error, warn};
 use tokio::sync::mpsc;

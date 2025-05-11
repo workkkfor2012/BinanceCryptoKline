@@ -1,5 +1,5 @@
 // K线Actor - 负责处理特定交易对的K线生成
-use crate::klcommon::aggkline::models::{AppAggTrade, KlineBar};
+use crate::klcommon::models::{AppAggTrade, KlineBar};
 use crate::klcommon::aggkline::kline_generator::KlineGenerator;
 use crate::klcommon::{AppError, Result};
 use log::{info, error};

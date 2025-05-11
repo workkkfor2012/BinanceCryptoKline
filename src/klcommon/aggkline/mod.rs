@@ -1,20 +1,20 @@
 // 归集交易K线模块 - 基于Actor模型的K线合成系统
-pub mod models;
+pub mod models; // 保留这个模块以向后兼容，但它现在只是重新导出crate::klcommon::models中的类型
 mod kline_generator;
 mod kline_actor;
 mod trade_parser;
 mod trade_dispatcher;
-mod sqlite_storage;
+mod kline_processor; // 新增处理器模块，替代sqlite_storage
 mod symbol_partitioner;
 mod websocket_handler;
 
 // 重新导出公共接口
-pub use models::{BinanceRawAggTrade, AppAggTrade, KlineBar, KlineBarDataInternal};
+pub use crate::klcommon::models::{BinanceRawAggTrade, AppAggTrade, KlineBar, KlineBarDataInternal};
 pub use kline_generator::KlineGenerator;
 pub use kline_actor::KlineActor;
 pub use trade_parser::{parse_agg_trade, run_trade_parser_task};
 pub use trade_dispatcher::run_app_trade_dispatcher_task;
-pub use sqlite_storage::SqliteStorage;
+pub use kline_processor::KlineProcessor; // 导出新的处理器
 pub use symbol_partitioner::partition_symbols;
 pub use websocket_handler::run_websocket_connection_task;
 

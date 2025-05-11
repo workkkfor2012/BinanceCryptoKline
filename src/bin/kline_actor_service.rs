@@ -1,20 +1,21 @@
 // K线Actor服务 - 基于Actor模型的K线合成系统
 use kline_server::klcommon::{AppError, Result, BinanceApi, Database, PROXY_HOST, PROXY_PORT};
+use kline_server::klcommon::models::{AppAggTrade, KlineBar};
 use kline_server::klcommon::aggkline::{
-    AppAggTrade, KlineBar, KlineActor,
-    run_trade_parser_task, run_app_trade_dispatcher_task,
-    SqliteStorage, partition_symbols, run_websocket_connection_task,
+    KlineActor, run_trade_parser_task, run_app_trade_dispatcher_task,
+    KlineProcessor, partition_symbols, // 移除未使用的 run_websocket_connection_task
     KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME
 };
-use kline_server::klcommon::websocket::{ConnectionManager, create_subscribe_message};
+use kline_server::klcommon::websocket::{ConnectionManager}; // 移除未使用的 create_subscribe_message
 
-// 币安WebSocket URL
+// 币安WebSocket URL - 现在使用ConnectionManager，此常量保留作为参考
+#[allow(dead_code)]
 const BINANCE_WS_URL: &str = "wss://fstream.binance.com/stream";
 use log::{info, error, debug};
 use tokio::sync::mpsc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use futures_util::StreamExt;
+// 移除未使用的 futures_util::StreamExt
 use fastwebsockets::OpCode;
 
 // 代理设置已移至BinanceApi::new()中
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
     info!("支持的K线周期: {:?}", KLINE_PERIODS_MS);
 
     // 初始化数据库
-    let _db = Arc::new(Database::new("data/klines.db")?);
+    let db = Arc::new(Database::new("data/klines.db")?);
 
     // 初始化API客户端
     let api = BinanceApi::new();
@@ -175,14 +176,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    // 启动SQLite存储任务
-    info!("启动SQLite存储任务");
-    let sqlite_storage = SqliteStorage::new("data/klines.db").await?;
-    sqlite_storage.init_tables().await?;
+    // 启动K线处理器任务
+    info!("启动K线处理器任务");
+    let kline_processor = KlineProcessor::new(db.clone(), 100, 1);
 
-    let _storage_handle = tokio::spawn(async move {
-        if let Err(e) = sqlite_storage.run_storage_task(completed_kline_receiver).await {
-            error!("SQLite存储任务失败: {}", e);
+    let _processor_handle = tokio::spawn(async move {
+        if let Err(e) = kline_processor.run(completed_kline_receiver).await {
+            error!("K线处理器任务失败: {}", e);
         }
     });
 
@@ -211,35 +211,32 @@ async fn fetch_all_usdt_symbols(api: &BinanceApi) -> Result<Vec<String>> {
                 return Err(AppError::ApiError("未找到任何U本位合约交易对".to_string()));
             }
 
-            // 为了测试，只返回少量交易对
-            let test_symbols = vec![
-                "BTCUSDT".to_string(),
-                "ETHUSDT".to_string(),
-                "BNBUSDT".to_string(),
-                "SOLUSDT".to_string(),
-                "ADAUSDT".to_string(),
-            ];
+            // 使用所有获取到的交易对
+            info!("使用所有 {} 个交易对", symbols.len());
 
-            info!("测试模式：只使用 {} 个交易对", test_symbols.len());
-
-            Ok(test_symbols)
+            Ok(symbols)
         },
         Err(e) => {
             error!("获取U本位永续合约交易对失败: {}", e);
 
-            // 如果API调用失败，使用硬编码的测试交易对
-            info!("使用硬编码的测试交易对");
-            let test_symbols = vec![
+            // 如果API调用失败，使用硬编码的默认交易对
+            info!("API调用失败，使用默认交易对");
+            let default_symbols = vec![
                 "BTCUSDT".to_string(),
                 "ETHUSDT".to_string(),
                 "BNBUSDT".to_string(),
                 "SOLUSDT".to_string(),
                 "ADAUSDT".to_string(),
+                "XRPUSDT".to_string(),
+                "DOGEUSDT".to_string(),
+                "LTCUSDT".to_string(),
+                "LINKUSDT".to_string(),
+                "AVAXUSDT".to_string(),
             ];
 
-            info!("测试模式：只使用 {} 个交易对", test_symbols.len());
+            info!("使用 {} 个默认交易对", default_symbols.len());
 
-            Ok(test_symbols)
+            Ok(default_symbols)
         }
     }
 }

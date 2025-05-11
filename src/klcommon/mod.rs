@@ -24,7 +24,7 @@ pub use aggkline::{
     AppAggTrade, KlineBar, KlineBarDataInternal, BinanceRawAggTrade,
     KlineGenerator, KlineActor,
     parse_agg_trade, run_trade_parser_task,
-    run_app_trade_dispatcher_task, SqliteStorage,
+    run_app_trade_dispatcher_task, KlineProcessor,
     partition_symbols, run_websocket_connection_task,
     KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME
 };

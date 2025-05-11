@@ -499,6 +499,8 @@ impl Database {
         Ok(count)
     }
 
+    // 注意：我们移除了异步方法，改为在KlineProcessor中使用tokio::task::spawn_blocking
+
     /// No longer limiting kline count, keep all data
     pub fn trim_klines(&self, symbol: &str, interval: &str, _max_count: i64) -> Result<usize> {
         // No longer limiting kline count, just return 0
@@ -997,6 +999,60 @@ impl Database {
         ))?;
 
         let kline = stmt.query_row([open_time], |row| {
+            Ok(Kline {
+                open_time: row.get(0)?,
+                open: row.get(1)?,
+                high: row.get(2)?,
+                low: row.get(3)?,
+                close: row.get(4)?,
+                volume: row.get(5)?,
+                close_time: row.get(6)?,
+                quote_asset_volume: row.get(7)?,
+                number_of_trades: row.get(8)?,
+                taker_buy_base_asset_volume: row.get(9)?,
+                taker_buy_quote_asset_volume: row.get(10)?,
+                ignore: row.get(11)?,
+            })
+        }).optional()?;
+
+        Ok(kline)
+    }
+
+    /// 获取倒数第二根K线
+    pub fn get_second_last_kline(&self, symbol: &str, interval: &str) -> Result<Option<Kline>> {
+        // 确保表存在
+        self.ensure_symbol_table(symbol, interval)?;
+
+        // 创建表名
+        let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+        let interval_lower = interval.to_lowercase();
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        // 检查表中的记录数量
+        let count: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM {}", table_name),
+            [],
+            |row| row.get(0),
+        ).map_err(|e| AppError::DatabaseError(format!("Failed to get count from {}: {}", table_name, e)))?;
+
+        // 如果记录数少于2条，则无法获取倒数第二条
+        if count < 2 {
+            return Ok(None);
+        }
+
+        // 查询倒数第二根K线
+        let mut stmt = conn.prepare(&format!(
+            "SELECT open_time, open, high, low, close, volume, close_time,
+             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
+             taker_buy_quote_asset_volume, ignore
+             FROM {} ORDER BY open_time DESC LIMIT 1 OFFSET 1",
+            table_name
+        ))?;
+
+        let kline = stmt.query_row([], |row| {
             Ok(Kline {
                 open_time: row.get(0)?,
                 open: row.get(1)?,

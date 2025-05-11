@@ -1,9 +1,9 @@
 // WebSocket处理器 - 管理WebSocket连接和处理消息
 use crate::klcommon::{AppError, Result};
 use crate::klcommon::proxy::{PROXY_HOST, PROXY_PORT};
-use log::{info, error, debug, warn};
+use log::{info, error, debug}; // 移除未使用的 warn
 use tokio::sync::mpsc;
-use tokio::net::TcpStream;
+// 移除未使用的 tokio::net::TcpStream
 use tokio_tungstenite::{tungstenite::protocol::Message};
 use futures_util::{StreamExt, SinkExt};
 use url::Url;
