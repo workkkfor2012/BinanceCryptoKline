@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     // 硬编码参数
-    let intervals = "1m,5m,30m,4h,1d,1w".to_string();
+    let intervals = "1m,5m,30m,1h,4h,1d,1w".to_string();
     let concurrency = 100; // 最新K线更新器的并发数
     let use_aggtrade = true; // 设置为true，启用WebSocket连接获取高频数据(eggtrade)用于合成K线
     let use_latest_kline_updater = false; // 设置为false，仅下载历史数据，不启动最新K线更新器

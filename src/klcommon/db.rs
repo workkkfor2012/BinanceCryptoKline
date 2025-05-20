@@ -130,8 +130,7 @@ impl DbWriteQueueProcessor {
                 let result = tx.execute(
                     &format!("UPDATE {} SET
                         open = ?, high = ?, low = ?, close = ?, volume = ?,
-                        close_time = ?, quote_asset_volume = ?, number_of_trades = ?,
-                        taker_buy_base_asset_volume = ?, taker_buy_quote_asset_volume = ?, ignore = ?
+                        close_time = ?, quote_asset_volume = ?
                     WHERE open_time = ?", table_name),
                     params![
                         kline.open,
@@ -141,10 +140,6 @@ impl DbWriteQueueProcessor {
                         kline.volume,
                         kline.close_time,
                         kline.quote_asset_volume,
-                        kline.number_of_trades,
-                        kline.taker_buy_base_asset_volume,
-                        kline.taker_buy_quote_asset_volume,
-                        kline.ignore,
                         kline.open_time,
                     ],
                 );
@@ -165,9 +160,8 @@ impl DbWriteQueueProcessor {
                 let result = tx.execute(
                     &format!("INSERT INTO {} (
                         open_time, open, high, low, close, volume,
-                        close_time, quote_asset_volume, number_of_trades,
-                        taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                        close_time, quote_asset_volume
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
                     params![
                         kline.open_time,
                         kline.open,
@@ -177,10 +171,6 @@ impl DbWriteQueueProcessor {
                         kline.volume,
                         kline.close_time,
                         kline.quote_asset_volume,
-                        kline.number_of_trades,
-                        kline.taker_buy_base_asset_volume,
-                        kline.taker_buy_quote_asset_volume,
-                        kline.ignore,
                     ],
                 );
 
@@ -215,12 +205,7 @@ impl DbWriteQueueProcessor {
                 close TEXT NOT NULL,
                 volume TEXT NOT NULL,
                 close_time INTEGER NOT NULL,
-                quote_asset_volume TEXT NOT NULL,
-                number_of_trades INTEGER NOT NULL,
-                taker_buy_base_asset_volume TEXT NOT NULL,
-                taker_buy_quote_asset_volume TEXT NOT NULL,
-                ignore TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                quote_asset_volume TEXT NOT NULL
             )",
             table_name
         );
@@ -252,18 +237,19 @@ impl Database {
             }
         }
 
-        info!("Using SQLite database with WAL mode at {}", db_path.display());
+        info!("Using SQLite database with optimized performance settings at {}", db_path.display());
 
         // Create database connection manager with WAL mode and performance optimizations
         let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
             conn.execute_batch("
-                PRAGMA journal_mode = WAL;           -- Enable WAL mode
-                PRAGMA synchronous = NORMAL;         -- Balance performance and safety
-                PRAGMA cache_size = -204800;         -- Set cache to 200MB (200 * 1024 KiB)
-                PRAGMA mmap_size = 268435456;        -- 256MB memory mapping
-                PRAGMA temp_store = MEMORY;          -- Store temp tables in memory
-                PRAGMA wal_autocheckpoint = 1000;    -- Checkpoint every 1000 pages
-                PRAGMA busy_timeout = 5000;          -- 5 second busy timeout
+                PRAGMA journal_mode = WAL;          -- 保留WAL模式以获得更好的安全性
+                PRAGMA synchronous = NORMAL;        -- 平衡性能和安全性
+                PRAGMA cache_size = -102400;        -- 设置缓存为100MB (负数表示KB)
+                PRAGMA mmap_size = 104857600;       -- 100MB内存映射
+                PRAGMA temp_store = MEMORY;         -- 临时表存储在内存中
+                PRAGMA wal_autocheckpoint = 1000;   -- 每1000页检查点
+                PRAGMA busy_timeout = 5000;        -- 10秒忙等待超时
+                PRAGMA page_size = 4096;            -- 更大的页面大小
             ")
         });
 
@@ -273,8 +259,8 @@ impl Database {
             .build(manager)
             .map_err(|e| AppError::DatabaseError(format!("Failed to create connection pool: {}", e)))?;
 
-        // 创建写入队列通道，设置合理的缓冲区大小
-        let (sender, receiver) = bounded(1000); // 队列最多容纳1000个写入任务
+        // 创建写入队列通道，设置更大的缓冲区大小以提高性能
+        let (sender, receiver) = bounded(5000); // 队列最多容纳5000个写入任务
 
         // 创建写入队列处理器
         let processor = DbWriteQueueProcessor::new(receiver, pool.clone());
@@ -292,7 +278,7 @@ impl Database {
         // Initialize database tables
         db.init_db()?;
 
-        info!("SQLite database with WAL mode and write queue initialized successfully");
+        info!("SQLite database with optimized performance settings and write queue initialized successfully");
         Ok(db)
     }
 
@@ -339,12 +325,7 @@ impl Database {
                 close TEXT NOT NULL,
                 volume TEXT NOT NULL,
                 close_time INTEGER NOT NULL,
-                quote_asset_volume TEXT NOT NULL,
-                number_of_trades INTEGER NOT NULL,
-                taker_buy_base_asset_volume TEXT NOT NULL,
-                taker_buy_quote_asset_volume TEXT NOT NULL,
-                ignore TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                quote_asset_volume TEXT NOT NULL
             )",
             table_name
         );
@@ -559,9 +540,8 @@ impl Database {
         conn.execute(
             &format!("INSERT INTO {} (
                 open_time, open, high, low, close, volume, close_time,
-                quote_asset_volume, number_of_trades,
-                taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                quote_asset_volume
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
             params![
                 kline.open_time,
                 kline.open,
@@ -570,11 +550,7 @@ impl Database {
                 kline.close,
                 kline.volume,
                 kline.close_time,
-                kline.quote_asset_volume,
-                kline.number_of_trades,
-                kline.taker_buy_base_asset_volume,
-                kline.taker_buy_quote_asset_volume,
-                kline.ignore
+                kline.quote_asset_volume
             ],
         ).map_err(|e| AppError::DatabaseError(format!("Failed to insert kline: {}", e)))?;
 
@@ -619,11 +595,7 @@ impl Database {
                 close = ?,
                 volume = ?,
                 close_time = ?,
-                quote_asset_volume = ?,
-                number_of_trades = ?,
-                taker_buy_base_asset_volume = ?,
-                taker_buy_quote_asset_volume = ?,
-                ignore = ?
+                quote_asset_volume = ?
                 WHERE open_time = ?", table_name),
             params![
                 kline.open,
@@ -633,10 +605,6 @@ impl Database {
                 kline.volume,
                 kline.close_time,
                 kline.quote_asset_volume,
-                kline.number_of_trades,
-                kline.taker_buy_base_asset_volume,
-                kline.taker_buy_quote_asset_volume,
-                kline.ignore,
                 kline.open_time
             ],
         ).map_err(|e| AppError::DatabaseError(format!("Failed to update kline: {}", e)))?;
@@ -647,9 +615,8 @@ impl Database {
             conn.execute(
                 &format!("INSERT INTO {} (
                     open_time, open, high, low, close, volume, close_time,
-                    quote_asset_volume, number_of_trades,
-                    taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                    quote_asset_volume
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
                 params![
                     kline.open_time,
                     kline.open,
@@ -658,11 +625,7 @@ impl Database {
                     kline.close,
                     kline.volume,
                     kline.close_time,
-                    kline.quote_asset_volume,
-                    kline.number_of_trades,
-                    kline.taker_buy_base_asset_volume,
-                    kline.taker_buy_quote_asset_volume,
-                    kline.ignore
+                    kline.quote_asset_volume
                 ],
             ).map_err(|e| AppError::DatabaseError(format!("Failed to insert kline after update failed: {}", e)))?;
 
@@ -719,11 +682,7 @@ impl Database {
                     close = ?,
                     volume = ?,
                     close_time = ?,
-                    quote_asset_volume = ?,
-                    number_of_trades = ?,
-                    taker_buy_base_asset_volume = ?,
-                    taker_buy_quote_asset_volume = ?,
-                    ignore = ?
+                    quote_asset_volume = ?
                     WHERE open_time = ?", table_name),
                 params![
                     kline.open,
@@ -733,10 +692,6 @@ impl Database {
                     kline.volume,
                     kline.close_time,
                     kline.quote_asset_volume,
-                    kline.number_of_trades,
-                    kline.taker_buy_base_asset_volume,
-                    kline.taker_buy_quote_asset_volume,
-                    kline.ignore,
                     kline.open_time
                 ],
             ).map_err(|e| AppError::DatabaseError(format!("Failed to update kline: {}", e)))?;
@@ -758,9 +713,8 @@ impl Database {
             conn.execute(
                 &format!("INSERT INTO {} (
                     open_time, open, high, low, close, volume, close_time,
-                    quote_asset_volume, number_of_trades,
-                    taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                    quote_asset_volume
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
                 params![
                     kline.open_time,
                     kline.open,
@@ -769,11 +723,7 @@ impl Database {
                     kline.close,
                     kline.volume,
                     kline.close_time,
-                    kline.quote_asset_volume,
-                    kline.number_of_trades,
-                    kline.taker_buy_base_asset_volume,
-                    kline.taker_buy_quote_asset_volume,
-                    kline.ignore
+                    kline.quote_asset_volume
                 ],
             ).map_err(|e| AppError::DatabaseError(format!("Failed to insert kline: {}", e)))?;
 
@@ -853,8 +803,7 @@ impl Database {
         // Query latest klines
         let mut stmt = conn.prepare(&format!(
             "SELECT open_time, open, high, low, close, volume, close_time,
-             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
-             taker_buy_quote_asset_volume, ignore
+             quote_asset_volume
              FROM {} ORDER BY open_time DESC LIMIT ?",
             table_name
         ))?;
@@ -869,10 +818,10 @@ impl Database {
                 volume: row.get(5)?,
                 close_time: row.get(6)?,
                 quote_asset_volume: row.get(7)?,
-                number_of_trades: row.get(8)?,
-                taker_buy_base_asset_volume: row.get(9)?,
-                taker_buy_quote_asset_volume: row.get(10)?,
-                ignore: row.get(11)?,
+                number_of_trades: 0, // 默认值
+                taker_buy_base_asset_volume: "0".to_string(), // 默认值
+                taker_buy_quote_asset_volume: "0".to_string(), // 默认值
+                ignore: "0".to_string(), // 默认值
             })
         })?;
 
@@ -903,8 +852,7 @@ impl Database {
         // 查询指定时间范围内的K线
         let mut stmt = conn.prepare(&format!(
             "SELECT open_time, open, high, low, close, volume, close_time,
-             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
-             taker_buy_quote_asset_volume, ignore
+             quote_asset_volume
              FROM {} WHERE open_time >= ? AND open_time <= ? ORDER BY open_time",
             table_name
         ))?;
@@ -919,10 +867,10 @@ impl Database {
                 volume: row.get(5)?,
                 close_time: row.get(6)?,
                 quote_asset_volume: row.get(7)?,
-                number_of_trades: row.get(8)?,
-                taker_buy_base_asset_volume: row.get(9)?,
-                taker_buy_quote_asset_volume: row.get(10)?,
-                ignore: row.get(11)?,
+                number_of_trades: 0, // 默认值
+                taker_buy_base_asset_volume: "0".to_string(), // 默认值
+                taker_buy_quote_asset_volume: "0".to_string(), // 默认值
+                ignore: "0".to_string(), // 默认值
             })
         })?;
 
@@ -950,8 +898,7 @@ impl Database {
         // 查询指定时间的K线
         let mut stmt = conn.prepare(&format!(
             "SELECT open_time, open, high, low, close, volume, close_time,
-             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
-             taker_buy_quote_asset_volume, ignore
+             quote_asset_volume
              FROM {} WHERE open_time = ?",
             table_name
         ))?;
@@ -966,10 +913,10 @@ impl Database {
                 volume: row.get(5)?,
                 close_time: row.get(6)?,
                 quote_asset_volume: row.get(7)?,
-                number_of_trades: row.get(8)?,
-                taker_buy_base_asset_volume: row.get(9)?,
-                taker_buy_quote_asset_volume: row.get(10)?,
-                ignore: row.get(11)?,
+                number_of_trades: 0, // 默认值
+                taker_buy_base_asset_volume: "0".to_string(), // 默认值
+                taker_buy_quote_asset_volume: "0".to_string(), // 默认值
+                ignore: "0".to_string(), // 默认值
             })
         }).optional()?;
 
@@ -992,8 +939,7 @@ impl Database {
         // 查询指定时间之前的最后一根K线
         let mut stmt = conn.prepare(&format!(
             "SELECT open_time, open, high, low, close, volume, close_time,
-             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
-             taker_buy_quote_asset_volume, ignore
+             quote_asset_volume
              FROM {} WHERE open_time < ? ORDER BY open_time DESC LIMIT 1",
             table_name
         ))?;
@@ -1008,10 +954,10 @@ impl Database {
                 volume: row.get(5)?,
                 close_time: row.get(6)?,
                 quote_asset_volume: row.get(7)?,
-                number_of_trades: row.get(8)?,
-                taker_buy_base_asset_volume: row.get(9)?,
-                taker_buy_quote_asset_volume: row.get(10)?,
-                ignore: row.get(11)?,
+                number_of_trades: 0, // 默认值
+                taker_buy_base_asset_volume: "0".to_string(), // 默认值
+                taker_buy_quote_asset_volume: "0".to_string(), // 默认值
+                ignore: "0".to_string(), // 默认值
             })
         }).optional()?;
 
@@ -1046,8 +992,7 @@ impl Database {
         // 查询倒数第二根K线
         let mut stmt = conn.prepare(&format!(
             "SELECT open_time, open, high, low, close, volume, close_time,
-             quote_asset_volume, number_of_trades, taker_buy_base_asset_volume,
-             taker_buy_quote_asset_volume, ignore
+             quote_asset_volume
              FROM {} ORDER BY open_time DESC LIMIT 1 OFFSET 1",
             table_name
         ))?;
@@ -1062,10 +1007,10 @@ impl Database {
                 volume: row.get(5)?,
                 close_time: row.get(6)?,
                 quote_asset_volume: row.get(7)?,
-                number_of_trades: row.get(8)?,
-                taker_buy_base_asset_volume: row.get(9)?,
-                taker_buy_quote_asset_volume: row.get(10)?,
-                ignore: row.get(11)?,
+                number_of_trades: 0, // 默认值
+                taker_buy_base_asset_volume: "0".to_string(), // 默认值
+                taker_buy_quote_asset_volume: "0".to_string(), // 默认值
+                ignore: "0".to_string(), // 默认值
             })
         }).optional()?;
 

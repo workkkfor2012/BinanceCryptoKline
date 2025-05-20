@@ -207,6 +207,7 @@ impl KlineBackfiller {
                     "1m" => current_time - 1000 * 60 * 1000, // 1000分钟
                     "5m" => current_time - 5000 * 60 * 1000, // 5000分钟
                     "30m" => current_time - 30000 * 60 * 1000, // 30000分钟
+                    "1h" => current_time - 1000 * 60 * 60 * 1000, // 1000小时
                     "4h" => current_time - 4 * 1000 * 60 * 60 * 1000, // 4000小时
                     "1d" => current_time - 1000 * 24 * 60 * 60 * 1000, // 1000天
                     "1w" => current_time - 200 * 7 * 24 * 60 * 60 * 1000, // 200周

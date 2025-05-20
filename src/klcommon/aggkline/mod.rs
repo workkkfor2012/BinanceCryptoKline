@@ -7,6 +7,9 @@ mod trade_dispatcher;
 mod kline_processor; // 新增处理器模块，替代sqlite_storage
 mod symbol_partitioner;
 mod websocket_handler;
+pub mod double_buffered_store; // 双缓冲K线存储
+pub mod global_registry; // 全局品种周期注册表
+pub mod central_scheduler; // 中心化调度器
 
 // 重新导出公共接口
 pub use crate::klcommon::models::{BinanceRawAggTrade, AppAggTrade, KlineBar, KlineBarDataInternal};
@@ -17,12 +20,16 @@ pub use trade_dispatcher::run_app_trade_dispatcher_task;
 pub use kline_processor::KlineProcessor; // 导出新的处理器
 pub use symbol_partitioner::partition_symbols;
 pub use websocket_handler::run_websocket_connection_task;
+pub use double_buffered_store::{KlineData, FlatKlineStore, DoubleBufferedKlineStore};
+pub use global_registry::{GlobalSymbolPeriodRegistry, SymbolMetadata, PeriodMetadata};
+pub use central_scheduler::CentralScheduler;
 
 // 常量
 pub const KLINE_PERIODS_MS: &[i64] = &[
     60 * 1000,             // 1m
     5 * 60 * 1000,         // 5m
     30 * 60 * 1000,        // 30m
+    60 * 60 * 1000,        // 1h
     4 * 60 * 60 * 1000,    // 4h
     24 * 60 * 60 * 1000,   // 1d
     7 * 24 * 60 * 60 * 1000, // 1w

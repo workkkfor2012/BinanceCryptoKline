@@ -4,7 +4,9 @@ use kline_server::klcommon::models::{AppAggTrade, KlineBar};
 use kline_server::klcommon::aggkline::{
     KlineActor, run_trade_parser_task, run_app_trade_dispatcher_task,
     KlineProcessor, partition_symbols, // 移除未使用的 run_websocket_connection_task
-    KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME
+    KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME,
+    // 新增组件
+    DoubleBufferedKlineStore, GlobalSymbolPeriodRegistry, CentralScheduler
 };
 use kline_server::klcommon::websocket::{ConnectionManager}; // 移除未使用的 create_subscribe_message
 
@@ -39,6 +41,34 @@ async fn main() -> Result<()> {
     info!("获取所有U本位合约交易对");
     let all_symbols = fetch_all_usdt_symbols(&api).await?;
     info!("获取到 {} 个交易对", all_symbols.len());
+
+    // 创建周期映射
+    let periods = vec![
+        ("1m", 60 * 1000),
+        ("5m", 5 * 60 * 1000),
+        ("30m", 30 * 60 * 1000),
+        ("1h", 60 * 60 * 1000),
+        ("4h", 4 * 60 * 60 * 1000),
+        ("1d", 24 * 60 * 60 * 1000),
+        ("1w", 7 * 24 * 60 * 60 * 1000),
+    ];
+
+    // 创建全局品种周期注册表
+    info!("创建全局品种周期注册表");
+    let registry = Arc::new(GlobalSymbolPeriodRegistry::new(db.clone(), 1000, &periods));
+
+    // 初始化注册表
+    info!("初始化全局品种周期注册表");
+    registry.initialize(&all_symbols).await?;
+
+    // 创建双缓冲K线存储
+    info!("创建双缓冲K线存储");
+    let kline_store = Arc::new(DoubleBufferedKlineStore::new(1000, periods.len()));
+
+    // 创建中心化调度器
+    info!("创建中心化调度器");
+    let scheduler = CentralScheduler::new(kline_store.clone(), 100);
+    let _running = scheduler.start();
 
     // 初始化Channels
     info!("初始化通道");
@@ -145,11 +175,14 @@ async fn main() -> Result<()> {
         let (actor_tx, actor_rx) = mpsc::channel::<AppAggTrade>(256); // 每个Actor自己的队列
         actor_senders.insert(symbol.clone(), actor_tx);
 
-        let kline_actor = KlineActor::new(
+        // 使用带双缓冲存储的KlineActor
+        let kline_actor = KlineActor::new_with_store(
             symbol.clone(),
             KLINE_PERIODS_MS.to_vec(),
             actor_rx,
             completed_kline_sender.clone(),
+            kline_store.clone(),
+            registry.clone(),
         );
 
         let symbol_clone = symbol.clone();
