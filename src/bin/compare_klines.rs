@@ -415,15 +415,15 @@ async fn get_kline_from_api(api: &BinanceApi, symbol: &str, interval: &str, _ope
     // 重试延迟（毫秒）
     const RETRY_DELAY_MS: u64 = 500;
 
-    // 尝试从普通K线接口获取数据
+    // 尝试从连续合约K线接口获取数据
     let mut last_error = None;
     for retry in 0..MAX_RETRIES {
-        match api.download_klines(&task).await {
+        match api.download_continuous_klines(&task).await {
             Ok(klines) => {
                 if klines.len() >= 2 {
                     // 返回倒数第二根K线（索引0）
                     let kline = &klines[0];
-                    info!("从普通K线接口获取到倒数第二根K线: symbol={}, interval={}, open_time={} ({})",
+                    info!("从连续合约K线接口获取到倒数第二根K线: symbol={}, interval={}, open_time={} ({})",
                           symbol, interval, kline.open_time, format_timestamp(kline.open_time));
 
                     // 同时记录最新一根K线的信息（索引1）
@@ -446,51 +446,6 @@ async fn get_kline_from_api(api: &BinanceApi, symbol: &str, interval: &str, _ope
                 last_error = Some(e);
                 if retry < MAX_RETRIES - 1 {
                     warn!("{}: 从普通K线接口获取数据失败 (重试 {}/{}): {}",
-                          symbol, retry + 1, MAX_RETRIES, last_error.as_ref().unwrap());
-                    // 等待一段时间后重试
-                    tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                }
-            }
-        }
-    }
-
-    // 如果普通K线接口失败，尝试连续合约K线接口
-    info!("尝试使用连续合约K线接口: symbol={}, interval={}", symbol, interval);
-    for retry in 0..MAX_RETRIES {
-        match api.download_continuous_klines(&task).await {
-            Ok(continuous_klines) => {
-                if continuous_klines.len() >= 2 {
-                    // 返回倒数第二根K线（索引0）
-                    let kline = &continuous_klines[0];
-                    info!("从连续合约K线接口获取到倒数第二根K线: symbol={}, interval={}, open_time={} ({})",
-                          symbol, interval, kline.open_time, format_timestamp(kline.open_time));
-
-                    // 同时记录最新一根K线的信息（索引1）
-                    let latest_kline = &continuous_klines[1];
-                    info!("最新一根K线信息: symbol={}, interval={}, open_time={} ({})",
-                          symbol, interval, latest_kline.open_time, format_timestamp(latest_kline.open_time));
-
-                    return Ok(continuous_klines[0].clone()); // 返回倒数第二根K线
-                } else if continuous_klines.len() == 1 {
-                    // 如果只有一根K线，则返回它
-                    let kline = &continuous_klines[0];
-                    warn!("从连续合约K线接口只获取到一根K线: symbol={}, interval={}, open_time={} ({})",
-                          symbol, interval, kline.open_time, format_timestamp(kline.open_time));
-                    return Ok(continuous_klines[0].clone());
-                }
-
-                // 如果是最后一次重试且返回空结果
-                if retry == MAX_RETRIES - 1 {
-                    return Err(AppError::DataError(format!(
-                        "未获取到K线数据: symbol={}, interval={}",
-                        symbol, interval
-                    )));
-                }
-            },
-            Err(e) => {
-                last_error = Some(e);
-                if retry < MAX_RETRIES - 1 {
-                    warn!("{}: 从连续合约K线接口获取数据失败 (重试 {}/{}): {}",
                           symbol, retry + 1, MAX_RETRIES, last_error.as_ref().unwrap());
                     // 等待一段时间后重试
                     tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;

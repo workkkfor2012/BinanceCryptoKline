@@ -292,7 +292,7 @@ impl TimestampChecker {
                         info!("{}/1m: 请求URL: {}", symbol, fapi_url);
 
                         // 下载任务
-                        match api_clone.download_klines(&task).await {
+                        match api_clone.download_continuous_klines(&task).await {
                             Ok(klines) => {
                                 if klines.is_empty() {
                                     info!("{}/1m: 没有获取到最新K线数据", symbol);

@@ -272,7 +272,7 @@ impl KlineBackfiller {
                 // 不再记录开始请求的日志
 
                 // 下载任务
-                match api_clone.download_klines(&task).await {
+                match api_clone.download_continuous_klines(&task).await {
                     Ok(klines) => {
                         // 更新成功请求计数
                         API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
@@ -745,7 +745,7 @@ impl KlineBackfiller {
                     // 不再记录URL日志，只在失败时记录
 
                     // 下载任务
-                    match api_clone.download_klines(&task).await {
+                    match api_clone.download_continuous_klines(&task).await {
                         Ok(klines) => {
                             // 更新成功请求计数
                             API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);

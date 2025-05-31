@@ -174,7 +174,7 @@ impl LatestKlineUpdater {
                 let interval = task.interval.clone();
 
                 // 下载任务
-                match api_clone.download_klines(&task).await {
+                match api_clone.download_continuous_klines(&task).await {
                     Ok(klines) => {
                         if klines.is_empty() {
                             debug!("{}/{}: 没有新的K线数据", symbol, interval);
