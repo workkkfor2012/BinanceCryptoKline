@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>K线聚合系统 - 模块监控 v3.4</title>
+    <title>K线聚合系统 - 模块监控 v3.8</title>
     <style>
         * {
             margin: 0;
@@ -106,8 +106,44 @@
             min-height: 200px;
             /* 确保容器有明确的边界 */
             border: 1px solid transparent;
-            /* 确保容器可以滚动 */
-            max-height: calc(100vh - 300px);
+            /* 确保容器可以滚动 - 设置固定高度强制产生滚动条 */
+            max-height: 400px;
+            /* 焦点时的视觉反馈 */
+            outline: none;
+        }
+
+        /* 鼠标悬停时的视觉反馈 */
+        .module-logs:hover {
+            border-color: #333;
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        /* 获得焦点时的视觉反馈 */
+        .module-logs:focus {
+            border-color: #00ffff;
+            background-color: rgba(0, 255, 255, 0.05);
+            box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.2);
+        }
+
+        /* 滚动提示样式 */
+        .scroll-hint {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(0, 255, 255, 0.8);
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .module-logs:focus .scroll-hint {
+            opacity: 1;
         }
 
         .log-entry {
@@ -415,7 +451,7 @@
     <div class="connection-status" id="connection-status">连接中...</div>
     
     <div class="header">
-        <h1>K线聚合系统 - 模块监控 v3.4</h1>
+        <h1>K线聚合系统 - 模块监控 v3.8</h1>
             <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
             <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
         </h1>
@@ -458,7 +494,8 @@
                     <span id="log-frequency">-- 条/秒</span>
                 </div>
             </div>
-            <div class="module-logs" id="realtime-logs-display">
+            <div class="module-logs" id="realtime-logs-display" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
+                <div class="scroll-hint">可滚动</div>
                 <div class="log-entry">等待实时日志数据...</div>
             </div>
         </div>
@@ -483,7 +520,9 @@
                     <span id="displayed-log-count">--</span>
                 </div>
             </div>
-            <div class="module-logs" id="raw-logs-display">
+            <div class="module-logs" id="raw-logs-display" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
+                <div class="scroll-hint">可滚动</div>
+                <button onclick="diagnoseContainer('raw-logs-display')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
                 <div class="log-entry">等待日志快照数据...</div>
             </div>
         </div>
@@ -726,7 +765,11 @@
                         <span id="${containerId}-last-update">--:--:--</span>
                     </div>
                 </div>
-                <div class="module-logs" id="${logsId}">
+                <div class="module-logs" id="${logsId}" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
+                    <div class="scroll-hint">可滚动</div>
+                    <button onclick="testScroll('${logsId}')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff6600; color: white; border: none; border-radius: 3px;">测试滚动</button>
+                    <button onclick="addTestContent('${logsId}')" style="position: absolute; top: 45px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #00ff00; color: black; border: none; border-radius: 3px;">添加测试内容</button>
+                    <button onclick="diagnoseContainer('${logsId}')" style="position: absolute; top: 65px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
                     <div class="log-entry">等待日志数据...</div>
                 </div>
             `;
@@ -738,19 +781,78 @@
             // 为新创建的日志容器绑定滚动事件
             const logsContainer = moduleDiv.querySelector('.module-logs');
             if (logsContainer) {
-                // 简单直接的滚动处理：只阻止事件冒泡，允许容器内正常滚动
+                // 点击获得焦点，使鼠标滚轮能够正常工作
+                logsContainer.addEventListener('click', function(event) {
+                    // 如果点击的不是日志条目，则获得焦点
+                    if (!event.target.closest('.log-entry')) {
+                        logsContainer.focus();
+                        console.log(`🎯 模块 [${moduleName}] 点击获得焦点`, {
+                            hasFocus: document.activeElement === logsContainer,
+                            tabIndex: logsContainer.tabIndex,
+                            canScroll: logsContainer.scrollHeight > logsContainer.clientHeight
+                        });
+                    }
+                });
+
+                // 鼠标进入时自动获得焦点（更好的用户体验）
+                logsContainer.addEventListener('mouseenter', function(event) {
+                    logsContainer.focus();
+                    console.log(`🖱️ 模块 [${moduleName}] 鼠标进入获得焦点`, {
+                        hasFocus: document.activeElement === logsContainer,
+                        tabIndex: logsContainer.tabIndex,
+                        canScroll: logsContainer.scrollHeight > logsContainer.clientHeight
+                    });
+                });
+
+                // 添加详细的滚动事件日志
                 logsContainer.addEventListener('wheel', function(event) {
-                    // 只阻止事件冒泡到父元素，不阻止默认滚动行为
+                    const canScroll = logsContainer.scrollHeight > logsContainer.clientHeight;
+                    console.log(`🖱️ 模块 [${moduleName}] 鼠标滚轮事件:`, {
+                        deltaY: event.deltaY,
+                        deltaX: event.deltaX,
+                        target: event.target.tagName,
+                        scrollTop: logsContainer.scrollTop,
+                        scrollHeight: logsContainer.scrollHeight,
+                        clientHeight: logsContainer.clientHeight,
+                        canScroll: canScroll
+                    });
+
+                    // 手动处理滚动，确保滚动事件被触发
+                    if (canScroll) {
+                        const currentScrollTop = logsContainer.scrollTop;
+                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
+                        const newScrollTop = Math.max(0, Math.min(
+                            logsContainer.scrollHeight - logsContainer.clientHeight,
+                            currentScrollTop + scrollAmount
+                        ));
+
+                        console.log(`🔄 模块 [${moduleName}] 手动滚动: ${currentScrollTop} -> ${newScrollTop}`);
+                        logsContainer.scrollTop = newScrollTop;
+
+                        // 手动触发滚动事件
+                        const scrollEvent = new Event('scroll', { bubbles: true });
+                        logsContainer.dispatchEvent(scrollEvent);
+                    }
+
+                    // 阻止默认滚动和事件冒泡
+                    event.preventDefault();
                     event.stopPropagation();
                 });
 
                 // 阻止触摸滚动事件冒泡（移动设备支持）
                 logsContainer.addEventListener('touchmove', function(event) {
+                    console.log(`👆 模块 [${moduleName}] 触摸滚动事件`);
                     event.stopPropagation();
                 });
 
                 // 添加滚动事件监听器，用于加载历史数据
                 logsContainer.addEventListener('scroll', function(event) {
+                    console.log(`📜 模块 [${moduleName}] 滚动事件:`, {
+                        scrollTop: logsContainer.scrollTop,
+                        scrollHeight: logsContainer.scrollHeight,
+                        clientHeight: logsContainer.clientHeight,
+                        canScrollMore: logsContainer.scrollHeight > logsContainer.clientHeight
+                    });
                     handleModuleScroll(event, moduleName, logsContainer);
                 });
             }
@@ -770,6 +872,122 @@
 
         // 跟踪当前展开的日志
         let activeLogId = null;
+
+        // 测试滚动函数
+        function testScroll(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                console.log(`🧪 测试滚动 [${containerId}]:`, {
+                    scrollTop: container.scrollTop,
+                    scrollHeight: container.scrollHeight,
+                    clientHeight: container.clientHeight,
+                    canScroll: container.scrollHeight > container.clientHeight,
+                    hasFocus: document.activeElement === container,
+                    tabIndex: container.tabIndex
+                });
+
+                // 手动触发滚动到顶部
+                container.scrollTop = 0;
+                console.log(`🧪 手动滚动到顶部后:`, {
+                    scrollTop: container.scrollTop
+                });
+
+                // 手动触发滚动事件
+                const scrollEvent = new Event('scroll', { bubbles: true });
+                container.dispatchEvent(scrollEvent);
+                console.log(`🧪 手动触发滚动事件完成`);
+            } else {
+                console.error(`🧪 找不到容器: ${containerId}`);
+            }
+        }
+
+        // 添加测试内容函数
+        function addTestContent(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                console.log(`🧪 为容器 [${containerId}] 添加测试内容`);
+
+                // 清空现有内容
+                container.innerHTML = `
+                    <div class="scroll-hint">可滚动</div>
+                    <button onclick="testScroll('${containerId}')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff6600; color: white; border: none; border-radius: 3px;">测试滚动</button>
+                    <button onclick="addTestContent('${containerId}')" style="position: absolute; top: 45px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #00ff00; color: black; border: none; border-radius: 3px;">添加测试内容</button>
+                    <button onclick="diagnoseContainer('${containerId}')" style="position: absolute; top: 65px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
+                `;
+
+                // 添加50条测试日志
+                for (let i = 1; i <= 50; i++) {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = 'log-entry log-level-INFO';
+                    logEntry.innerHTML = `<div class="log-message">测试日志条目 ${i} - 这是一条用于测试滚动功能的日志</div>`;
+                    container.appendChild(logEntry);
+                }
+
+                // 存储测试数据到容器属性
+                const testLogs = [];
+                for (let i = 1; i <= 100; i++) {
+                    testLogs.push({
+                        message: `历史测试日志 ${i} - 这是历史数据`,
+                        level: 'INFO',
+                        timestamp: new Date().toISOString(),
+                        is_aggregated: false
+                    });
+                }
+                container.setAttribute('data-all-logs', JSON.stringify(testLogs));
+                container.setAttribute('data-current-display-count', '50');
+
+                console.log(`🧪 添加完成，容器现在可以滚动:`, {
+                    scrollHeight: container.scrollHeight,
+                    clientHeight: container.clientHeight,
+                    canScroll: container.scrollHeight > container.clientHeight,
+                    totalTestLogs: testLogs.length
+                });
+            } else {
+                console.error(`🧪 找不到容器: ${containerId}`);
+            }
+        }
+
+        // 诊断容器函数
+        function diagnoseContainer(containerId) {
+            const container = document.getElementById(containerId);
+            if (container) {
+                const computedStyle = window.getComputedStyle(container);
+                const children = Array.from(container.children);
+
+                console.log(`🔍 容器 [${containerId}] 诊断报告:`);
+                console.log(`📏 尺寸信息:`, {
+                    scrollHeight: container.scrollHeight,
+                    clientHeight: container.clientHeight,
+                    offsetHeight: container.offsetHeight,
+                    scrollWidth: container.scrollWidth,
+                    clientWidth: container.clientWidth,
+                    offsetWidth: container.offsetWidth
+                });
+                console.log(`🎨 CSS样式:`, {
+                    height: computedStyle.height,
+                    maxHeight: computedStyle.maxHeight,
+                    minHeight: computedStyle.minHeight,
+                    overflowY: computedStyle.overflowY,
+                    overflowX: computedStyle.overflowX,
+                    display: computedStyle.display,
+                    position: computedStyle.position,
+                    boxSizing: computedStyle.boxSizing
+                });
+                console.log(`👶 子元素信息:`, {
+                    childCount: children.length,
+                    childTypes: children.map(child => child.tagName + '.' + child.className),
+                    totalChildHeight: children.reduce((sum, child) => sum + child.offsetHeight, 0)
+                });
+                console.log(`🔄 滚动状态:`, {
+                    canScroll: container.scrollHeight > container.clientHeight,
+                    scrollTop: container.scrollTop,
+                    maxScrollTop: container.scrollHeight - container.clientHeight,
+                    hasScrollbar: container.scrollHeight > container.clientHeight
+                });
+            } else {
+                console.error(`🔍 找不到容器: ${containerId}`);
+            }
+        }
 
         // 处理模块滚动事件，加载更多显示数据
         function handleModuleScroll(event, moduleName, container) {
@@ -905,6 +1123,91 @@
             if (indicator) {
                 indicator.remove();
             }
+        }
+
+        // 为原始日志快照模块加载更多数据（专用函数）
+        function loadMoreDisplayLogsForRawSnapshot(container) {
+            const moduleName = 'RawLogSnapshot';
+
+            if (moduleLoadingHistory[moduleName]) {
+                console.log(`⏳ 原始日志快照模块正在加载历史数据，跳过重复请求`);
+                return;
+            }
+
+            const allLogsJson = container.getAttribute('data-all-logs');
+            if (!allLogsJson) {
+                console.log(`⚠️ 原始日志快照模块没有存储的完整数据`);
+                return;
+            }
+
+            const allLogs = JSON.parse(allLogsJson);
+            const currentDisplayCount = parseInt(container.getAttribute('data-current-display-count') || '0');
+
+            if (currentDisplayCount >= allLogs.length) {
+                console.log(`✅ 原始日志快照模块已显示所有数据 (${currentDisplayCount}/${allLogs.length})`);
+                return;
+            }
+
+            console.log(`🔄 原始日志快照模块开始加载更多数据: 当前显示 ${currentDisplayCount}/${allLogs.length}`);
+
+            // 设置加载状态
+            moduleLoadingHistory[moduleName] = true;
+            showLoadingIndicator(container);
+
+            // 模拟异步加载（给用户反馈）
+            setTimeout(() => {
+                const nextBatchSize = 20;
+                const nextDisplayCount = Math.min(currentDisplayCount + nextBatchSize, allLogs.length);
+                const newLogs = allLogs.slice(currentDisplayCount, nextDisplayCount);
+
+                if (newLogs.length > 0) {
+                    // 为原始日志快照模块添加新的日志元素
+                    prependDisplayLogsToRawSnapshotContainer(container, newLogs, currentDisplayCount);
+                    container.setAttribute('data-current-display-count', nextDisplayCount.toString());
+                    console.log(`✅ 原始日志快照模块成功加载 ${newLogs.length} 条显示日志`);
+
+                    // 更新"加载更多"提示
+                    updateLoadMoreIndicator(container, allLogs.length, nextDisplayCount);
+                }
+
+                moduleLoadingHistory[moduleName] = false;
+                hideLoadingIndicator(container);
+            }, 100); // 100ms延迟，给用户反馈
+        }
+
+        // 在原始日志快照容器顶部添加显示日志（专用函数）
+        function prependDisplayLogsToRawSnapshotContainer(container, newLogs, startIndex) {
+            const fragment = document.createDocumentFragment();
+
+            // 记录当前滚动位置
+            const currentScrollTop = container.scrollTop;
+            const currentScrollHeight = container.scrollHeight;
+
+            // 为每个新日志创建元素
+            newLogs.forEach((logEntry, index) => {
+                const logElement = createAggregatedLogElement(logEntry, 'raw-logs', startIndex + index);
+                fragment.appendChild(logElement);
+            });
+
+            // 找到加载更多指示器的位置，在它之前插入
+            const loadMoreIndicator = container.querySelector('.load-more-indicator');
+            if (loadMoreIndicator) {
+                container.insertBefore(fragment, loadMoreIndicator);
+            } else {
+                // 如果没有指示器，找到第一个日志条目，在它之前插入
+                const firstLogEntry = container.querySelector('.log-entry');
+                if (firstLogEntry) {
+                    container.insertBefore(fragment, firstLogEntry);
+                } else {
+                    // 如果没有日志条目，直接添加到容器末尾
+                    container.appendChild(fragment);
+                }
+            }
+
+            // 调整滚动位置，保持用户当前的视图
+            const newScrollHeight = container.scrollHeight;
+            const heightDifference = newScrollHeight - currentScrollHeight;
+            container.scrollTop = currentScrollTop + heightDifference;
         }
 
 
@@ -1168,29 +1471,135 @@
             // 为原始日志快照模块绑定滚动事件处理
             const rawLogsDisplay = document.getElementById('raw-logs-display');
             if (rawLogsDisplay) {
-                // 简单直接的滚动处理：只阻止事件冒泡，允许容器内正常滚动
+                // 点击获得焦点，使鼠标滚轮能够正常工作
+                rawLogsDisplay.addEventListener('click', function(event) {
+                    if (!event.target.closest('.log-entry')) {
+                        rawLogsDisplay.focus();
+                        console.log('🎯 原始日志快照模块获得焦点');
+                    }
+                });
+
+                // 鼠标进入时自动获得焦点
+                rawLogsDisplay.addEventListener('mouseenter', function(event) {
+                    rawLogsDisplay.focus();
+                });
+
+                // 添加详细的滚动事件日志
                 rawLogsDisplay.addEventListener('wheel', function(event) {
-                    // 只阻止事件冒泡到父元素，不阻止默认滚动行为
+                    const canScroll = rawLogsDisplay.scrollHeight > rawLogsDisplay.clientHeight;
+                    console.log(`🖱️ 原始日志快照模块 鼠标滚轮事件:`, {
+                        deltaY: event.deltaY,
+                        deltaX: event.deltaX,
+                        target: event.target.tagName,
+                        scrollTop: rawLogsDisplay.scrollTop,
+                        scrollHeight: rawLogsDisplay.scrollHeight,
+                        clientHeight: rawLogsDisplay.clientHeight,
+                        canScroll: canScroll,
+                        计算: `${rawLogsDisplay.scrollHeight} > ${rawLogsDisplay.clientHeight} = ${canScroll}`
+                    });
+
+                    // 手动处理滚动，确保滚动事件被触发
+                    if (canScroll) {
+                        console.log(`✅ 开始手动滚动处理`);
+                        const currentScrollTop = rawLogsDisplay.scrollTop;
+                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
+                        const newScrollTop = Math.max(0, Math.min(
+                            rawLogsDisplay.scrollHeight - rawLogsDisplay.clientHeight,
+                            currentScrollTop + scrollAmount
+                        ));
+
+                        console.log(`🔄 手动滚动: ${currentScrollTop} -> ${newScrollTop} (scrollAmount: ${scrollAmount})`);
+                        rawLogsDisplay.scrollTop = newScrollTop;
+
+                        // 手动触发滚动事件
+                        const scrollEvent = new Event('scroll', { bubbles: true });
+                        rawLogsDisplay.dispatchEvent(scrollEvent);
+                        console.log(`📤 已手动触发滚动事件`);
+                    } else {
+                        console.log(`❌ 无法滚动: scrollHeight=${rawLogsDisplay.scrollHeight}, clientHeight=${rawLogsDisplay.clientHeight}`);
+                    }
+
+                    // 阻止默认滚动和事件冒泡
+                    event.preventDefault();
                     event.stopPropagation();
                 });
 
                 // 阻止触摸滚动事件冒泡（移动设备支持）
                 rawLogsDisplay.addEventListener('touchmove', function(event) {
+                    console.log(`👆 原始日志快照模块 触摸滚动事件`);
                     event.stopPropagation();
+                });
+
+                // 添加滚动事件监听器，用于加载历史数据
+                rawLogsDisplay.addEventListener('scroll', function(event) {
+                    console.log(`📜 原始日志快照模块 滚动事件:`, {
+                        scrollTop: rawLogsDisplay.scrollTop,
+                        scrollHeight: rawLogsDisplay.scrollHeight,
+                        clientHeight: rawLogsDisplay.clientHeight,
+                        canScrollMore: rawLogsDisplay.scrollHeight > rawLogsDisplay.clientHeight
+                    });
+                    // 启用原始日志快照模块的历史加载功能
+                    if (rawLogsDisplay.scrollTop <= 5) {
+                        console.log(`🔄 原始日志快照模块滚动到顶部，scrollTop: ${rawLogsDisplay.scrollTop}`);
+                        loadMoreDisplayLogsForRawSnapshot(rawLogsDisplay);
+                    }
                 });
             }
 
             // 为实时原始日志模块绑定完整的滚动事件处理
             const realtimeLogsDisplay = document.getElementById('realtime-logs-display');
             if (realtimeLogsDisplay) {
-                // 简单直接的滚动处理：只阻止事件冒泡，允许容器内正常滚动
+                // 点击获得焦点，使鼠标滚轮能够正常工作
+                realtimeLogsDisplay.addEventListener('click', function(event) {
+                    if (!event.target.closest('.log-entry')) {
+                        realtimeLogsDisplay.focus();
+                        console.log('🎯 实时原始日志模块获得焦点');
+                    }
+                });
+
+                // 鼠标进入时自动获得焦点
+                realtimeLogsDisplay.addEventListener('mouseenter', function(event) {
+                    realtimeLogsDisplay.focus();
+                });
+
+                // 添加详细的滚动事件日志
                 realtimeLogsDisplay.addEventListener('wheel', function(event) {
-                    // 只阻止事件冒泡到父元素，不阻止默认滚动行为
+                    const canScroll = realtimeLogsDisplay.scrollHeight > realtimeLogsDisplay.clientHeight;
+                    console.log(`🖱️ 实时原始日志模块 鼠标滚轮事件:`, {
+                        deltaY: event.deltaY,
+                        deltaX: event.deltaX,
+                        target: event.target.tagName,
+                        scrollTop: realtimeLogsDisplay.scrollTop,
+                        scrollHeight: realtimeLogsDisplay.scrollHeight,
+                        clientHeight: realtimeLogsDisplay.clientHeight,
+                        canScroll: canScroll
+                    });
+
+                    // 手动处理滚动，确保滚动事件被触发
+                    if (canScroll) {
+                        const currentScrollTop = realtimeLogsDisplay.scrollTop;
+                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
+                        const newScrollTop = Math.max(0, Math.min(
+                            realtimeLogsDisplay.scrollHeight - realtimeLogsDisplay.clientHeight,
+                            currentScrollTop + scrollAmount
+                        ));
+
+                        console.log(`🔄 实时日志模块 手动滚动: ${currentScrollTop} -> ${newScrollTop}`);
+                        realtimeLogsDisplay.scrollTop = newScrollTop;
+
+                        // 手动触发滚动事件
+                        const scrollEvent = new Event('scroll', { bubbles: true });
+                        realtimeLogsDisplay.dispatchEvent(scrollEvent);
+                    }
+
+                    // 阻止默认滚动和事件冒泡
+                    event.preventDefault();
                     event.stopPropagation();
                 });
 
                 // 阻止触摸滚动事件冒泡（移动设备支持）
                 realtimeLogsDisplay.addEventListener('touchmove', function(event) {
+                    console.log(`👆 实时原始日志模块 触摸滚动事件`);
                     event.stopPropagation();
                 });
             }
@@ -1245,13 +1654,20 @@
                 // 更新模块统计
                 updateModuleStatsFromAggregatedData(moduleName, moduleData);
 
-                // 兼容两种数据格式：优先使用displayed_logs，回退到recent_logs
-                if (moduleData.displayed_logs && moduleData.displayed_logs.length > 0) {
-                    console.log(`📦 渲染模块 [${moduleName}] 的 ${moduleData.displayed_logs.length} 条聚合日志`);
+                // 智能数据选择：优先使用数据量更多的源
+                const displayedCount = moduleData.displayed_logs ? moduleData.displayed_logs.length : 0;
+                const recentCount = moduleData.recent_logs ? moduleData.recent_logs.length : 0;
+
+                console.log(`📊 模块 [${moduleName}] 数据统计: displayed_logs=${displayedCount}, recent_logs=${recentCount}`);
+
+                if (displayedCount >= 20 || (displayedCount > 0 && recentCount === 0)) {
+                    // 如果聚合日志足够多，或者只有聚合日志，使用聚合日志
+                    console.log(`📦 渲染模块 [${moduleName}] 的 ${displayedCount} 条聚合日志`);
                     renderAggregatedDisplayLogs(moduleName, moduleData.displayed_logs);
-                } else if (moduleData.recent_logs && moduleData.recent_logs.length > 0) {
-                    console.log(`📦 渲染模块 [${moduleName}] 的 ${moduleData.recent_logs.length} 条原始日志`);
-                    renderRecentLogsAsDisplay(moduleName, moduleData.recent_logs);
+                } else if (recentCount > 0) {
+                    // 如果原始日志更多，使用原始日志（转换为显示格式）
+                    console.log(`📦 渲染模块 [${moduleName}] 的 ${recentCount} 条原始日志（转换为滚动格式）`);
+                    renderRecentLogsWithScrollSupport(moduleName, moduleData.recent_logs);
                 } else {
                     console.log(`⚠️ 模块 [${moduleName}] 没有日志数据`);
                     const containerId = getModuleContainerId(moduleName) + '-logs';
@@ -1383,7 +1799,65 @@
             return logWrapper;
         }
 
-        // 将原始日志渲染为显示格式（兼容recent_logs）
+        // 将原始日志渲染为支持滚动的显示格式
+        function renderRecentLogsWithScrollSupport(moduleName, recentLogs) {
+            const containerId = getModuleContainerId(moduleName);
+            const container = document.getElementById(containerId + '-logs');
+
+            if (!container) {
+                console.error('找不到模块容器:', containerId + '-logs');
+                return;
+            }
+
+            // 清空容器
+            container.innerHTML = '';
+
+            if (!recentLogs || recentLogs.length === 0) {
+                container.innerHTML = '<div class="log-entry">等待日志数据...</div>';
+                return;
+            }
+
+            // 将原始日志转换为DisplayLogEntry格式以支持滚动
+            const displayLogs = recentLogs.map(logEntry => ({
+                message: logEntry.message,
+                level: logEntry.level,
+                timestamp: logEntry.timestamp,
+                count: 1,
+                is_aggregated: false,
+                variations: [logEntry.message],
+                all_logs: [logEntry]
+            }));
+
+            // 存储完整数据到容器的数据属性中，供滚动加载使用
+            container.setAttribute('data-all-logs', JSON.stringify(displayLogs));
+            container.setAttribute('data-current-display-count', '20');
+            console.log(`📊 模块 [${moduleName}] 存储了 ${displayLogs.length} 条完整数据（从原始日志转换），当前显示 20 条`);
+
+            // 只渲染前20条到DOM（UI层面的限制）
+            const logsToRender = displayLogs.slice(0, 20);
+            logsToRender.forEach((logEntry, index) => {
+                const logElement = createAggregatedLogElement(logEntry, containerId, index);
+                container.appendChild(logElement);
+            });
+
+            // 如果有更多数据，添加"加载更多"提示
+            if (displayLogs.length > 20) {
+                const loadMoreIndicator = document.createElement('div');
+                loadMoreIndicator.className = 'load-more-indicator';
+                loadMoreIndicator.style.cssText = `
+                    padding: 10px;
+                    text-align: center;
+                    color: #888;
+                    font-size: 12px;
+                    border-top: 1px solid #333;
+                    cursor: pointer;
+                `;
+                loadMoreIndicator.textContent = `还有 ${displayLogs.length - 20} 条日志，滚动到顶部加载更多`;
+                container.appendChild(loadMoreIndicator);
+            }
+        }
+
+        // 将原始日志渲染为显示格式（兼容recent_logs，旧版本）
         function renderRecentLogsAsDisplay(moduleName, recentLogs) {
             const containerId = getModuleContainerId(moduleName);
             const container = document.getElementById(containerId + '-logs');
@@ -1538,22 +2012,52 @@
             const container = document.getElementById('raw-logs-display');
             if (!container) return;
 
+            // 保存固定的UI元素（滚动提示和诊断按钮）
+            const scrollHint = container.querySelector('.scroll-hint');
+            const diagnoseButton = container.querySelector('button[onclick*="diagnoseContainer"]');
+
+            // 清空容器但保留固定UI元素
             container.innerHTML = '';
 
+            // 重新添加固定UI元素
+            if (scrollHint) container.appendChild(scrollHint);
+            if (diagnoseButton) container.appendChild(diagnoseButton);
+
             if (!snapshot.displayed_logs || snapshot.displayed_logs.length === 0) {
-                container.innerHTML = '<div class="log-entry">暂无日志数据</div>';
+                const noDataEntry = document.createElement('div');
+                noDataEntry.className = 'log-entry';
+                noDataEntry.textContent = '暂无日志数据';
+                container.appendChild(noDataEntry);
                 return;
             }
 
-            snapshot.displayed_logs.forEach((logEntry, index) => {
+            // 存储完整数据到容器的数据属性中，供滚动加载使用
+            container.setAttribute('data-all-logs', JSON.stringify(snapshot.displayed_logs));
+            container.setAttribute('data-current-display-count', '20');
+            console.log(`📊 原始日志快照模块存储了 ${snapshot.displayed_logs.length} 条完整数据，当前显示 20 条`);
+
+            // 只渲染前20条到DOM（UI层面的限制）
+            const logsToRender = snapshot.displayed_logs.slice(0, 20);
+            logsToRender.forEach((logEntry, index) => {
                 const logElement = createAggregatedLogElement(logEntry, 'raw-logs', index);
                 container.appendChild(logElement);
-
-                // 只显示前20条
-                if (index >= 20) {
-                    logElement.style.display = 'none';
-                }
             });
+
+            // 如果有更多数据，添加"加载更多"提示
+            if (snapshot.displayed_logs.length > 20) {
+                const loadMoreIndicator = document.createElement('div');
+                loadMoreIndicator.className = 'load-more-indicator';
+                loadMoreIndicator.style.cssText = `
+                    padding: 10px;
+                    text-align: center;
+                    color: #888;
+                    font-size: 12px;
+                    border-top: 1px solid #333;
+                    cursor: pointer;
+                `;
+                loadMoreIndicator.textContent = `还有 ${snapshot.displayed_logs.length - 20} 条日志，滚动到顶部加载更多`;
+                container.appendChild(loadMoreIndicator);
+            }
         }
 
 
