@@ -83,12 +83,11 @@ flowchart TD
 - **KLineGenerator** (Actor内部): 从归集交易数据合成不同周期的K线
   - 支持的周期: 1m, 5m, 30m, 1h, 4h, 1d, 1w
   - 实时更新当前K线
-  - K线收盘时触发完整K线事件
 
 #### 存储层
 - **GlobalSymbolPeriodRegistry**: 中心化注册服务
   - 管理所有交易品种及其到FlatKlineStore中symbol_index的映射
-  - symbol_index在系统启动时基于固定规则一次性分配
+  - symbol_index在系统启动时，从db中读取品种的上币时间，也就是日线的开启时间，然后进行排序，一次性分配
   - 计算FlatKlineStore所需的总容量
 
 - **DoubleBufferedKlineStore**: 双缓冲核心管理
@@ -301,36 +300,6 @@ impl DoubleBufferedKlineStore {
 WebSocket原始数据 → TradeParser → AppAggTrade → KlineActor → KlineGenerator → 多周期K线
 ```
 
-#### 核心组件协作
-1. **TradeParser**: 解析WebSocket原始JSON为 `AppAggTrade` 结构
-2. **AppTradeDispatcher**: 将交易数据分发到对应品种的KlineActor
-3. **KlineActor**: 每个品种独立的Actor，处理该品种的所有周期K线合成
-4. **KlineGenerator**: Actor内部的K线生成器，负责单个周期的K线合成逻辑
-
-### B.2 K线生成算法
-```rust
-// 核心合成逻辑 (基于 KlineGenerator)
-pub fn update_with_trade(&mut self, trade: &AppAggTrade) -> Option<KlineBar> {
-    let trade_price = trade.price;
-    let trade_quantity = trade.quantity;
-    let trade_timestamp_ms = trade.timestamp_ms;
-
-    // 计算K线开盘时间 (时间对齐)
-    let kline_open_time_ms = (trade_timestamp_ms / self.period_ms) * self.period_ms;
-
-    // 检查是否为新K线周期
-    if current_bar.open_time_ms != kline_open_time_ms {
-        // 返回完成的K线，开始新周期
-        let completed_bar = current_bar.clone();
-        // 初始化新K线...
-        return Some(completed_bar.to_kline_bar());
-    }
-
-    // 更新当前K线的OHLCV数据
-    current_bar.update_with_trade(trade);
-    None
-}
-```
 
 ### B.3 启动配置
 ```bash

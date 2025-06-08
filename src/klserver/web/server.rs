@@ -7,7 +7,7 @@ use axum::{
 };
 use tower_http::services::ServeDir;
 use crate::klcommon::{Database, Result, AppError};
-use log::{info, error};
+use tracing::{info, error};
 
 use super::handlers;
 
@@ -40,16 +40,17 @@ pub async fn start_web_server(db: Arc<Database>) -> Result<()> {
     // 启动服务器
     info!("Web服务器开始绑定到地址: {}", addr);
 
-    // 使用更简单的方法启动服务器
-    info!("Starting server with simpler method...");
-    match axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await {
-            Ok(_) => info!("Web服务器已关闭"),
-            Err(e) => {
-                error!("Web服务器错误: {}", e);
-                return Err(AppError::WebServerError(format!("Web服务器错误: {}", e)));
-            }
+    // 使用axum 0.7的新API启动服务器
+    info!("Starting server with axum 0.7 API...");
+    let listener = tokio::net::TcpListener::bind(&addr).await
+        .map_err(|e| AppError::WebServerError(format!("绑定地址失败: {}", e)))?;
+
+    match axum::serve(listener, app).await {
+        Ok(_) => info!("Web服务器已关闭"),
+        Err(e) => {
+            error!("Web服务器错误: {}", e);
+            return Err(AppError::WebServerError(format!("Web服务器错误: {}", e)));
+        }
     }
 
     Ok(())

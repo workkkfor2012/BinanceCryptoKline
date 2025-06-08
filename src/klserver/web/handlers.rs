@@ -2,7 +2,7 @@
     extract::{Path, State},
     Json,
 };
-use log::{error, info};
+use tracing::{error, info};
 use serde::Serialize;
 use std::sync::Arc;
 

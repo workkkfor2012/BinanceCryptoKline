@@ -1,16 +1,14 @@
 // K线比对工具 - 比对合成的K线和API获取的K线
 use kline_server::klcommon::{AppError, Result, BinanceApi, Database, Kline};
-use log::{info, error, warn, debug};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time;
 use std::env;
-use std::fs::File;
 use std::io::Write;
-use log::LevelFilter;
-use env_logger::Builder;
 use std::path::Path;
 use chrono::{Utc, TimeZone};
+use tracing::{info, error, warn, debug, instrument};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
 // 默认设置
 const DEFAULT_INTERVAL: &str = "1m"; // 默认1分钟K线
@@ -33,6 +31,7 @@ const MAIN_SYMBOLS: [&str; 6] = [
 ];
 
 #[tokio::main]
+#[instrument(target = "compare_klines::main")]
 async fn main() -> Result<()> {
     // 解析命令行参数
     let args: Vec<String> = env::args().collect();
@@ -58,50 +57,17 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 配置日志输出
-    let mut builder = Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    // 初始化tracing日志系统
+    init_tracing_logging(&output_file)?;
 
-    // 设置更详细的日志格式
-    builder.format(|buf, record| {
-        use std::io::Write;
-        let level_style = buf.default_level_style(record.level());
-        writeln!(
-            buf,
-            "[{}] {} [{}]: {}",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-            level_style.value(record.level()),
-            record.target(),
-            record.args()
-        )
-    });
-
-    // 设置日志级别
-    builder.filter_module("compare_klines", LevelFilter::Info);
-    builder.filter_module("kline_server::klcommon::api", LevelFilter::Info);
-    builder.filter_module("kline_server::klcommon::db", LevelFilter::Info);
-
-    // 如果指定了输出文件，则同时输出到文件
-    if let Some(file_path) = &output_file {
-        // 确保目录存在
-        if let Some(parent) = Path::new(file_path).parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-
-        // 创建或截断文件
-        let file = File::create(file_path)?;
-
-        // 创建一个写入器，同时写入到标准输出和文件
-        let file_writer = std::io::BufWriter::new(file);
-
-        // 使用自定义日志初始化
-        builder.target(env_logger::Target::Pipe(Box::new(file_writer))).init();
-
-        info!("日志将输出到文件: {}", file_path);
-    } else {
-        builder.init();
-    }
+    info!(
+        target = "compare_klines::main",
+        event_type = "tool_startup",
+        interval = %interval,
+        test_mode = test_mode,
+        output_file = ?output_file,
+        "启动K线比对工具 - 只显示不一致的比对结果"
+    );
 
     info!("启动K线比对工具 - 只显示不一致的比对结果");
     info!("周期: {}", interval);
@@ -369,6 +335,7 @@ async fn main() -> Result<()> {
 
 /// 获取上一根已完成K线的开始时间
 /// 根据当前时间和周期动态计算上一根已完成K线的开始时间
+#[allow(dead_code)]
 fn get_last_completed_kline_time(now: i64, interval: &str) -> i64 {
     // 获取周期的毫秒数
     let interval_ms = match interval {
@@ -613,4 +580,88 @@ fn format_timestamp(timestamp_ms: i64) -> String {
         },
         _ => format!("无效时间戳: {}", timestamp_ms)
     }
+}
+
+/// 初始化tracing日志系统
+fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
+    // 设置RUST_BACKTRACE为1，以便更好地报告错误
+    std::env::set_var("RUST_BACKTRACE", "1");
+
+    // 确保日志目录存在
+    let log_dir = "logs";
+    std::fs::create_dir_all(log_dir).unwrap_or_else(|e| {
+        eprintln!("Failed to create logs directory: {}", e);
+    });
+
+    // 移除未使用的 layers 变量
+
+    // 控制台输出层
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true)
+        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+        .json(); // 使用JSON格式符合WebLog规范
+
+    // 如果指定了输出文件，添加文件输出层
+    if let Some(file_path) = output_file {
+        // 确保目录存在
+        if let Some(parent) = Path::new(file_path).parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        // 创建文件输出层
+        let parent_dir = Path::new(file_path).parent().unwrap_or_else(|| Path::new("."));
+        let file_appender = tracing_appender::rolling::never(
+            parent_dir,
+            file_path.split('/').last().unwrap_or("compare_klines.log")
+        );
+        let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_level(true)
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+            .with_writer(file_writer)
+            .json(); // 文件也使用JSON格式
+
+        // 初始化tracing订阅器（包含文件输出）
+        Registry::default()
+            .with(console_layer)
+            .with(file_layer)
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new("info")
+                            .add_directive("compare_klines=info".parse().unwrap())
+                            .add_directive("kline_server::klcommon::api=info".parse().unwrap())
+                            .add_directive("kline_server::klcommon::db=info".parse().unwrap())
+                    })
+            )
+            .init();
+    } else {
+        // 初始化tracing订阅器（仅控制台输出）
+        Registry::default()
+            .with(console_layer)
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new("info")
+                            .add_directive("compare_klines=info".parse().unwrap())
+                            .add_directive("kline_server::klcommon::api=info".parse().unwrap())
+                            .add_directive("kline_server::klcommon::db=info".parse().unwrap())
+                    })
+            )
+            .init();
+    }
+
+    info!(
+        target = "compare_klines::logging",
+        event_type = "logging_initialized",
+        output_file = ?output_file,
+        "tracing日志系统已初始化，UTF-8编码测试：中文、日文、韩文"
+    );
+
+    Ok(())
 }

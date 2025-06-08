@@ -1,6 +1,6 @@
 // WebSocket模块 - 提供通用的WebSocket连接管理功能 (使用 fastwebsockets 实现)
 use crate::klcommon::{AppError, Database, KlineData, Result, PROXY_HOST, PROXY_PORT};
-use log::{info, error, debug};
+use tracing::{info, error, debug};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ use hyper::Request;
 use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, ServerName};
 use tokio_rustls::TlsConnector;
 
+
 //=============================================================================
 // 常量和配置
 //=============================================================================
@@ -31,8 +32,9 @@ use tokio_rustls::TlsConnector;
 /// 币安WebSocket URL
 pub const BINANCE_WS_URL: &str = "wss://fstream.binance.com/ws";
 
-/// 每个连接的最大流数量
-pub const MAX_STREAMS_PER_CONNECTION: usize = 1;
+/// WebSocket连接数量
+/// 所有品种将平均分配到这些连接中
+pub const WEBSOCKET_CONNECTION_COUNT: usize = 5;
 
 //=============================================================================
 // WebSocket配置
@@ -160,6 +162,25 @@ pub trait WebSocketClient {
 }
 
 //=============================================================================
+// 数据结构
+//=============================================================================
+
+/// 币安原始归集交易数据
+#[derive(Debug, Clone)]
+pub struct BinanceRawAggTrade {
+    pub event_type: String,
+    pub event_time: u64,
+    pub symbol: String,
+    pub aggregate_trade_id: u64,
+    pub price: String,
+    pub quantity: String,
+    pub first_trade_id: u64,
+    pub last_trade_id: u64,
+    pub trade_time: u64,
+    pub is_buyer_maker: bool,
+}
+
+//=============================================================================
 // 消息处理
 //=============================================================================
 
@@ -169,13 +190,145 @@ pub trait MessageHandler {
     fn handle_message(&self, connection_id: usize, message: String) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
+/// 临时的消息处理器，用于替代aggkline模块中的处理器
+pub struct DummyMessageHandler {
+    pub db: Arc<Database>,
+}
+
+impl MessageHandler for DummyMessageHandler {
+    fn handle_message(&self, _connection_id: usize, _message: String) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            // 临时实现，不做任何处理
+            Ok(())
+        }
+    }
+}
+
+/// 归集交易消息处理器，用于K线聚合系统
+pub struct AggTradeMessageHandler {
+    pub message_count: Arc<std::sync::atomic::AtomicUsize>,
+    pub error_count: Arc<std::sync::atomic::AtomicUsize>,
+    pub trade_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::klaggregate::AggTradeData>>,
+}
+
+impl AggTradeMessageHandler {
+    pub fn new(
+        message_count: Arc<std::sync::atomic::AtomicUsize>,
+        error_count: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        Self {
+            message_count,
+            error_count,
+            trade_sender: None,
+        }
+    }
+
+    /// 创建带有交易数据发送器的消息处理器
+    pub fn with_trade_sender(
+        message_count: Arc<std::sync::atomic::AtomicUsize>,
+        error_count: Arc<std::sync::atomic::AtomicUsize>,
+        trade_sender: tokio::sync::mpsc::UnboundedSender<crate::klaggregate::AggTradeData>,
+    ) -> Self {
+        Self {
+            message_count,
+            error_count,
+            trade_sender: Some(trade_sender),
+        }
+    }
+}
+
+impl MessageHandler for AggTradeMessageHandler {
+    fn handle_message(&self, connection_id: usize, message: String) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            // 增加消息计数
+            self.message_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            // 解析归集交易消息
+            match self.parse_agg_trade_message(&message).await {
+                Ok(Some(agg_trade)) => {
+                    debug!(target: "websocket", "连接 {} 收到归集交易: {} {} @ {}",
+                        connection_id, agg_trade.symbol, agg_trade.quantity, agg_trade.price);
+
+                    // 将归集交易数据发送给TradeEventRouter
+                    if let Some(ref sender) = self.trade_sender {
+                        // 转换为AggTradeData格式
+                        let trade_data = crate::klaggregate::AggTradeData {
+                            symbol: agg_trade.symbol.clone(),
+                            price: agg_trade.price.parse().unwrap_or(0.0),
+                            quantity: agg_trade.quantity.parse().unwrap_or(0.0),
+                            timestamp_ms: agg_trade.trade_time as i64,
+                            is_buyer_maker: agg_trade.is_buyer_maker,
+                            agg_trade_id: agg_trade.aggregate_trade_id as i64,
+                            first_trade_id: agg_trade.first_trade_id as i64,
+                            last_trade_id: agg_trade.last_trade_id as i64,
+                        };
+
+                        // 发送到交易事件路由器
+                        if let Err(e) = sender.send(trade_data) {
+                            error!(target: "websocket", "发送归集交易数据失败: {}", e);
+                            self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    } else {
+                        debug!(target: "websocket", "没有配置交易数据发送器，跳过数据路由");
+                    }
+
+                    Ok(())
+                }
+                Ok(None) => {
+                    // 非归集交易消息，可能是订阅确认等
+                    debug!(target: "websocket", "连接 {} 收到非归集交易消息", connection_id);
+                    Ok(())
+                }
+                Err(e) => {
+                    self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    error!(target: "websocket", "连接 {} 解析归集交易消息失败: {}", connection_id, e);
+                    Err(e)
+                }
+            }
+        }
+    }
+}
+
+impl AggTradeMessageHandler {
+    /// 解析归集交易消息
+    async fn parse_agg_trade_message(&self, message: &str) -> Result<Option<BinanceRawAggTrade>> {
+        // 解析JSON
+        let json: serde_json::Value = serde_json::from_str(message)
+            .map_err(|e| AppError::ParseError(format!("JSON解析失败: {}", e)))?;
+
+        // 检查是否是归集交易消息
+        if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
+            if event_type == "aggTrade" {
+                // 解析归集交易数据
+                let agg_trade = BinanceRawAggTrade {
+                    event_type: event_type.to_string(),
+                    event_time: json.get("E").and_then(|e| e.as_u64()).unwrap_or(0),
+                    symbol: json.get("s").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    aggregate_trade_id: json.get("a").and_then(|a| a.as_u64()).unwrap_or(0),
+                    price: json.get("p").and_then(|p| p.as_str()).unwrap_or("0").to_string(),
+                    quantity: json.get("q").and_then(|q| q.as_str()).unwrap_or("0").to_string(),
+                    first_trade_id: json.get("f").and_then(|f| f.as_u64()).unwrap_or(0),
+                    last_trade_id: json.get("l").and_then(|l| l.as_u64()).unwrap_or(0),
+                    trade_time: json.get("T").and_then(|t| t.as_u64()).unwrap_or(0),
+                    is_buyer_maker: json.get("m").and_then(|m| m.as_bool()).unwrap_or(false),
+                };
+
+                return Ok(Some(agg_trade));
+            }
+        }
+
+        // 不是归集交易消息
+        Ok(None)
+    }
+}
+
 /// 处理WebSocket消息
 pub async fn process_messages<H: MessageHandler>(
     mut rx: mpsc::Receiver<(usize, String)>,
     handler: Arc<H>,
     connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
 ) {
-    info!("启动WebSocket消息处理器");
+    info!(target: "websocket", "启动WebSocket消息处理器");
 
     // 统计信息
     let mut _message_count = 0;
@@ -202,11 +355,11 @@ pub async fn process_messages<H: MessageHandler>(
 
         // 处理消息
         if let Err(e) = handler.handle_message(connection_id, text).await {
-            error!("处理消息失败: {}", e);
+            error!(target: "websocket", "处理消息失败: {}", e);
         }
     }
 
-    info!("WebSocket消息处理器已停止");
+    info!(target: "websocket", "WebSocket消息处理器已停止");
 }
 
 //=============================================================================
@@ -269,12 +422,12 @@ impl ConnectionManager {
             format!("/stream?streams={}", streams.join("/"))
         };
 
-        info!("连接到WebSocket: {}:{}{}", host, port, path);
-        info!("订阅的流: {}", streams.join(", "));
+        info!(target: "websocket", "连接到WebSocket: {}:{}{}", host, port, path);
+        info!(target: "websocket", "订阅的流: {}", streams.join(", "));
 
         // 建立TCP连接（通过代理或直接）
         let tcp_stream = if self.use_proxy {
-            info!("通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
+            info!(target: "websocket", "通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
 
             // 连接到代理
             let socks_stream = Socks5Stream::connect(
@@ -291,7 +444,7 @@ impl ConnectionManager {
             TcpStream::connect(addr).await?
         };
 
-        info!("TCP连接已建立");
+        info!(target: "websocket", "TCP连接已建立");
 
         // 创建 TLS 连接
         let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
@@ -314,9 +467,9 @@ impl ConnectionManager {
         let server_name = ServerName::try_from(host)
             .map_err(|_| AppError::WebSocketError("无效的域名".to_string()))?;
 
-        info!("建立TLS连接...");
+        info!(target: "websocket", "建立TLS连接...");
         let tls_stream = connector.connect(server_name, tcp_stream).await?;
-        info!("TLS连接已建立");
+        info!(target: "websocket", "TLS连接已建立");
 
         // 创建 HTTP 请求
         let req = Request::builder()
@@ -333,20 +486,20 @@ impl ConnectionManager {
             .body(Empty::<Bytes>::new())
             .map_err(|e| AppError::WebSocketError(format!("创建HTTP请求失败: {}", e)))?;
 
-        info!("执行WebSocket握手...");
+        info!(target: "websocket", "执行WebSocket握手...");
 
         // 执行 WebSocket 握手
         let (ws, _) = fastwebsockets::handshake::client(&SpawnExecutor, req, tls_stream).await
             .map_err(|e| AppError::WebSocketError(format!("WebSocket握手失败: {}", e)))?;
         let mut ws_collector = FragmentCollector::new(ws);
 
-        info!("WebSocket握手成功");
+        info!(target: "websocket", "WebSocket握手成功");
 
         // 如果使用的是组合流订阅格式（多个流），则需要发送订阅消息
         if path.contains("?streams=") && !streams.is_empty() {
             // 发送订阅消息
             let subscribe_msg = create_subscribe_message(streams);
-            info!("发送订阅消息: {}", subscribe_msg);
+            info!(target: "websocket", "发送订阅消息: {}", subscribe_msg);
 
             ws_collector.write_frame(Frame::new(true, OpCode::Text, None, subscribe_msg.into_bytes().into())).await
                 .map_err(|e| AppError::WebSocketError(format!("发送订阅消息失败: {}", e)))?;
@@ -363,7 +516,7 @@ impl ConnectionManager {
         tx: mpsc::Sender<(usize, String)>,
         connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
     ) {
-        info!("开始处理连接 {} 的消息", connection_id);
+        info!(target: "websocket", "开始处理连接 {} 的消息", connection_id);
 
         // 处理消息，添加超时处理
         loop {
@@ -388,43 +541,43 @@ impl ConnectionManager {
 
                                     // 发送消息到处理器
                                     if let Err(e) = tx.send((connection_id, text)).await {
-                                        error!("发送消息到处理器失败: {}", e);
+                                        error!(target: "websocket", "发送消息到处理器失败: {}", e);
                                         break;
                                     }
                                 },
                                 OpCode::Binary => {
-                                    debug!("收到二进制消息，长度: {}", frame.payload.len());
+                                    debug!(target: "websocket", "收到二进制消息，长度: {}", frame.payload.len());
                                 },
                                 OpCode::Ping => {
-                                    debug!("收到Ping，发送Pong");
+                                    debug!(target: "websocket", "收到Ping，发送Pong");
                                     if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Pong, None, frame.payload)).await {
-                                        error!("发送Pong失败: {}", e);
+                                        error!(target: "websocket", "发送Pong失败: {}", e);
                                         break;
                                     }
                                 },
                                 OpCode::Pong => {
-                                    debug!("收到Pong");
+                                    debug!(target: "websocket", "收到Pong");
                                 },
                                 OpCode::Close => {
-                                    info!("收到关闭消息，连接将关闭");
+                                    info!(target: "websocket", "收到关闭消息，连接将关闭");
                                     break;
                                 },
                                 _ => {
-                                    debug!("收到其他类型的消息");
+                                    debug!(target: "websocket", "收到其他类型的消息");
                                 }
                             }
                         },
                         Err(e) => {
-                            error!("WebSocket错误: {}", e);
+                            error!(target: "websocket", "WebSocket错误: {}", e);
                             break;
                         }
                     }
                 },
                 Err(_) => {
                     // 超时，发送ping以保持连接
-                    debug!("WebSocket连接超时，发送Ping");
+                    debug!(target: "websocket", "WebSocket连接超时，发送Ping");
                     if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Ping, None, vec![].into())).await {
-                        error!("发送Ping失败: {}", e);
+                        error!(target: "websocket", "发送Ping失败: {}", e);
                         break;
                     }
                 }
@@ -439,7 +592,7 @@ impl ConnectionManager {
             }
         }
 
-        info!("连接 {} 已关闭", connection_id);
+        info!(target: "websocket", "连接 {} 已关闭", connection_id);
     }
 }
 
@@ -471,11 +624,11 @@ impl WebSocketClient for ContinuousKlineClient {
     /// 启动客户端
     fn start(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-        info!("启动连续合约K线客户端");
-        info!("使用代理: {}", self.config.use_proxy);
+        info!(target: "websocket", "启动连续合约K线客户端");
+        info!(target: "websocket", "使用代理: {}", self.config.use_proxy);
 
         if self.config.use_proxy {
-            info!("代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
+            info!(target: "websocket", "代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
         }
 
         // 确保日志目录存在
@@ -497,16 +650,20 @@ impl WebSocketClient for ContinuousKlineClient {
 
         // 获取所有流
         let streams = self.config.get_streams();
-        info!("总共 {} 个流需要订阅", streams.len());
+        info!(target: "websocket", "总共 {} 个流需要订阅", streams.len());
 
-        // 计算需要的连接数
-        let connection_count = (streams.len() + MAX_STREAMS_PER_CONNECTION - 1) / MAX_STREAMS_PER_CONNECTION;
-        info!("需要 {} 个WebSocket连接", connection_count);
+        // 使用固定的连接数
+        let connection_count = WEBSOCKET_CONNECTION_COUNT;
+        info!(target: "websocket", "使用 {} 个WebSocket连接", connection_count);
+
+        // 计算每个连接的流数量
+        let streams_per_connection = (streams.len() + connection_count - 1) / connection_count;
+        info!(target: "websocket", "每个连接平均处理 {} 个流", streams_per_connection);
 
         // 分配流到连接
         let mut connection_streams = Vec::new();
 
-        for chunk in streams.chunks(MAX_STREAMS_PER_CONNECTION) {
+        for chunk in streams.chunks(streams_per_connection) {
             connection_streams.push(chunk.to_vec());
         }
 
@@ -561,7 +718,7 @@ impl WebSocketClient for ContinuousKlineClient {
                             }
                         }
 
-                        info!("连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
+                        info!(target: "websocket", "连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
 
                         // 处理消息
                         connection_manager_clone.handle_messages(connection_id, &mut ws, tx_clone, connections_clone).await;
@@ -575,7 +732,7 @@ impl WebSocketClient for ContinuousKlineClient {
                             }
                         }
 
-                        error!("连接 {} 失败: {}", connection_id, e);
+                        error!(target: "websocket", "连接 {} 失败: {}", connection_id, e);
                     }
                 }
             });
@@ -588,10 +745,10 @@ impl WebSocketClient for ContinuousKlineClient {
 
         // 等待消息处理器完成
         if let Err(e) = message_handler.await {
-            error!("消息处理器错误: {}", e);
+            error!(target: "websocket", "消息处理器错误: {}", e);
         }
 
-        info!("连续合约K线客户端已停止");
+        info!(target: "websocket", "连续合约K线客户端已停止");
         Ok(())
         }
     }
@@ -623,7 +780,7 @@ impl MessageHandler for ContinuousKlineMessageHandler {
                 // 非K线消息，忽略
             }
             Err(e) => {
-                error!("解析消息失败: {}", e);
+                error!(target: "websocket", "解析消息失败: {}", e);
             }
         }
 
@@ -694,7 +851,7 @@ fn parse_message(text: &str) -> Result<Option<(String, String, KlineData)>> {
 /// 处理K线数据
 async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData, db: &Arc<Database>) {
     // 输出处理K线数据的详细信息
-    info!("开始处理K线数据: symbol={}, interval={}, is_closed={}, start_time={}, end_time={}",
+    info!(target: "websocket", "开始处理K线数据: symbol={}, interval={}, is_closed={}, start_time={}, end_time={}",
           symbol, interval, kline_data.is_closed, kline_data.start_time, kline_data.end_time);
 
     // 将KlineData转换为标准Kline格式
@@ -709,28 +866,28 @@ async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData
                     // 更新现有K线
                     match db.update_kline(symbol, interval, &kline) {
                         Ok(_) => {
-                            info!("更新K线成功: symbol={}, interval={}, open_time={}",
+                            info!(target: "websocket", "更新K线成功: symbol={}, interval={}, open_time={}",
                                   symbol, interval, kline.open_time);
                         },
                         Err(e) => {
-                            error!("更新K线失败: {}", e);
+                            error!(target: "websocket", "更新K线失败: {}", e);
                         }
                     }
                 } else {
                     // 插入新K线
                     match db.insert_kline(symbol, interval, &kline) {
                         Ok(_) => {
-                            info!("插入K线成功: symbol={}, interval={}, open_time={}",
+                            info!(target: "websocket", "插入K线成功: symbol={}, interval={}, open_time={}",
                                   symbol, interval, kline.open_time);
                         },
                         Err(e) => {
-                            error!("插入K线失败: {}", e);
+                            error!(target: "websocket", "插入K线失败: {}", e);
                         }
                     }
                 }
             },
             Err(e) => {
-                error!("查询K线失败: {}", e);
+                error!(target: "websocket", "查询K线失败: {}", e);
             }
         }
     } else {
@@ -741,32 +898,34 @@ async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData
                     // 更新现有K线
                     match db.update_kline(symbol, interval, &kline) {
                         Ok(_) => {
-                            info!("更新未收盘K线成功: symbol={}, interval={}, open_time={}",
+                            info!(target: "websocket", "更新未收盘K线成功: symbol={}, interval={}, open_time={}",
                                   symbol, interval, kline.open_time);
                         },
                         Err(e) => {
-                            error!("更新未收盘K线失败: {}", e);
+                            error!(target: "websocket", "更新未收盘K线失败: {}", e);
                         }
                     }
                 } else {
                     // 插入新K线
                     match db.insert_kline(symbol, interval, &kline) {
                         Ok(_) => {
-                            info!("插入未收盘K线成功: symbol={}, interval={}, open_time={}",
+                            info!(target: "websocket", "插入未收盘K线成功: symbol={}, interval={}, open_time={}",
                                   symbol, interval, kline.open_time);
                         },
                         Err(e) => {
-                            error!("插入未收盘K线失败: {}", e);
+                            error!(target: "websocket", "插入未收盘K线失败: {}", e);
                         }
                     }
                 }
             },
             Err(e) => {
-                error!("查询未收盘K线失败: {}", e);
+                error!(target: "websocket", "查询未收盘K线失败: {}", e);
             }
         }
     }
 }
+
+
 
 //=============================================================================
 // 归集交易客户端
@@ -775,7 +934,8 @@ async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData
 /// 归集交易客户端
 pub struct AggTradeClient {
     config: AggTradeConfig,
-    db: Arc<Database>,
+    #[allow(dead_code)]
+    db: Arc<Database>, // 数据库连接，预留用于未来功能
     connection_id_counter: AtomicUsize,
     connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
     #[allow(dead_code)]
@@ -799,11 +959,11 @@ impl WebSocketClient for AggTradeClient {
     /// 启动客户端
     fn start(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            info!("启动归集交易客户端");
-            info!("使用代理: {}", self.config.use_proxy);
+            info!(target: "websocket", "启动归集交易客户端");
+            info!(target: "websocket", "使用代理: {}", self.config.use_proxy);
 
             if self.config.use_proxy {
-                info!("代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
+                info!(target: "websocket", "代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
             }
 
             // 确保日志目录存在
@@ -825,24 +985,29 @@ impl WebSocketClient for AggTradeClient {
 
             // 获取所有流
             let streams = self.config.get_streams();
-            info!("总共 {} 个流需要订阅", streams.len());
+            info!(target: "websocket", "总共 {} 个流需要订阅", streams.len());
 
-            // 计算需要的连接数
-            let connection_count = (streams.len() + MAX_STREAMS_PER_CONNECTION - 1) / MAX_STREAMS_PER_CONNECTION;
-            info!("需要 {} 个WebSocket连接", connection_count);
+            // 使用固定的连接数
+            let connection_count = WEBSOCKET_CONNECTION_COUNT;
+            info!(target: "websocket", "使用 {} 个WebSocket连接", connection_count);
+
+            // 计算每个连接的流数量
+            let streams_per_connection = (streams.len() + connection_count - 1) / connection_count;
+            info!(target: "websocket", "每个连接平均处理 {} 个流", streams_per_connection);
 
             // 分配流到连接
             let mut connection_streams = Vec::new();
 
-            for chunk in streams.chunks(MAX_STREAMS_PER_CONNECTION) {
+            for chunk in streams.chunks(streams_per_connection) {
                 connection_streams.push(chunk.to_vec());
             }
 
             // 创建消息处理器
-            // 使用旧的AggTradeMessageHandler
-            let handler = Arc::new(crate::klcommon::aggkline::models::DummyMessageHandler {
-                db: self.db.clone(),
-            });
+            // 使用新的AggTradeMessageHandler
+            let handler = Arc::new(AggTradeMessageHandler::new(
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ));
             let connections_clone = self.connections.clone();
 
             let message_handler = tokio::spawn(async move {
@@ -890,7 +1055,7 @@ impl WebSocketClient for AggTradeClient {
                                 }
                             }
 
-                            info!("连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
+                            info!(target: "websocket", "连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
 
                             // 处理消息
                             connection_manager_clone.handle_messages(connection_id, &mut ws, tx_clone, connections_clone).await;
@@ -904,7 +1069,7 @@ impl WebSocketClient for AggTradeClient {
                                 }
                             }
 
-                            error!("连接 {} 失败: {}", connection_id, e);
+                            error!(target: "websocket", "连接 {} 失败: {}", connection_id, e);
                         }
                     }
                 });
@@ -917,10 +1082,10 @@ impl WebSocketClient for AggTradeClient {
 
             // 等待消息处理器完成
             if let Err(e) = message_handler.await {
-                error!("消息处理器错误: {}", e);
+                error!(target: "websocket", "消息处理器错误: {}", e);
             }
 
-            info!("归集交易客户端已停止");
+            info!(target: "websocket", "归集交易客户端已停止");
             Ok(())
         }
     }

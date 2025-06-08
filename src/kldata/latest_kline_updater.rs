@@ -1,5 +1,5 @@
 use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, ServerTimeSyncManager};
-use log::{info, warn, error, debug};
+use tracing::{info, warn, error, debug};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;

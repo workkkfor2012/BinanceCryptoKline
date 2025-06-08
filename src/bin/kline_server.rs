@@ -1,7 +1,8 @@
 ﻿// K线服务器主程序
-use log::{info, error};
 use anyhow::Result;
 use std::sync::Arc;
+use tracing::{info, error, instrument};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
 // 使用库中的模块
 use kline_server::klcommon::Database;
@@ -12,6 +13,7 @@ const VERBOSE: bool = true;
 const SKIP_CHECK: bool = false;
 
 #[tokio::main]
+#[instrument(target = "kline_server::main")]
 async fn main() -> Result<()> {
     // 使用硬编码参数
     let verbose = VERBOSE;
@@ -19,56 +21,126 @@ async fn main() -> Result<()> {
     // Initialize logging
     init_logging(verbose);
 
-    info!("Starting Binance U-margined perpetual futures kline server");
+    info!(
+        target = "kline_server::main",
+        event_type = "server_startup",
+        "Starting Binance U-margined perpetual futures kline server"
+    );
 
     // 创建数据库连接
     let db_path = std::path::PathBuf::from("./data/klines.db");
     let db: Arc<Database> = match Database::new(&db_path) {
-        Ok(db) => Arc::new(db),
+        Ok(db) => {
+            info!(
+                target = "kline_server::database",
+                event_type = "database_connection_success",
+                db_path = %db_path.display(),
+                "数据库连接创建成功"
+            );
+            Arc::new(db)
+        },
         Err(e) => {
-            error!("创建数据库连接失败: {}", e);
+            error!(
+                target = "kline_server::database",
+                event_type = "database_connection_failed",
+                db_path = %db_path.display(),
+                error = %e,
+                "创建数据库连接失败"
+            );
             return Err(e.into());
         }
     };
 
     // 检查数据库是否存在
     if !db_path.exists() {
-        error!("数据库文件不存在，请先运行 kline_downloader 下载历史数据");
+        error!(
+            target = "kline_server::database",
+            event_type = "database_file_missing",
+            db_path = %db_path.display(),
+            "数据库文件不存在，请先运行 kline_downloader 下载历史数据"
+        );
         return Err(anyhow::anyhow!("数据库文件不存在").into());
     }
 
     // 如果没有跳过检查，则检查BTC 1分钟K线数量
     if !SKIP_CHECK {
-        info!("检查数据库中的K线数据...");
+        info!(
+            target = "kline_server::startup_check",
+            event_type = "database_check_start",
+            "检查数据库中的K线数据..."
+        );
         let btc_1m_count = match db.get_kline_count("BTCUSDT", "1m") {
             Ok(count) => count,
             Err(e) => {
-                error!("检查BTC 1分钟K线数量失败: {}", e);
+                error!(
+                    target = "kline_server::startup_check",
+                    event_type = "kline_count_check_failed",
+                    symbol = "BTCUSDT",
+                    interval = "1m",
+                    error = %e,
+                    "检查BTC 1分钟K线数量失败"
+                );
                 return Err(e.into());
             }
         };
 
-        info!("BTC 1分钟K线数量: {}", btc_1m_count);
+        info!(
+            target = "kline_server::startup_check",
+            event_type = "kline_count_result",
+            symbol = "BTCUSDT",
+            interval = "1m",
+            count = btc_1m_count,
+            "BTC 1分钟K线数量"
+        );
 
         // 判断是否有足够的数据
         if btc_1m_count < 100 {
-            error!("数据库中的BTC 1分钟K线数量不足，请先运行 kline_data_service 下载历史数据");
+            error!(
+                target = "kline_server::startup_check",
+                event_type = "insufficient_data",
+                symbol = "BTCUSDT",
+                interval = "1m",
+                count = btc_1m_count,
+                min_required = 100,
+                "数据库中的BTC 1分钟K线数量不足，请先运行 kline_data_service 下载历史数据"
+            );
             return Err(anyhow::anyhow!("数据库中的K线数量不足").into());
         }
     } else {
-        info!("跳过数据库检查，直接启动服务器");
+        info!(
+            target = "kline_server::startup_check",
+            event_type = "database_check_skipped",
+            "跳过数据库检查，直接启动服务器"
+        );
     }
 
     // 以正常模式启动服务器
-    info!("以正常模式启动服务器");
+    info!(
+        target = "kline_server::main",
+        event_type = "server_mode_normal",
+        "以正常模式启动服务器"
+    );
 
     // 启动Web服务器
-    info!("启动Web服务器...");
+    info!(
+        target = "kline_server::web_server",
+        event_type = "web_server_starting",
+        "启动Web服务器..."
+    );
 
     // 启动Web服务器
     match web::start_web_server(db.clone()).await {
-        Ok(_) => info!("启动Web服务器成功"),
-        Err(e) => error!("启动Web服务器失败: {}", e),
+        Ok(_) => info!(
+            target = "kline_server::web_server",
+            event_type = "web_server_started",
+            "启动Web服务器成功"
+        ),
+        Err(e) => error!(
+            target = "kline_server::web_server",
+            event_type = "web_server_failed",
+            error = %e,
+            "启动Web服务器失败"
+        ),
     }
 
     Ok(())
@@ -76,7 +148,7 @@ async fn main() -> Result<()> {
 
 
 
-/// 初始化日志
+/// 初始化tracing日志系统
 fn init_logging(verbose: bool) {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
     std::env::set_var("RUST_BACKTRACE", "1");
@@ -87,28 +159,45 @@ fn init_logging(verbose: bool) {
         eprintln!("Failed to create logs directory: {}", e);
     });
 
-    let dispatch = fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {} {}] {}",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), // 添加毫秒
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
-        .level(if verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info })
-        // 过滤掉过于频繁的第三方库日志
-        .level_for("hyper", log::LevelFilter::Warn)
-        .level_for("reqwest", log::LevelFilter::Warn)
-        .chain(std::io::stdout()) // 输出到控制台
-        .chain(fern::log_file(format!("{}/kline_server.log", log_dir)).expect("Failed to open log file")); // 输出到日志文件
+    // 设置日志级别
+    let log_level = if verbose { "debug" } else { "info" };
 
-    match dispatch.apply() {
-        Ok(_) => log::info!("日志系统 (fern) 已初始化"),
-        Err(e) => eprintln!("日志系统初始化失败: {}", e),
-    }
+    // 创建文件输出层
+    let file_appender = tracing_appender::rolling::daily(log_dir, "kline_server.log");
+    let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
 
-    // 输出一条日志，确认日志系统已初始化
-    log::info!("日志系统已初始化，UTF-8编码测试：中文、日文、韩文");
+    // 初始化tracing订阅器
+    Registry::default()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+                .json() // 使用JSON格式符合WebLog规范
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+                .with_writer(file_writer)
+                .json() // 文件也使用JSON格式
+        )
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(log_level)
+                        .add_directive("hyper=warn".parse().unwrap())
+                        .add_directive("reqwest=warn".parse().unwrap())
+                })
+        )
+        .init();
+
+    info!(
+        target = "kline_server::logging",
+        event_type = "logging_initialized",
+        log_level = log_level,
+        log_dir = log_dir,
+        "tracing日志系统已初始化，UTF-8编码测试：中文、日文、韩文"
+    );
 }

@@ -1,6 +1,6 @@
 use crate::klcommon::error::{AppError, Result};
 use crate::klcommon::models::Kline;
-use log::{debug, info, error};
+use tracing::{debug, info, error};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
@@ -59,7 +59,7 @@ impl DbWriteQueueProcessor {
         let is_running = self.is_running.clone();
 
         thread::spawn(move || {
-            info!("数据库写入队列处理器已启动");
+            info!(target: "db", "数据库写入队列处理器已启动");
 
             while *self.is_running.lock().unwrap() {
                 // 尝试从队列中获取任务，最多等待100毫秒
@@ -70,7 +70,7 @@ impl DbWriteQueueProcessor {
 
                         // 发送结果
                         if let Err(e) = task.result_sender.send(result) {
-                            error!("无法发送写入任务结果: {}", e);
+                            error!(target: "db", "无法发送写入任务结果: {}", e);
                         }
                     },
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
@@ -79,13 +79,13 @@ impl DbWriteQueueProcessor {
                     },
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                         // 发送端已关闭，退出循环
-                        info!("数据库写入队列已关闭，处理器将退出");
+                        info!(target: "db", "数据库写入队列已关闭，处理器将退出");
                         break;
                     }
                 }
             }
 
-            info!("数据库写入队列处理器已停止");
+            info!(target: "db", "数据库写入队列处理器已停止");
         });
 
         is_running
@@ -237,7 +237,7 @@ impl Database {
             }
         }
 
-        info!("Using SQLite database with optimized performance settings at {}", db_path.display());
+        info!(target: "db", "Using SQLite database with optimized performance settings at {}", db_path.display());
 
         // Create database connection manager with WAL mode and performance optimizations
         let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
@@ -278,7 +278,7 @@ impl Database {
         // Initialize database tables
         db.init_db()?;
 
-        info!("SQLite database with optimized performance settings and write queue initialized successfully");
+        info!(target: "db", "SQLite database with optimized performance settings and write queue initialized successfully");
         Ok(db)
     }
 
@@ -446,6 +446,107 @@ impl Database {
         Ok(result)
     }
 
+    /// 批量获取多个品种的最早K线时间戳（性能优化）
+    pub fn batch_get_earliest_kline_timestamps(&self, symbols: &[String], interval: &str) -> Result<Vec<(String, Option<i64>)>> {
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        let mut results = Vec::with_capacity(symbols.len());
+
+        for symbol in symbols {
+            // Create table name: k_symbol_interval (e.g., k_btc_1m)
+            // Remove "USDT" suffix from symbol name
+            let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+            let interval_lower = interval.to_lowercase();
+            let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+            // Check if table exists
+            let table_exists: bool = conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+                params![table_name],
+                |row| row.get::<_, i64>(0).map(|count| count > 0),
+            ).unwrap_or(false);
+
+            if !table_exists {
+                results.push((symbol.clone(), None));
+                continue;
+            }
+
+            // Check if table has data
+            let has_data: bool = conn.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", table_name),
+                [],
+                |row| row.get(0),
+            ).unwrap_or(false);
+
+            if !has_data {
+                results.push((symbol.clone(), None));
+                continue;
+            }
+
+            // Get minimum timestamp
+            let query = format!("SELECT MIN(open_time) FROM {}", table_name);
+            let timestamp: Option<i64> = conn.query_row(
+                &query,
+                [],
+                |row| row.get(0),
+            ).optional()
+                .map_err(|e| AppError::DatabaseError(format!("Failed to get earliest kline timestamp from {}: {}", table_name, e)))?;
+
+            results.push((symbol.clone(), timestamp));
+        }
+
+        Ok(results)
+    }
+
+    /// Get the earliest kline timestamp for a symbol and interval
+    pub fn get_earliest_kline_timestamp(&self, symbol: &str, interval: &str) -> Result<Option<i64>> {
+        // Create table name: k_symbol_interval (e.g., k_btc_1m)
+        // Remove "USDT" suffix from symbol name
+        let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+        let interval_lower = interval.to_lowercase();
+
+        // Consistently use k_ prefix
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+        let conn = self.pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+        // Check if table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+            params![table_name],
+            |row| row.get::<_, i64>(0).map(|count| count > 0),
+        ).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(None);
+        }
+
+        // 首先检查表是否有数据
+        let has_data: bool = conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", table_name),
+            [],
+            |row| row.get(0),
+        ).unwrap_or(false);
+
+        if !has_data {
+            // 表存在但没有数据
+            return Ok(None);
+        }
+
+        // 表存在且有数据，获取最小时间戳
+        let query = format!("SELECT MIN(open_time) FROM {}", table_name);
+        let result: Option<i64> = conn.query_row(
+            &query,
+            [],
+            |row| row.get(0),
+        ).optional()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get earliest kline timestamp from {}: {}", table_name, e)))?;
+
+        Ok(result)
+    }
+
     /// Get the count of klines for a symbol and interval
     pub fn get_kline_count(&self, symbol: &str, interval: &str) -> Result<i64> {
         // Create table name: k_symbol_interval (e.g., k_btc_1m)
@@ -485,7 +586,7 @@ impl Database {
     /// No longer limiting kline count, keep all data
     pub fn trim_klines(&self, symbol: &str, interval: &str, _max_count: i64) -> Result<usize> {
         // No longer limiting kline count, just return 0
-        debug!("K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
+        debug!(target: "db", "K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
         Ok(0)
     }
 
@@ -497,7 +598,7 @@ impl Database {
 
     /// 关闭写入队列处理器
     pub fn shutdown(&self) {
-        info!("正在关闭数据库写入队列...");
+        info!(target: "db", "正在关闭数据库写入队列...");
 
         // 设置运行标志为false，通知处理器停止
         if let Ok(mut running) = self.queue_processor_running.lock() {
@@ -507,7 +608,7 @@ impl Database {
         // 等待所有剩余的任务处理完成
         // 这里我们不等待，因为处理器会在接收到关闭信号后自行退出
 
-        info!("数据库写入队列已关闭");
+        info!(target: "db", "数据库写入队列已关闭");
     }
 }
 
@@ -563,7 +664,7 @@ impl Database {
         if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
             let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
             let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-            debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+            debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
             *last_log_time = now;
         }
 
@@ -642,7 +743,7 @@ impl Database {
         if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
             let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
             let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-            debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+            debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
             *last_log_time = now;
         }
 
@@ -705,7 +806,7 @@ impl Database {
             if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
                 let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
                 let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-                debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+                debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
                 *last_log_time = now;
             }
         } else {
@@ -736,7 +837,7 @@ impl Database {
             if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
                 let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
                 let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-                debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+                debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
                 *last_log_time = now;
             }
         }

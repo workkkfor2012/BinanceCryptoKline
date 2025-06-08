@@ -1,6 +1,6 @@
 ﻿use crate::kldata::KlineBackfiller;
 use crate::klcommon::{Database, Result};
-use log::{info, error};
+use tracing::{info, error};
 use std::path::PathBuf;
 use std::sync::Arc;
 

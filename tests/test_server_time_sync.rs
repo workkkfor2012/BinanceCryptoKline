@@ -1,5 +1,6 @@
 use kline_server::klcommon::{Database, ServerTimeSyncManager};
-use log::{info, error};
+use tracing::{info, error};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 use std::sync::Arc;
 use std::error::Error;
 
@@ -7,9 +8,19 @@ fn init_logger() {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
     std::env::set_var("RUST_BACKTRACE", "1");
 
-    // 初始化日志
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
+    // 初始化tracing日志
+    Registry::default()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+                .json() // 使用JSON格式符合WebLog规范
+        )
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
         .init();
 }
 

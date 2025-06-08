@@ -1,24 +1,22 @@
 use kline_server::klcommon::BinanceApi;
-use log::{info, LevelFilter};
-use env_logger::Builder;
+use tracing::info;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 use std::error::Error;
-use std::io::Write;
 
-// 初始化日志
+// 初始化tracing日志
 fn init_logger() {
-    Builder::new()
-        .filter_level(LevelFilter::Info)
-        .format_timestamp_millis()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "[{} {} {}] {}",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                record.level(),
-                record.target(),
-                record.args()
-            )
-        })
+    Registry::default()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+                .json() // 使用JSON格式符合WebLog规范
+        )
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
         .init();
 }
 

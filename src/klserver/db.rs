@@ -1,6 +1,6 @@
 ﻿use crate::klserver::error::{AppError, Result};
 use crate::klserver::models::Kline;
-use log::{debug, info};
+use tracing::{debug, info, warn, error, instrument};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};

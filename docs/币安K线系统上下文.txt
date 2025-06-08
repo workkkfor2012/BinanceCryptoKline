@@ -1,0 +1,85 @@
+你修改完了，就告诉我，我会运行start_both_systems_with_windows.ps1，这个脚本，启动两端进行测试，然后我会告诉你结果
+start_both_systems_with_windows.ps1 分别以窗口系统启动日志系统和k线合成系统
+http://localhost:8080/modules  这是模块页面
+WebLog现在是完全独立的通用日志可视化系统，可作为独立开源项目发布。在src\weblog下，
+ **新启动脚本**: 创建`start_simple.ps1`等专用启动脚本
+文档目录是docs
+日志目录logs
+
+
+## WebSocket连接分配策略
+- 固定使用5个WebSocket连接
+- 所有品种平均分配到这5个连接中
+- 每连接流数 = ⌈总品种数 / 5⌉
+- 如果是400个品种 → 5个连接，每连接80个品种
+命名管道系统核心规则
+🎯 4个关键点（防止LLM修改错误）
+管道名称：kline_log_pipe（固定，不要改）
+架构：PowerShell服务器 ← K线聚合客户端启动K线聚合服务
+
+
+启动顺序：先 start_log_server.ps1 后 K线聚合服务
+连接限制：只允许一个客户端连接
+传输方式：仅支持命名管道（已删除WebSocket支持）
+🚫 常见错误
+❌ 改管道名称
+❌ 颠倒启动顺序
+❌ 让多个客户端连接
+❌ 混淆服务器/客户端角色
+❌ 尝试使用WebSocket传输（已不支持）
+## 主要启动脚本
+
+### start_with_pipe_simple.ps1
+**主要启动脚本** - 推荐使用
+- 功能：一键启动完整的K线系统（命名管道模式）
+- 包含：日志服务器 + Web观察器 + K线聚合服务
+- 特点：自动清理进程、智能等待服务启动、Ctrl+C优雅停止
+- 访问：http://localhost:3000 查看Web仪表板
+
+### start_log_server.ps1
+**日志服务器启动脚本**
+- 功能：单独启动命名管道日志服务器
+- 支持：可选启动Web仪表板
+- 用途：当需要单独启动日志服务时使用
+
+### start_web_observer.ps1
+**Web观察器启动脚本**
+- 功能：单独启动Web观察器服务
+- 端口：3000
+- 用途：当需要单独启动Web界面时使用
+
+
+docs\K线聚合系统使用指南.md
+docs\合成K线开发进度文档.md
+docs\技术接口文档.md
+docs\日志UI显示详细文档.md
+docs\LLM友好型功能模块定义列表.md
+
+## PowerShell分别启动程序命令
+
+### 基本语法
+```powershell
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "命令内容"
+```
+
+### 关键参数
+- `-NoExit`: 保持窗口打开
+- `-Command`: 执行的命令
+- 环境变量用反引号转义：`$env:VAR='value'`
+
+### 实际示例
+
+#### 启动WebLog服务器
+```powershell
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host '🌐 启动WebLog服务器' -ForegroundColor Green; cd src\weblog; `$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:RUST_LOG='info'; cargo run --bin web_observer"
+```
+
+#### 启动K线聚合服务
+```powershell
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host '📊 启动K线聚合服务' -ForegroundColor Yellow; `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:LOG_TRANSPORT='named_pipe'; `$env:RUST_LOG='info'; cargo run --bin kline_aggregate_service"
+```
+
+### 优势
+- 每个程序独立窗口显示日志
+- 便于调试和观察各自状态
+- 窗口保持打开便于查看历史输出

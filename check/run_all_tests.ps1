@@ -24,7 +24,7 @@ switch ($choice) {
     "1" {
         Write-Host ""
         Write-Host "正在运行测试1: 测试BTC一个品种..."
-        & "$PSScriptRoot\test_btc_only.ps1"
+        & "$PSScriptRoot\run_btc_test.ps1"
         break
     }
     "2" {
@@ -47,7 +47,7 @@ switch ($choice) {
         Write-Host "--------------------------------------------------------"
         Write-Host "测试1: 测试BTC一个品种"
         Write-Host "--------------------------------------------------------"
-        & "$PSScriptRoot\test_btc_only.ps1"
+        & "$PSScriptRoot\run_btc_test.ps1"
         
         Write-Host ""
         Write-Host "--------------------------------------------------------"
