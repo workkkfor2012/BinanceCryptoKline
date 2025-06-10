@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xterm.js 调试页面</title>
+    
+    <!-- Xterm.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.3.0/css/xterm.css" />
+    
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background-color: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+        }
+        
+        .debug-info {
+            background-color: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .terminal-container {
+            width: 100%;
+            height: 400px;
+            background-color: #000;
+            border: 1px solid #333;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        .status.success { background-color: #006600; }
+        .status.error { background-color: #660000; }
+        .status.warning { background-color: #666600; }
+        
+        button {
+            background-color: #0066ff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        
+        button:hover {
+            background-color: #3388ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Xterm.js 调试页面</h1>
+    
+    <div class="debug-info">
+        <h3>📊 调试信息</h3>
+        <div id="debug-log"></div>
+    </div>
+    
+    <div class="status" id="status">
+        <strong>状态：</strong><span id="status-text">初始化中...</span>
+    </div>
+    
+    <div>
+        <button onclick="testWebSocket()">测试 WebSocket 连接</button>
+        <button onclick="testTerminal()">测试终端写入</button>
+        <button onclick="clearTerminal()">清空终端</button>
+        <button onclick="clearDebugLog()">清空调试日志</button>
+    </div>
+    
+    <h3>🖥️ 终端测试</h3>
+    <div class="terminal-container" id="terminal-container"></div>
+
+    <!-- Xterm.js JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.8.0/lib/addon-fit.js"></script>
+    
+    <script>
+        let terminal = null;
+        let fitAddon = null;
+        let ws = null;
+        
+        function log(message, type = 'info') {
+            const debugLog = document.getElementById('debug-log');
+            const timestamp = new Date().toLocaleTimeString();
+            const color = type === 'error' ? '#ff0000' : type === 'success' ? '#00ff00' : '#ffffff';
+            debugLog.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+            debugLog.scrollTop = debugLog.scrollHeight;
+            console.log(`[${timestamp}] ${message}`);
+        }
+        
+        function updateStatus(text, type = 'info') {
+            const statusEl = document.getElementById('status');
+            const statusText = document.getElementById('status-text');
+            statusText.textContent = text;
+            
+            statusEl.className = 'status';
+            if (type === 'success') statusEl.classList.add('success');
+            else if (type === 'error') statusEl.classList.add('error');
+            else if (type === 'warning') statusEl.classList.add('warning');
+        }
+        
+        function initializeTerminal() {
+            try {
+                log('🚀 开始初始化 Xterm.js...', 'info');
+                
+                // 检查 Xterm.js 是否加载
+                if (typeof Terminal === 'undefined') {
+                    throw new Error('Xterm.js 未加载');
+                }
+                
+                if (typeof FitAddon === 'undefined') {
+                    throw new Error('FitAddon 未加载');
+                }
+                
+                log('✅ Xterm.js 库加载成功', 'success');
+                
+                // 创建终端实例
+                terminal = new Terminal({
+                    theme: {
+                        background: '#000000',
+                        foreground: '#00ff00',
+                        cursor: '#00ff00'
+                    },
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    fontSize: 14,
+                    cursorBlink: false,
+                    convertEol: true,
+                    disableStdin: true
+                });
+                
+                log('✅ 终端实例创建成功', 'success');
+                
+                // 创建 FitAddon
+                fitAddon = new FitAddon.FitAddon();
+                terminal.loadAddon(fitAddon);
+                
+                log('✅ FitAddon 加载成功', 'success');
+                
+                // 打开终端
+                const container = document.getElementById('terminal-container');
+                terminal.open(container);
+                
+                log('✅ 终端已打开到容器', 'success');
+                
+                // 调整大小
+                fitAddon.fit();
+                
+                log('✅ 终端大小调整完成', 'success');
+                
+                // 写入欢迎信息
+                terminal.write('🎉 Xterm.js 终端初始化成功！\r\n');
+                terminal.write('📝 这是一个测试终端\r\n');
+                terminal.write('🔗 准备测试 WebSocket 连接...\r\n\r\n');
+                
+                updateStatus('终端初始化成功', 'success');
+                
+            } catch (error) {
+                log(`❌ 终端初始化失败: ${error.message}`, 'error');
+                updateStatus(`终端初始化失败: ${error.message}`, 'error');
+            }
+        }
+        
+        function testWebSocket() {
+            try {
+                log('🔗 开始测试 WebSocket 连接...', 'info');
+                
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                
+                log(`📡 连接 URL: ${wsUrl}`, 'info');
+                
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    log('✅ WebSocket 连接成功！', 'success');
+                    updateStatus('WebSocket 已连接', 'success');
+                    if (terminal) {
+                        terminal.write('✅ WebSocket 连接成功！\r\n');
+                    }
+                };
+                
+                ws.onmessage = function(event) {
+                    log(`📨 收到消息: ${event.data.substring(0, 100)}...`, 'info');
+                    if (terminal) {
+                        terminal.write(`📨 收到数据: ${event.data.substring(0, 50)}...\r\n`);
+                    }
+                };
+                
+                ws.onclose = function() {
+                    log('🔌 WebSocket 连接已关闭', 'warning');
+                    updateStatus('WebSocket 连接已关闭', 'warning');
+                    if (terminal) {
+                        terminal.write('🔌 WebSocket 连接已关闭\r\n');
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    log(`❌ WebSocket 错误: ${error}`, 'error');
+                    updateStatus('WebSocket 连接错误', 'error');
+                    if (terminal) {
+                        terminal.write('❌ WebSocket 连接错误\r\n');
+                    }
+                };
+                
+            } catch (error) {
+                log(`❌ WebSocket 测试失败: ${error.message}`, 'error');
+                updateStatus(`WebSocket 测试失败: ${error.message}`, 'error');
+            }
+        }
+        
+        function testTerminal() {
+            if (!terminal) {
+                log('❌ 终端未初始化', 'error');
+                return;
+            }
+            
+            const testMessages = [
+                '\x1b[32m✅ 绿色测试消息 (INFO)\x1b[0m\r\n',
+                '\x1b[33m⚠️ 黄色测试消息 (WARN)\x1b[0m\r\n',
+                '\x1b[31m❌ 红色测试消息 (ERROR)\x1b[0m\r\n',
+                '\x1b[36m🔍 青色测试消息 (DEBUG)\x1b[0m\r\n',
+                '📝 普通测试消息\r\n'
+            ];
+            
+            testMessages.forEach((msg, index) => {
+                setTimeout(() => {
+                    terminal.write(msg);
+                }, index * 500);
+            });
+            
+            log('🧪 终端测试消息已发送', 'info');
+        }
+        
+        function clearTerminal() {
+            if (terminal) {
+                terminal.clear();
+                log('🧹 终端已清空', 'info');
+            }
+        }
+        
+        function clearDebugLog() {
+            document.getElementById('debug-log').innerHTML = '';
+            log('🧹 调试日志已清空', 'info');
+        }
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            log('📄 页面加载完成', 'info');
+            
+            // 延迟初始化，确保 CDN 资源加载完成
+            setTimeout(() => {
+                initializeTerminal();
+            }, 1000);
+        });
+        
+        // 窗口大小变化时调整终端
+        window.addEventListener('resize', function() {
+            if (fitAddon) {
+                setTimeout(() => fitAddon.fit(), 100);
+            }
+        });
+    </script>
+</body>
+</html>

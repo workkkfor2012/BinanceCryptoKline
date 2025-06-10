@@ -349,7 +349,7 @@ impl KlineDataPersistence {
                 let error_rate = current_error - last_error_count;
                 
                 if persistence_rate > 0 || error_rate > 0 {
-                    info!(target: "kline_data_persistence", "持久化统计报告: total_persistence={}, persistence_rate={}, total_success={}, success_rate={}, total_errors={}, error_rate={}", current_persistence, persistence_rate, current_success, success_rate, current_error, error_rate);
+                    //info!(target: "kline_data_persistence", "持久化统计报告: total_persistence={}, persistence_rate={}, total_success={}, success_rate={}, total_errors={}, error_rate={}", current_persistence, persistence_rate, current_success, success_rate, current_error, error_rate);
                 }
                 
                 last_persistence_count = current_persistence;

@@ -62,22 +62,15 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
 
     // 移除旧的SystemStatus发送逻辑，统一使用DashboardUpdate
 
-    // 启动定期发送仪表板数据的任务
-    let (dashboard_tx, mut dashboard_rx) = tokio::sync::mpsc::channel::<crate::module_manager::DashboardData>(100);
+    // 启动定期发送系统状态的任务（只发送状态信息，不发送日志数据）
+    let (status_tx, mut status_rx) = tokio::sync::mpsc::channel::<crate::types::SystemStatus>(100);
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2)); // 每2秒更新一次
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10)); // 每10秒更新一次系统状态
         loop {
             interval.tick().await;
-            let uptime = state_clone.start_time.elapsed().unwrap_or_default().as_secs();
-            let health_score = 95;
-            let mut dashboard_data = state_clone.module_aggregator_manager
-                .get_dashboard_data(uptime, health_score).await;
-
-            // 从AppState获取实时日志数据
-            dashboard_data.realtime_log_data = state_clone.get_realtime_log_data();
-
-            if dashboard_tx.send(dashboard_data).await.is_err() {
+            let system_status = state_clone.get_system_status();
+            if status_tx.send(system_status).await.is_err() {
                 break;
             }
         }
@@ -98,24 +91,29 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
         _ = async {
             loop {
                 tokio::select! {
-                    // 处理日志条目
+                    // 处理日志条目 - 立即增量转发
                     log_result = log_receiver.recv() => {
                         if let Ok(log_entry) = log_result {
+                            // 立即处理日志到聚合器
+                            state.module_aggregator_manager.process_log_entry(log_entry.clone()).await;
+
+                            // 立即转发原始日志给前端
                             let message = WebSocketMessage::LogEntry { data: log_entry };
                             if let Ok(json) = serde_json::to_string(&message) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;
                                 }
                             }
+
+                            // 立即推送更新的聚合数据
+                            send_dashboard_data(&mut sender, &state).await;
                         }
                     }
 
-                    // 移除旧的SystemStatus处理逻辑
-
-                    // 处理仪表板数据更新
-                    dashboard_result = dashboard_rx.recv() => {
-                        if let Some(dashboard_data) = dashboard_result {
-                            let message = WebSocketMessage::DashboardUpdate { data: dashboard_data };
+                    // 处理系统状态更新（低频）
+                    status_result = status_rx.recv() => {
+                        if let Some(system_status) = status_result {
+                            let message = WebSocketMessage::SystemStatus { data: system_status };
                             if let Ok(json) = serde_json::to_string(&message) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;
