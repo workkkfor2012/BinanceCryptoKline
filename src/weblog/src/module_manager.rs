@@ -24,7 +24,7 @@ impl Default for ModuleManagerConfig {
     fn default() -> Self {
         Self {
             aggregator_config: AggregatorConfig::default(),
-            max_realtime_logs: 100,
+            max_realtime_logs: 10000000,
         }
     }
 }

@@ -28,7 +28,7 @@ impl Default for AggregatorConfig {
     fn default() -> Self {
         Self {
             max_displayed: usize::MAX, // 后端不限制显示数量，由前端控制
-            max_history: 1000,
+            max_history: 10000000,
             similarity_threshold: 0.5,
             time_window_ms: 3600000, // 1小时，避免过期清理影响日志显示
         }

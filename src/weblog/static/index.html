@@ -30,27 +30,36 @@
         }
 
         .header {
-            text-align: center;
-            padding: 10px;
+            padding: 5px 10px;
             border-bottom: 2px solid #333;
-            margin-bottom: 15px;
+            margin-bottom: 10px;
+        }
+
+        .header-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            flex-wrap: wrap;
         }
 
         .header h1 {
             color: #00ffff;
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 18px;
+            margin: 0;
+            flex-shrink: 0;
         }
 
-        .system-status {
-            color: #ffff00;
-            font-size: 14px;
+        .header-buttons {
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
         }
 
         .main-content {
             display: flex;
             gap: 15px;
-            height: calc(100vh - 180px); /* 增加头部预留空间到180px */
+            height: calc(100vh - 120px); /* 减少头部预留空间到120px */
         }
 
         .static-modules-area {
@@ -208,15 +217,14 @@
             background-color: #ff6600;
             color: #ffffff;
             border: 2px solid #ff8833;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 12px;
             font-family: 'Consolas', monospace;
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
             box-shadow: 0 2px 6px rgba(255, 102, 0, 0.4);
-            margin-left: 15px;
         }
 
         .header-copy-button:hover {
@@ -235,15 +243,14 @@
             background-color: #0066ff;
             color: #ffffff;
             border: 2px solid #3388ff;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 12px;
             font-family: 'Consolas', monospace;
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
             box-shadow: 0 2px 6px rgba(0, 102, 255, 0.4);
-            margin-left: 10px;
         }
 
         .header-toggle-button:hover {
@@ -259,40 +266,32 @@
             box-shadow: 0 2px 6px rgba(68, 255, 68, 0.4);
         }
 
-        /* 模块名称显示区域样式 */
+        /* 模块名称显示区域样式 - 紧凑版 */
         .module-names-section {
-            margin-top: 15px;
-            padding: 10px;
-            border: 1px solid #333;
-            border-radius: 5px;
-            background-color: #0a0a0a;
+            flex: 1;
+            min-width: 300px;
         }
 
         .module-names-header {
             color: #00ffff;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 15px;
+            margin: 0 0 5px 0;
         }
 
         .module-names-list {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
-            min-height: 30px;
+            gap: 6px;
             align-items: center;
         }
 
         .module-name-tag {
             background-color: #1a4a1a;
             color: #00ff00;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
             font-family: 'Consolas', monospace;
             cursor: pointer;
             border: 1px solid #006600;
@@ -344,24 +343,20 @@
     <div class="connection-status" id="connection-status">连接中...</div>
 
     <div class="header">
-        <h1>K线聚合系统 - 模块监控 v5 (增量流式+聚合)
-            <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
-            <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
-        </h1>
-        <div class="system-status">
-            运行时间: <span id="uptime">--:--:--</span> |
-            健康分数: <span id="health-score">--%</span> |
-            验证事件: <span id="validation-events">--</span> |
-            性能监控: <span id="performance-spans">--</span>
-        </div>
+        <div class="header-top-row">
+            <h1>K线聚合系统 - 模块监控 v6</h1>
 
-        <!-- 模块名称显示区域 -->
-        <div class="module-names-section">
-            <div class="module-names-header">
-                <span>📋 检测到的模块名称 (点击单个复制):</span>
+            <!-- 模块名称显示区域 -->
+            <div class="module-names-section">
+                
+                <div class="module-names-list" id="module-names-list">
+                    <span class="no-modules">暂无模块数据</span>
+                </div>
             </div>
-            <div class="module-names-list" id="module-names-list">
-                <span class="no-modules">暂无模块数据</span>
+
+            <div class="header-buttons">
+                <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
+                <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
             </div>
         </div>
     </div>
@@ -426,12 +421,13 @@
     </div>
 
     <script>
-        // Xterm.js 终端管理 (最终版：无自动滚动，用户完全控制)
+        // Xterm.js 终端管理 (最终版：新日志显示在顶部)
         class TerminalManager {
             constructor() {
                 this.terminals = new Map();
                 this.fitAddons = new Map();
-                this.maxLines = 1000;
+                this.logBuffers = new Map(); // 存储每个模块的日志缓冲区
+                this.maxLines = 10000000;
 
                 this.terminalTheme = {
                     background: '#000000',
@@ -475,7 +471,9 @@
                     scrollback: this.maxLines,
                     convertEol: true,
                     disableStdin: true, // 禁用输入，只用于显示
-                    allowTransparency: true
+                    allowTransparency: true,
+                    // 1GB 写入缓冲区，支持大量日志
+                    writeBufferSize: 1024 * 1024 * 1024
                 });
 
                 // 正确实例化 v5 插件
@@ -498,8 +496,9 @@
                 // 存储实例
                 this.terminals.set(moduleName, terminal);
                 this.fitAddons.set(moduleName, fitAddon);
+                this.logBuffers.set(moduleName, []); // 初始化日志缓冲区
 
-                console.log(`✅ 为模块 [${moduleName}] 创建了无自动滚动终端`);
+                console.log(`✅ 为模块 [${moduleName}] 创建了新日志显示在顶部的终端`);
                 return terminal;
             }
 
@@ -508,7 +507,7 @@
                 return this.terminals.get(moduleName);
             }
 
-            // 向终端写入日志 (无自动滚动版本)
+            // 向终端写入日志 (命令行惯例：新日志在底部)
             writeLog(moduleName, logText, level = 'INFO') {
                 const terminal = this.getTerminal(moduleName);
                 if (!terminal) {
@@ -526,13 +525,60 @@
                     default:      colorCode = '\x1b[37m'; break; // 白色
                 }
 
-                // 写入带颜色的日志到底部，不进行任何滚动操作
                 const resetCode = '\x1b[0m'; // 重置颜色
-                const formattedLog = `${colorCode}${logText}${resetCode}\r\n`;
-                terminal.write(formattedLog);
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
 
-                // 完全不调用 terminal.scrollToBottom()
-                // 日志添加到底部，滚动条位置由用户完全控制
+                // 获取日志缓冲区
+                let logBuffer = this.logBuffers.get(moduleName);
+                if (!logBuffer) {
+                    logBuffer = [];
+                    this.logBuffers.set(moduleName, logBuffer);
+                }
+
+                // 将新日志追加到缓冲区底部（命令行惯例）
+                logBuffer.push(formattedLog);
+
+                // 限制缓冲区大小，防止内存溢出（移除最老的日志）
+                if (logBuffer.length > this.maxLines) {
+                    logBuffer.shift(); // 移除最老的日志（数组开头）
+                }
+
+                // 直接追加到终端底部，无需刷新整个终端
+                terminal.write(formattedLog + '\r\n');
+            }
+
+            // 刷新终端显示（带流控制）
+            refreshTerminal(moduleName) {
+                const terminal = this.getTerminal(moduleName);
+                const logBuffer = this.logBuffers.get(moduleName);
+
+                if (!terminal || !logBuffer) {
+                    return;
+                }
+
+                // 清空终端
+                terminal.clear();
+
+                // 分批写入日志以避免缓冲区溢出
+                this.writeLogsInBatches(terminal, logBuffer);
+            }
+
+            // 直接写入所有日志到终端
+            writeLogsInBatches(terminal, logBuffer) {
+                if (!logBuffer || logBuffer.length === 0) {
+                    return;
+                }
+
+                try {
+                    // 直接写入所有日志，不分批
+                    logBuffer.forEach(formattedLog => {
+                        terminal.write(formattedLog + '\r\n');
+                    });
+                    // 只在历史日志加载时显示日志，新日志追加时不显示
+                    // console.log(`🔄 [${moduleName}] 刷新终端，写入 ${logBuffer.length} 条日志`);
+                } catch (error) {
+                    console.error(`❌ 写入日志失败: ${error.message}`);
+                }
             }
 
             // 清空终端
@@ -540,6 +586,8 @@
                 const terminal = this.getTerminal(moduleName);
                 if (terminal) {
                     terminal.clear();
+                    // 同时清空日志缓冲区
+                    this.logBuffers.set(moduleName, []);
                 }
             }
 
@@ -560,6 +608,7 @@
                     terminal.dispose();
                     this.terminals.delete(moduleName);
                     this.fitAddons.delete(moduleName);
+                    this.logBuffers.delete(moduleName); // 清理日志缓冲区
                 }
             }
         }
@@ -653,28 +702,10 @@
             }
         }
 
-        // 处理系统状态更新（简化版）
+        // 处理系统状态更新（简化版 - 仅记录日志）
         function updateSystemStatus(data) {
             console.log('📊 收到系统状态更新:', data);
-
-            // 更新系统状态信息
-            if (data.uptime_seconds !== undefined) {
-                const hours = Math.floor(data.uptime_seconds / 3600);
-                const minutes = Math.floor((data.uptime_seconds % 3600) / 60);
-                const seconds = data.uptime_seconds % 60;
-                document.getElementById('uptime').textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            }
-            if (data.health_score !== undefined) {
-                document.getElementById('health-score').textContent = Math.round(data.health_score) + '%';
-            }
-
-            // 更新验证事件和性能统计（如果有的话）
-            if (data.validation_stats && data.validation_stats.total_events !== undefined) {
-                document.getElementById('validation-events').textContent = data.validation_stats.total_events;
-            }
-            if (data.performance_stats && data.performance_stats.total_spans !== undefined) {
-                document.getElementById('performance-spans').textContent = data.performance_stats.total_spans;
-            }
+            // 系统状态信息已从界面移除，仅保留日志记录
         }
 
         // 处理聚合数据更新
@@ -753,20 +784,45 @@
 
             console.log(`📚 为模块 [${moduleName}] 加载 ${historyLogs.length} 条历史日志`);
 
-            // 清空终端现有内容
-            terminal.clear();
+            // 清空终端和缓冲区
+            terminalManager.clearTerminal(moduleName);
 
-            // 批量写入历史日志（从旧到新的顺序）
-            historyLogs.forEach(logText => {
-                const level = extractLogLevelFromText(logText);
-                terminalManager.writeLog(moduleName, logText, level);
+            // 按照命令行惯例：最老的日志在上方，最新的在下方
+            // 如果后端发送的是最新在前的顺序，需要反转
+            // 先检查并调试历史日志的顺序
+            console.log(`🔍 [${moduleName}] 历史日志顺序检查:`, {
+                总数: historyLogs.length,
+                第一条: historyLogs[0]?.substring(0, 50) + '...',
+                最后一条: historyLogs[historyLogs.length - 1]?.substring(0, 50) + '...'
             });
 
-            // 只在初次加载时将滚动条定位到底部，之后完全不动滚动条
-            setTimeout(() => {
-                terminal.scrollToBottom();
-                console.log(`📍 模块 [${moduleName}] 滚动条已定位到底部（仅此一次）`);
-            }, 100);
+            // 反转历史日志顺序，确保最老的在上方
+            const orderedLogs = [...historyLogs].reverse();
+
+            const logBuffer = terminalManager.logBuffers.get(moduleName) || [];
+            orderedLogs.forEach(logText => {
+                const level = extractLogLevelFromText(logText);
+                const colorCode = getColorCodeForLevel(level);
+                const resetCode = '\x1b[0m';
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+                logBuffer.push(formattedLog); // 追加到底部
+            });
+            terminalManager.logBuffers.set(moduleName, logBuffer);
+
+            // 刷新终端显示
+            terminalManager.refreshTerminal(moduleName);
+            console.log(`📍 模块 [${moduleName}] 历史日志加载完成，新日志将显示在底部`);
+        }
+
+        // 获取日志级别对应的颜色代码
+        function getColorCodeForLevel(level) {
+            switch (level.toUpperCase()) {
+                case 'ERROR': return '\x1b[31m'; // 红色
+                case 'WARN':  return '\x1b[33m'; // 黄色
+                case 'INFO':  return '\x1b[32m'; // 绿色
+                case 'DEBUG': return '\x1b[36m'; // 青色
+                default:      return '\x1b[37m'; // 白色
+            }
         }
 
         // 加载历史显示日志到终端（用于DisplayLogEntry格式的日志）
@@ -778,22 +834,43 @@
 
             console.log(`📚 为模块 [${moduleName}] 加载 ${displayLogs.length} 条历史显示日志`);
 
-            // 清空终端现有内容
-            terminal.clear();
+            // 清空终端和缓冲区
+            terminalManager.clearTerminal(moduleName);
 
-            // 批量写入历史显示日志
-            displayLogs.forEach(displayEntry => {
+            // 按照命令行惯例：最老的日志在上方，最新的在下方
+            // 检查显示日志的时间戳顺序
+            if (displayLogs.length > 1) {
+                const firstTime = new Date(displayLogs[0].timestamp);
+                const lastTime = new Date(displayLogs[displayLogs.length - 1].timestamp);
+                console.log(`🔍 [${moduleName}] 显示日志时间顺序:`, {
+                    总数: displayLogs.length,
+                    第一条时间: firstTime.toLocaleTimeString(),
+                    最后一条时间: lastTime.toLocaleTimeString(),
+                    是否需要反转: firstTime > lastTime ? '是' : '否'
+                });
+            }
+
+            // 根据时间戳排序，确保最老的在前面
+            const orderedDisplayLogs = [...displayLogs].sort((a, b) =>
+                new Date(a.timestamp) - new Date(b.timestamp)
+            );
+
+            const logBuffer = terminalManager.logBuffers.get(moduleName) || [];
+            orderedDisplayLogs.forEach(displayEntry => {
                 const timestamp = new Date(displayEntry.timestamp).toLocaleTimeString();
                 const countInfo = displayEntry.is_aggregated ? ` (聚合 ${displayEntry.count} 条)` : '';
                 const logText = `[${timestamp}] ${displayEntry.level} ${displayEntry.message}${countInfo}`;
-                terminalManager.writeLog(moduleName, logText, displayEntry.level);
-            });
 
-            // 只在初次加载时将滚动条定位到底部，之后完全不动滚动条
-            setTimeout(() => {
-                terminal.scrollToBottom();
-                console.log(`📍 模块 [${moduleName}] 显示日志滚动条已定位到底部（仅此一次）`);
-            }, 100);
+                const colorCode = getColorCodeForLevel(displayEntry.level);
+                const resetCode = '\x1b[0m';
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+                logBuffer.push(formattedLog); // 追加到底部
+            });
+            terminalManager.logBuffers.set(moduleName, logBuffer);
+
+            // 刷新终端显示
+            terminalManager.refreshTerminal(moduleName);
+            console.log(`📍 模块 [${moduleName}] 历史显示日志加载完成，新日志将显示在底部`);
         }
 
         // 从文本中提取日志级别
