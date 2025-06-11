@@ -39,8 +39,8 @@ pub fn create_app(state: Arc<AppState>) -> Router {
         .route("/modules", get(index_handler))
         .route("/trace", get(index_handler))
         .route("/logs", get(index_handler))
-        // 静态文件服务
-        .nest_service("/static", ServeDir::new("static"))
+        // 静态文件服务 - 支持多个路径
+        .nest_service("/static", ServeDir::new("src/weblog/static").fallback(ServeDir::new("static")))
         .with_state(state)
 }
 
@@ -238,8 +238,20 @@ async fn module_history_api_handler(
 
 /// 模块监控页面处理器 - 统一的index.html处理器
 async fn index_handler() -> impl IntoResponse {
-    // 直接返回内嵌的模块监控页面
-    Html(include_str!("../static/index.html")).into_response()
+    // 运行时读取静态文件，支持热更新
+    match tokio::fs::read_to_string("src/weblog/static/index.html").await {
+        Ok(content) => Html(content).into_response(),
+        Err(_) => {
+            // 如果读取失败，尝试相对路径
+            match tokio::fs::read_to_string("static/index.html").await {
+                Ok(content) => Html(content).into_response(),
+                Err(e) => {
+                    tracing::error!("无法读取index.html文件: {}", e);
+                    Html("<html><body><h1>Error: 无法加载页面</h1><p>请确保index.html文件存在</p></body></html>".to_string()).into_response()
+                }
+            }
+        }
+    }
 }
 
 // 移除旧的send_system_status函数，统一使用send_dashboard_data
