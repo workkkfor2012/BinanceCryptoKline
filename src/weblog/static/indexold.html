@@ -3,7 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>K线聚合系统 - 模块监控 v3.8</title>
+    <title>K线聚合系统 - 模块监控 v6.0 (Xterm.js 5.5.0 + 无自动滚动)</title>
+
+    <!-- Xterm.js CSS - 升级到最新版本 5.5.0 -->
+    <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
+
+    <!-- Xterm.js JavaScript - 升级到最新版本，使用新的 @xterm 作用域 -->
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+
     <style>
         * {
             margin: 0;
@@ -21,28 +30,75 @@
         }
 
         .header {
-            text-align: center;
-            padding: 10px;
+            padding: 5px 10px;
             border-bottom: 2px solid #333;
-            margin-bottom: 15px;
+            margin-bottom: 10px;
+        }
+
+        .header-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            flex-wrap: wrap;
         }
 
         .header h1 {
             color: #00ffff;
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 18px;
+            margin: 0;
+            flex-shrink: 0;
         }
 
-        .system-status {
-            color: #ffff00;
+        .header-buttons {
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .main-content {
+            display: flex;
+            gap: 15px;
+            height: calc(100vh - 120px); /* 减少头部预留空间到120px */
+        }
+
+        .static-modules-area {
+            flex: 0 0 820px; /* 固定宽度820px，考虑边框和内边距 */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            height: 100%; /* 确保占满父容器高度 */
+            border: 2px solid #444; /* 添加边框 */
+            border-radius: 8px; /* 圆角 */
+            padding: 10px; /* 内边距 */
+            background-color: #0f0f0f; /* 稍微不同的背景色以区分 */
+        }
+
+        .static-modules-title {
+            color: #00ffff;
             font-size: 14px;
+            font-weight: bold;
+            text-align: center;
+            padding: 5px 0;
+            border-bottom: 1px solid #444;
+            margin-bottom: 5px;
+            flex-shrink: 0;
         }
 
-        .modules-container {
+        .static-modules-content {
+            flex: 1;
+            display: flex;
+            gap: 15px;
+            min-height: 0; /* 允许flex子项收缩 */
+        }
+
+        .dynamic-modules-area {
+            flex: 1;
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
             gap: 15px;
-            height: calc(100vh - 120px);
+            overflow-y: auto;
+            height: 100%; /* 确保占满父容器高度 */
         }
 
         .module {
@@ -51,6 +107,34 @@
             background-color: #0a0a0a;
             display: flex;
             flex-direction: column;
+        }
+
+        .static-module {
+            flex: 1; /* 在静态区域中平分空间 */
+            display: flex;
+            flex-direction: column;
+            min-height: 0; /* 允许flex子项收缩 */
+        }
+
+        /* 静态模块区域的特殊样式 */
+        .static-modules-area .module-header {
+            background-color: #1a1a2e;
+            border-bottom: 2px solid #16213e;
+            flex-shrink: 0; /* 防止头部被压缩 */
+        }
+
+        .static-modules-area .module-title {
+            color: #0ff;
+            font-weight: bold;
+        }
+
+        .static-modules-area .module-stats {
+            flex-shrink: 0; /* 防止统计区域被压缩 */
+        }
+
+        .static-modules-area .module-terminal {
+            flex: 1; /* 终端区域占用剩余空间 */
+            /* 移除固定最小高度，完全依赖flex布局自动计算 */
         }
 
         .module-header {
@@ -64,6 +148,7 @@
         .module-title {
             font-weight: bold;
             font-size: 16px;
+            color: #00ffff;
         }
 
         .module-status {
@@ -91,225 +176,27 @@
             margin-bottom: 2px;
         }
 
-        .module-logs {
+        /* Xterm.js 终端容器样式 */
+        .module-terminal {
             flex: 1;
-            padding: 10px 15px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            font-size: 13px;
-            line-height: 1.4;
-            /* 确保滚动容器能够捕获鼠标事件 */
-            position: relative;
-            /* 防止滚动事件冒泡到父元素 */
-            overscroll-behavior: contain;
-            /* 设置最小高度确保滚动区域足够大 */
-            min-height: 200px;
-            /* 确保容器有明确的边界 */
-            border: 1px solid transparent;
-            /* 确保容器可以滚动 - 设置固定高度强制产生滚动条 */
-            max-height: 400px;
-            /* 焦点时的视觉反馈 */
-            outline: none;
-        }
-
-        /* 鼠标悬停时的视觉反馈 */
-        .module-logs:hover {
-            border-color: #333;
-            background-color: rgba(255, 255, 255, 0.02);
-        }
-
-        /* 获得焦点时的视觉反馈 */
-        .module-logs:focus {
-            border-color: #00ffff;
-            background-color: rgba(0, 255, 255, 0.05);
-            box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.2);
-        }
-
-        /* 滚动提示样式 */
-        .scroll-hint {
-            position: absolute;
-            top: 5px;
-            right: 5px;
-            background: rgba(0, 255, 255, 0.8);
-            color: #000;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-            font-weight: bold;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            pointer-events: none;
-            z-index: 10;
-        }
-
-        .module-logs:focus .scroll-hint {
-            opacity: 1;
-        }
-
-        .log-entry {
-            margin-bottom: 3px;
-            word-wrap: break-word;
-            cursor: pointer;
-            padding: 6px 8px;
-            border-radius: 4px;
-            transition: all 0.2s ease;
-            border-left: 4px solid transparent;
-        }
-
-        .log-entry:hover {
-            background-color: #2a2a2a;
-            transform: translateX(2px);
-        }
-
-        .log-entry.active {
-            background-color: #333;
-            box-shadow: 0 2px 4px rgba(0,255,0,0.3);
-        }
-
-        /* 日志级别颜色 - 只用边框颜色区分 */
-        .log-level-INFO { border-left-color: #00ff00; }
-        .log-level-WARN { border-left-color: #ffff00; }
-        .log-level-ERROR { border-left-color: #ff0000; }
-        .log-level-DEBUG { border-left-color: #00ffff; }
-
-        /* 聚合日志样式 */
-        .aggregated-log {
-            border-left: 3px solid #4dabf7 !important;
-            background: rgba(77, 171, 247, 0.1);
-        }
-
-        .aggregated-log .log-message {
-            font-weight: 500;
-        }
-
-        .aggregated-log:hover {
-            background: rgba(77, 171, 247, 0.2);
-        }
-
-        .log-message {
-            color: #cccccc;
-            font-size: 13px;
-            /* 限制最多显示1行 */
-            display: -webkit-box;
-            -webkit-line-clamp: 1;
-            line-clamp: 1; /* 标准属性 */
-            -webkit-box-orient: vertical;
+            padding: 5px;
+            background-color: #000000;
             overflow: hidden;
-            text-overflow: ellipsis;
-            line-height: 1.4;
-            max-height: calc(1.4em * 1); /* 1行的高度 */
-            word-wrap: break-word;
-            word-break: break-word;
+            min-height: 100px; /* 减少最小高度，主要依赖flex布局 */
         }
 
-        /* 聚合日志样式 */
-        .aggregated-log {
-            background-color: #1a1a2e !important;
-            border-left-width: 6px !important;
+        /* 自定义 Xterm.js 主题 */
+        .xterm {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+            font-size: 13px !important;
         }
 
-        .aggregated-log:hover {
-            background-color: #2a2a3e !important;
+        .xterm .xterm-viewport {
+            background-color: #000000 !important;
         }
 
-        .aggregated-log .log-message {
-            font-weight: bold;
-            color: #ffffff;
-            /* 聚合日志也限制1行显示 */
-            display: -webkit-box;
-            -webkit-line-clamp: 1;
-            line-clamp: 1;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            line-height: 1.4;
-            max-height: calc(1.4em * 1);
-            word-wrap: break-word;
-            word-break: break-word;
-        }
-
-        /* 日志移动动画 */
-
-        .log-updated {
-            background-color: #2a4a2a !important;
-            animation: logUpdate 0.5s ease-out;
-        }
-
-        @keyframes logUpdate {
-            0% {
-                background-color: #4a6a4a;
-                transform: scale(1.02);
-            }
-            100% {
-                background-color: #2a4a2a;
-                transform: scale(1);
-            }
-        }
-
-        /* 原始JSON展开样式 */
-        .raw-json {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.3s ease-in-out;
-            margin-bottom: 6px;
-        }
-
-        .raw-json.expanded {
-            max-height: 300px;
-        }
-
-        .json-container {
-            background-color: #000;
-            border: 1px solid #333;
-            border-radius: 4px;
-            padding: 8px;
-            margin-top: 4px;
-        }
-
-        .json-header {
-            display: flex;
-            justify-content: between;
-            align-items: center;
-            margin-bottom: 6px;
-            color: #00ff00;
-            font-size: 12px;
-        }
-
-        .json-close {
-            color: #666;
-            cursor: pointer;
-            font-size: 14px;
-            margin-left: auto;
-        }
-
-        .json-close:hover {
-            color: #fff;
-        }
-
-        .json-content {
-            color: #00ff00;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            line-height: 1.4;
-            white-space: pre-wrap;
-            overflow-x: auto;
-        }
-
-        /* 动态模块样式 */
-        .module-title { color: #00ffff; }
-
-        /* 滚动条样式 */
-        .module-logs::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .module-logs::-webkit-scrollbar-track {
-            background: #1a1a1a;
-        }
-
-        .module-logs::-webkit-scrollbar-thumb {
-            background: #333;
-            border-radius: 3px;
+        .xterm .xterm-screen {
+            background-color: #000000 !important;
         }
 
         .connection-status {
@@ -325,44 +212,19 @@
         .connected { background-color: #006600; color: #00ff00; }
         .disconnected { background-color: #660000; color: #ff0000; }
 
-        /* 模块名称显示区域样式 */
-        .module-names-section {
-            margin-top: 15px;
-            padding: 10px;
-            border: 1px solid #333;
-            border-radius: 5px;
-            background-color: #0a0a0a;
-        }
-
-        .module-names-header {
-            color: #00ffff;
-            font-size: 16px;
-            font-weight: bold;
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 15px;
-        }
-
-
-
-
-
-        /* 顶部复制按钮 */
+        /* 顶部按钮样式 */
         .header-copy-button {
             background-color: #ff6600;
             color: #ffffff;
             border: 2px solid #ff8833;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 12px;
             font-family: 'Consolas', monospace;
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
             box-shadow: 0 2px 6px rgba(255, 102, 0, 0.4);
-            margin-left: 15px;
         }
 
         .header-copy-button:hover {
@@ -377,20 +239,18 @@
             border-color: #66ff66;
         }
 
-        /* 顶部切换按钮 */
         .header-toggle-button {
             background-color: #0066ff;
             color: #ffffff;
             border: 2px solid #3388ff;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 12px;
             font-family: 'Consolas', monospace;
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
             box-shadow: 0 2px 6px rgba(0, 102, 255, 0.4);
-            margin-left: 10px;
         }
 
         .header-toggle-button:hover {
@@ -406,22 +266,32 @@
             box-shadow: 0 2px 6px rgba(68, 255, 68, 0.4);
         }
 
+        /* 模块名称显示区域样式 - 紧凑版 */
+        .module-names-section {
+            flex: 1;
+            min-width: 300px;
+        }
 
+        .module-names-header {
+            color: #00ffff;
+            font-size: 14px;
+            font-weight: bold;
+            margin: 0 0 5px 0;
+        }
 
         .module-names-list {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
-            min-height: 30px;
+            gap: 6px;
             align-items: center;
         }
 
         .module-name-tag {
             background-color: #1a4a1a;
             color: #00ff00;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
             font-family: 'Consolas', monospace;
             cursor: pointer;
             border: 1px solid #006600;
@@ -445,135 +315,356 @@
             font-style: italic;
             font-size: 12px;
         }
+
+        /* 确保页面布局稳定性 */
+        html, body {
+            height: 100%;
+            overflow-x: hidden;
+        }
+
+        /* 动态模块的样式优化 */
+        .dynamic-modules-area .module {
+            min-height: 400px; /* 动态模块最小高度 */
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 1200px) {
+            .static-modules-area {
+                flex: 0 0 600px; /* 小屏幕时减少静态区域宽度 */
+            }
+
+            .static-modules-area .module-terminal {
+                min-height: 200px; /* 小屏幕时减少最小高度 */
+            }
+        }
     </style>
 </head>
 <body>
     <div class="connection-status" id="connection-status">连接中...</div>
-    
+
     <div class="header">
-        <h1>K线聚合系统 - 模块监控 v3.8</h1>
-            <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
-            <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
-        </h1>
-        <div class="system-status">
-            运行时间: <span id="uptime">--:--:--</span> |
-            健康分数: <span id="health-score">--%</span> |
-            验证事件: <span id="validation-events">--</span> |
-            性能监控: <span id="performance-spans">--</span>
-        </div>
+        <div class="header-top-row">
+            <h1>K线聚合系统 - 模块监控 v6</h1>
 
-        <!-- 模块名称显示区域 -->
-        <div class="module-names-section">
-            <div class="module-names-header">
-                <span>📋 检测到的模块名称 (点击单个复制):</span>
+            <!-- 模块名称显示区域 -->
+            <div class="module-names-section">
+                
+                <div class="module-names-list" id="module-names-list">
+                    <span class="no-modules">暂无模块数据</span>
+                </div>
             </div>
-            <div class="module-names-list" id="module-names-list">
-                <span class="no-modules">暂无模块数据</span>
+
+            <div class="header-buttons">
+                <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
+                <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
             </div>
         </div>
     </div>
 
-    <div class="modules-container">
-        <!-- 实时原始日志模块 (默认隐藏) -->
-        <div class="module" id="realtime-logs-module" style="display: none;">
-            <div class="module-header">
-                <div class="module-title">实时原始日志 (RealtimeLogs)</div>
-                <div class="module-status status-waiting" id="realtime-logs-status">等待日志</div>
-            </div>
-            <div class="module-stats">
-                <div class="stat-line">
-                    <span>实时日志数:</span>
-                    <span id="realtime-log-count">0</span>
+    <div class="main-content">
+        <!-- 左侧静态模块区域 -->
+        <div class="static-modules-area">
+            <div class="static-modules-title">📊 静态模块区域 - 日志监控</div>
+            <div class="static-modules-content">
+                <!-- 实时原始日志模块 (默认隐藏) -->
+                <div class="module static-module" id="realtime-logs-module" style="display: none;">
+                    <div class="module-header">
+                        <div class="module-title">实时原始日志 (RealtimeLogs)</div>
+                        <div class="module-status status-waiting" id="realtime-logs-status">等待日志</div>
+                    </div>
+                    <div class="module-stats">
+                        <div class="stat-line">
+                            <span>实时日志数:</span>
+                            <span id="realtime-log-count">0</span>
+                        </div>
+                        <div class="stat-line">
+                            <span>最后更新:</span>
+                            <span id="last-log-time">--:--:--</span>
+                        </div>
+                        <div class="stat-line">
+                            <span>日志频率:</span>
+                            <span id="log-frequency">-- 条/秒</span>
+                        </div>
+                    </div>
+                    <div class="module-terminal" id="realtime-logs-terminal"></div>
                 </div>
-                <div class="stat-line">
-                    <span>最后更新:</span>
-                    <span id="last-log-time">--:--:--</span>
+
+                <!-- 原始日志快照模块 -->
+                <div class="module static-module" id="raw-logs-module">
+                    <div class="module-header">
+                        <div class="module-title">原始日志高频折叠 (RawLogSnapshot)</div>
+                        <div class="module-status status-waiting" id="raw-logs-status">等待折叠</div>
+                    </div>
+                    <div class="module-stats">
+                        <div class="stat-line">
+                            <span>折叠时间:</span>
+                            <span id="snapshot-timestamp">--:--:--</span>
+                        </div>
+                        <div class="stat-line">
+                            <span>原始日志数:</span>
+                            <span id="total-log-count">--</span>
+                        </div>
+                        <div class="stat-line">
+                            <span>折叠后条数:</span>
+                            <span id="displayed-log-count">--</span>
+                        </div>
+                    </div>
+                    <div class="module-terminal" id="raw-logs-terminal"></div>
                 </div>
-                <div class="stat-line">
-                    <span>日志频率:</span>
-                    <span id="log-frequency">-- 条/秒</span>
-                </div>
-            </div>
-            <div class="module-logs" id="realtime-logs-display" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
-                <div class="scroll-hint">可滚动</div>
-                <div class="log-entry">等待实时日志数据...</div>
+
             </div>
         </div>
 
-        <!-- 原始日志低频快照模块 -->
-        <div class="module" id="raw-logs-module">
-            <div class="module-header">
-                <div class="module-title">原始日志高频折叠 (RawLogSnapshot)</div>
-                <div class="module-status status-waiting" id="raw-logs-status">等待折叠</div>
-            </div>
-            <div class="module-stats">
-                <div class="stat-line">
-                    <span>折叠时间:</span>
-                    <span id="snapshot-timestamp">--:--:--</span>
-                </div>
-                <div class="stat-line">
-                    <span>原始日志数:</span>
-                    <span id="total-log-count">--</span>
-                </div>
-                <div class="stat-line">
-                    <span>折叠后条数:</span>
-                    <span id="displayed-log-count">--</span>
-                </div>
-            </div>
-            <div class="module-logs" id="raw-logs-display" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
-                <div class="scroll-hint">可滚动</div>
-                <button onclick="diagnoseContainer('raw-logs-display')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
-                <div class="log-entry">等待日志快照数据...</div>
-            </div>
+        <!-- 右侧动态模块区域 -->
+        <div class="dynamic-modules-area" id="dynamic-modules-container">
+            <!-- 动态模块将在这里创建 -->
         </div>
-
-        <!-- 动态模块将在这里创建 -->
     </div>
-
-
-
-
 
     <script>
-        // WebSocket连接
+        // Xterm.js 终端管理 (最终版：新日志显示在顶部)
+        class TerminalManager {
+            constructor() {
+                this.terminals = new Map();
+                this.fitAddons = new Map();
+                this.logBuffers = new Map(); // 存储每个模块的日志缓冲区
+                this.maxLines = 10000000;
+
+                this.terminalTheme = {
+                    background: '#000000',
+                    foreground: '#00ff00',
+                    cursor: '#00ff00',
+                    cursorAccent: '#000000',
+                    selection: 'rgba(255, 255, 255, 0.3)',
+                    black: '#000000',
+                    red: '#ff0000',
+                    green: '#00ff00',
+                    yellow: '#ffff00',
+                    blue: '#0066ff',
+                    magenta: '#ff00ff',
+                    cyan: '#00ffff',
+                    white: '#ffffff',
+                    brightBlack: '#666666',
+                    brightRed: '#ff6666',
+                    brightGreen: '#66ff66',
+                    brightYellow: '#ffff66',
+                    brightBlue: '#6666ff',
+                    brightMagenta: '#ff66ff',
+                    brightCyan: '#66ffff',
+                    brightWhite: '#ffffff'
+                };
+            }
+
+            // 创建新的终端实例
+            createTerminal(containerId, moduleName) {
+                const container = document.getElementById(containerId);
+                if (!container) {
+                    console.error(`找不到容器: ${containerId}`);
+                    return null;
+                }
+
+                const terminal = new Terminal({
+                    theme: this.terminalTheme,
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    fontSize: 13,
+                    lineHeight: 1.2,
+                    cursorBlink: false,
+                    scrollback: this.maxLines,
+                    convertEol: true,
+                    disableStdin: true, // 禁用输入，只用于显示
+                    allowTransparency: true,
+                    // 1GB 写入缓冲区，支持大量日志
+                    writeBufferSize: 1024 * 1024 * 1024
+                });
+
+                // 正确实例化 v5 插件
+                const fitAddon = new FitAddon.FitAddon();
+                const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+                // 加载插件
+                terminal.loadAddon(fitAddon);
+                terminal.loadAddon(webLinksAddon);
+
+                // 无需任何滚动状态管理和检测
+                // 用户完全控制滚动条位置
+
+                // 打开终端
+                terminal.open(container);
+
+                // 立即调整大小以填满容器
+                setTimeout(() => fitAddon.fit(), 0);
+
+                // 存储实例
+                this.terminals.set(moduleName, terminal);
+                this.fitAddons.set(moduleName, fitAddon);
+                this.logBuffers.set(moduleName, []); // 初始化日志缓冲区
+
+                console.log(`✅ 为模块 [${moduleName}] 创建了新日志显示在顶部的终端`);
+                return terminal;
+            }
+
+            // 获取终端实例
+            getTerminal(moduleName) {
+                return this.terminals.get(moduleName);
+            }
+
+            // 向终端写入日志 (命令行惯例：新日志在底部)
+            writeLog(moduleName, logText, level = 'INFO') {
+                const terminal = this.getTerminal(moduleName);
+                if (!terminal) {
+                    console.warn(`终端不存在: ${moduleName}`);
+                    return;
+                }
+
+                // 根据日志级别设置颜色
+                let colorCode = '';
+                switch (level.toUpperCase()) {
+                    case 'ERROR': colorCode = '\x1b[31m'; break; // 红色
+                    case 'WARN':  colorCode = '\x1b[33m'; break; // 黄色
+                    case 'INFO':  colorCode = '\x1b[32m'; break; // 绿色
+                    case 'DEBUG': colorCode = '\x1b[36m'; break; // 青色
+                    default:      colorCode = '\x1b[37m'; break; // 白色
+                }
+
+                const resetCode = '\x1b[0m'; // 重置颜色
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+
+                // 获取日志缓冲区
+                let logBuffer = this.logBuffers.get(moduleName);
+                if (!logBuffer) {
+                    logBuffer = [];
+                    this.logBuffers.set(moduleName, logBuffer);
+                }
+
+                // 将新日志追加到缓冲区底部（命令行惯例）
+                logBuffer.push(formattedLog);
+
+                // 限制缓冲区大小，防止内存溢出（移除最老的日志）
+                if (logBuffer.length > this.maxLines) {
+                    logBuffer.shift(); // 移除最老的日志（数组开头）
+                }
+
+                // 直接追加到终端底部，无需刷新整个终端
+                terminal.write(formattedLog + '\r\n');
+            }
+
+            // 刷新终端显示（带流控制）
+            refreshTerminal(moduleName) {
+                const terminal = this.getTerminal(moduleName);
+                const logBuffer = this.logBuffers.get(moduleName);
+
+                if (!terminal || !logBuffer) {
+                    return;
+                }
+
+                // 清空终端
+                terminal.clear();
+
+                // 分批写入日志以避免缓冲区溢出
+                this.writeLogsInBatches(terminal, logBuffer);
+            }
+
+            // 直接写入所有日志到终端
+            writeLogsInBatches(terminal, logBuffer) {
+                if (!logBuffer || logBuffer.length === 0) {
+                    return;
+                }
+
+                try {
+                    // 直接写入所有日志，不分批
+                    logBuffer.forEach(formattedLog => {
+                        terminal.write(formattedLog + '\r\n');
+                    });
+                    // 只在历史日志加载时显示日志，新日志追加时不显示
+                    // console.log(`🔄 [${moduleName}] 刷新终端，写入 ${logBuffer.length} 条日志`);
+                } catch (error) {
+                    console.error(`❌ 写入日志失败: ${error.message}`);
+                }
+            }
+
+            // 清空终端
+            clearTerminal(moduleName) {
+                const terminal = this.getTerminal(moduleName);
+                if (terminal) {
+                    terminal.clear();
+                    // 同时清空日志缓冲区
+                    this.logBuffers.set(moduleName, []);
+                }
+            }
+
+            // 调整终端大小
+            resizeTerminal(moduleName) {
+                const fitAddon = this.fitAddons.get(moduleName);
+                if (fitAddon && fitAddon.fit) {
+                    fitAddon.fit();
+                } else {
+                    console.log(`模块 ${moduleName} 的FitAddon不可用`);
+                }
+            }
+
+            // 销毁终端
+            destroyTerminal(moduleName) {
+                const terminal = this.getTerminal(moduleName);
+                if (terminal) {
+                    terminal.dispose();
+                    this.terminals.delete(moduleName);
+                    this.fitAddons.delete(moduleName);
+                    this.logBuffers.delete(moduleName); // 清理日志缓冲区
+                }
+            }
+        }
+
+        // 全局终端管理器实例
+        const terminalManager = new TerminalManager();
+
+        // WebSocket连接管理
         let ws = null;
         let reconnectInterval = null;
-
-        // 简化的前端状态管理（移除复杂聚合逻辑）
         let createdModules = new Set();
-        let moduleHistoryPages = {}; // 记录每个模块的历史数据页码
-        let moduleLoadingHistory = {}; // 记录每个模块是否正在加载历史数据
-        let moduleHasMoreHistory = {}; // 记录每个模块是否还有更多历史数据
+        let currentModuleNames = [];
+        let isInitialDataLoaded = false; // 标记是否已加载初始历史数据
 
+        // 初始化固定终端
+        function initializeFixedTerminals() {
+            // 创建原始日志快照终端
+            terminalManager.createTerminal('raw-logs-terminal', 'RawLogSnapshot');
 
+            console.log('🚀 固定终端初始化完成');
+        }
 
+        // WebSocket连接函数
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws`;
-            
+
             ws = new WebSocket(wsUrl);
-            
+
             ws.onopen = function() {
                 console.log('🔗 WebSocket已连接');
                 updateConnectionStatus(true);
+                // 重置初始数据加载标志，准备接收新的历史数据
+                isInitialDataLoaded = false;
                 if (reconnectInterval) {
                     clearInterval(reconnectInterval);
                     reconnectInterval = null;
                 }
             };
-            
+
             ws.onmessage = function(event) {
                 try {
                     const message = JSON.parse(event.data);
 
                     // 处理不同类型的消息
-                    if (message.type === 'DashboardUpdate') {
-                        // 处理聚合仪表板数据（统一格式）
-                        updateDashboardWithAggregatedData(message.data);
+                    if (message.type === 'SystemStatus') {
+                        // 处理系统状态更新（低频）
+                        updateSystemStatus(message.data);
                     } else if (message.type === 'LogEntry') {
-                        // 处理单个日志条目（仅用于实时日志显示）
+                        // 处理单个日志条目 - 立即增量显示
                         const logEntry = message.data;
-                        addLogEntryToRealtimeDisplay(logEntry);
+                        addLogEntryIncremental(logEntry);
+                    } else if (message.type === 'DashboardUpdate') {
+                        // 处理聚合数据更新 - 更新统计信息和原始日志快照
+                        updateDashboardData(message.data);
                     } else {
                         console.log('未知消息类型:', message.type);
                     }
@@ -581,7 +672,7 @@
                     console.error('解析WebSocket消息失败:', e);
                 }
             };
-            
+
             ws.onclose = function() {
                 console.log('WebSocket连接已关闭');
                 updateConnectionStatus(false);
@@ -589,13 +680,14 @@
                     reconnectInterval = setInterval(connectWebSocket, 5000);
                 }
             };
-            
+
             ws.onerror = function(error) {
                 console.error('WebSocket错误:', error);
                 updateConnectionStatus(false);
             };
         }
 
+        // 更新连接状态
         function updateConnectionStatus(connected) {
             const statusEl = document.getElementById('connection-status');
 
@@ -608,132 +700,261 @@
             }
         }
 
-        // 简化的实时日志显示（不再处理模块聚合）
-        function addLogEntryToRealtimeDisplay(logEntry) {
-            const container = document.getElementById('realtime-logs-display');
-            if (!container) return;
-
-            const logEl = document.createElement('div');
-            logEl.className = 'log-entry';
-            logEl.style.fontSize = '12px';
-            logEl.style.lineHeight = '1.3';
-            logEl.style.marginBottom = '2px';
-            logEl.style.wordBreak = 'break-all';
-
-            // 根据日志级别着色
-            if (logEntry.level === 'ERROR') {
-                logEl.style.color = '#ff0000';
-            } else if (logEntry.level === 'WARN') {
-                logEl.style.color = '#ffff00';
-            } else if (logEntry.level === 'INFO') {
-                logEl.style.color = '#00ff00';
-            } else {
-                logEl.style.color = '#cccccc';
-            }
-
-            // 格式化日志内容（使用当前时间）
-            const timestamp = getCurrentTimeString();
-            logEl.textContent = `[${timestamp}] ${logEntry.level} ${logEntry.target}: ${logEntry.message}`;
-
-            // 添加到容器顶部（最新的在上面）
-            container.insertBefore(logEl, container.firstChild);
-
-            // 限制实时日志显示数量为20条
-            const children = Array.from(container.children);
-            if (children.length > 20) {
-                for (let i = 20; i < children.length; i++) {
-                    container.removeChild(children[i]);
-                }
-            }
+        // 处理系统状态更新（简化版 - 仅记录日志）
+        function updateSystemStatus(data) {
+            console.log('📊 收到系统状态更新:', data);
+            // 系统状态信息已从界面移除，仅保留日志记录
         }
 
+        // 处理聚合数据更新
+        function updateDashboardData(data) {
+           // console.log('📈 收到聚合数据更新:', data);
 
+            // 更新聚合日志视图 (持续更新的全量数据)
+            if (data.raw_log_snapshot) {
+                const aggregatedData = data.raw_log_snapshot;
 
+                // 更新统计信息
+                if (aggregatedData.timestamp) {
+                    document.getElementById('snapshot-timestamp').textContent = aggregatedData.timestamp;
+                }
+                if (aggregatedData.total_count !== undefined) {
+                    document.getElementById('total-log-count').textContent = aggregatedData.total_count;
+                }
+                if (aggregatedData.logs && aggregatedData.logs.length !== undefined) {
+                    document.getElementById('displayed-log-count').textContent = aggregatedData.logs.length;
+                }
 
+                // 更新状态为运行中
+                const statusEl = document.getElementById('raw-logs-status');
+                if (statusEl) {
+                    statusEl.textContent = '运行中';
+                    statusEl.className = 'module-status status-running';
+                }
 
+                // 关键修复：每次收到数据都刷新终端内容
+                // 因为此模块的数据是全量下发的，所以每次都需要完全替换
+                if (aggregatedData.logs) { // 只要有logs字段就刷新，即使是空数组也要清空终端
+                    loadHistoryRawLogsToTerminal('RawLogSnapshot', aggregatedData.logs);
+                }
+            }
 
-
-        // 处理聚合仪表板数据
-        function updateDashboardWithAggregatedData(data) {
-
-            // 更新系统状态
-            updateSystemStatusFromAggregatedData(data);
-
-            // 更新实时日志
-            updateRealtimeLogsFromAggregatedData(data.realtime_log_data);
-
-            // 更新原始日志快照
-            updateRawLogSnapshotFromAggregatedData(data.raw_log_snapshot);
-
-            // 更新模块日志（使用后端聚合数据）
+            // 处理模块数据（统一的显示日志）
             if (data.module_logs) {
-                updateModuleLogsFromAggregatedData(data.module_logs);
-            }
-        }
+                for (const [moduleName, moduleData] of Object.entries(data.module_logs)) {
+                    // 确保模块容器存在
+                    ensureModuleContainer(moduleName);
 
-        // 移除旧的updateDashboard函数，统一使用updateDashboardWithAggregatedData
+                    // 更新模块统计信息
+                    updateModuleStatsFromData(moduleName, moduleData);
 
+                    // 只在初始连接时加载历史数据
+                    if (!isInitialDataLoaded) {
+                        // 加载统一的显示日志（包含普通日志和聚合日志）
+                        if (moduleData.display_logs && moduleData.display_logs.length > 0) {
+                            loadHistoryDisplayLogsToTerminal(moduleName, moduleData.display_logs);
+                        }
+                    }
 
-
-
-
-
-
-
-
-        // 从日志行中提取消息
-        function extractMessageFromLogLine(logLine) {
-            try {
-                // 首先尝试解析为JSON
-                const jsonLog = JSON.parse(logLine);
-                if (jsonLog.message) {
-                    return jsonLog.message;
-                }
-            } catch (e) {
-                // 如果不是JSON，尝试从文本格式中提取
-                // 格式通常是: [时间戳] LEVEL target: message
-                const parts = logLine.split(': ');
-                if (parts.length > 1) {
-                    return parts.slice(1).join(': ').trim();
-                }
-
-                // 如果没有冒号，尝试其他分隔符
-                const bracketParts = logLine.split('] ');
-                if (bracketParts.length > 1) {
-                    return bracketParts.slice(1).join('] ').trim();
+                    // 更新模块名称列表
+                    updateModuleNamesList([moduleName]);
                 }
             }
 
-            // 如果都失败了，返回整行（但这不应该发生）
-            return logLine.trim();
+            // 标记初始数据已加载
+            if (!isInitialDataLoaded) {
+                isInitialDataLoaded = true;
+                console.log('✅ 初始历史数据加载完成');
+            }
+        }
+        // 加载历史日志到终端（用于字符串格式的日志）
+        function loadHistoryLogsToTerminal(moduleName, historyLogs) {
+            const terminal = terminalManager.getTerminal(moduleName);
+            if (!terminal || !historyLogs || historyLogs.length === 0) {
+                return;
+            }
+
+            console.log(`📚 为模块 [${moduleName}] 加载 ${historyLogs.length} 条历史日志`);
+
+            // 清空终端和缓冲区
+            terminalManager.clearTerminal(moduleName);
+
+            // 按照命令行惯例：最老的日志在上方，最新的在下方
+            // 如果后端发送的是最新在前的顺序，需要反转
+            // 先检查并调试历史日志的顺序
+            console.log(`🔍 [${moduleName}] 历史日志顺序检查:`, {
+                总数: historyLogs.length,
+                第一条: historyLogs[0]?.substring(0, 50) + '...',
+                最后一条: historyLogs[historyLogs.length - 1]?.substring(0, 50) + '...'
+            });
+
+            // 反转历史日志顺序，确保最老的在上方
+            const orderedLogs = [...historyLogs].reverse();
+
+            const logBuffer = terminalManager.logBuffers.get(moduleName) || [];
+            orderedLogs.forEach(logText => {
+                const level = extractLogLevelFromText(logText);
+                const colorCode = getColorCodeForLevel(level);
+                const resetCode = '\x1b[0m';
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+                logBuffer.push(formattedLog); // 追加到底部
+            });
+            terminalManager.logBuffers.set(moduleName, logBuffer);
+
+            // 刷新终端显示
+            terminalManager.refreshTerminal(moduleName);
+            console.log(`📍 模块 [${moduleName}] 历史日志加载完成，新日志将显示在底部`);
         }
 
-        // 从日志行中提取级别
-        function extractLevelFromLogLine(logLine) {
-            try {
-                // 首先尝试解析为JSON
-                const jsonLog = JSON.parse(logLine);
-                if (jsonLog.level) {
-                    return jsonLog.level.toUpperCase();
-                }
-            } catch (e) {
-                // 如果不是JSON，从文本中查找级别
-                if (logLine.includes('ERROR')) return 'ERROR';
-                if (logLine.includes('WARN')) return 'WARN';
-                if (logLine.includes('INFO')) return 'INFO';
-                if (logLine.includes('DEBUG')) return 'DEBUG';
-                if (logLine.includes('TRACE')) return 'TRACE';
+        // 获取日志级别对应的颜色代码
+        function getColorCodeForLevel(level) {
+            switch (level.toUpperCase()) {
+                case 'ERROR': return '\x1b[31m'; // 红色
+                case 'WARN':  return '\x1b[33m'; // 黄色
+                case 'INFO':  return '\x1b[32m'; // 绿色
+                case 'DEBUG': return '\x1b[36m'; // 青色
+                case 'AGGREGATE': return '\x1b[93m'; // 亮黄色（高频聚合）
+                default:      return '\x1b[37m'; // 白色
+            }
+        }
+
+        // 加载历史显示日志到终端（用于DisplayLogEntry格式的日志）
+        function loadHistoryDisplayLogsToTerminal(moduleName, displayLogs) {
+            const terminal = terminalManager.getTerminal(moduleName);
+            if (!terminal || !displayLogs || displayLogs.length === 0) {
+                return;
+            }
+
+            console.log(`📚 为模块 [${moduleName}] 加载 ${displayLogs.length} 条历史显示日志`);
+
+            // 清空终端和缓冲区
+            terminalManager.clearTerminal(moduleName);
+
+            // 按照命令行惯例：最老的日志在上方，最新的在下方
+            // 检查显示日志的时间戳顺序
+            if (displayLogs.length > 1) {
+                const firstTime = new Date(displayLogs[0].timestamp);
+                const lastTime = new Date(displayLogs[displayLogs.length - 1].timestamp);
+                console.log(`🔍 [${moduleName}] 显示日志时间顺序:`, {
+                    总数: displayLogs.length,
+                    第一条时间: firstTime.toLocaleTimeString(),
+                    最后一条时间: lastTime.toLocaleTimeString(),
+                    是否需要反转: firstTime > lastTime ? '是' : '否'
+                });
+            }
+
+            // 根据时间戳排序，确保最老的在前面
+            const orderedDisplayLogs = [...displayLogs].sort((a, b) =>
+                new Date(a.timestamp) - new Date(b.timestamp)
+            );
+
+            const logBuffer = terminalManager.logBuffers.get(moduleName) || [];
+            orderedDisplayLogs.forEach(displayEntry => {
+                const timestamp = new Date(displayEntry.timestamp).toLocaleTimeString();
+                // 聚合日志的消息已经包含了聚合信息，不需要额外添加
+                const logText = `[${timestamp}] ${displayEntry.level} ${displayEntry.message}`;
+
+                // 聚合日志使用特殊颜色
+                const level = displayEntry.is_aggregated ? 'AGGREGATE' : displayEntry.level;
+                const colorCode = getColorCodeForLevel(level);
+                const resetCode = '\x1b[0m';
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+                logBuffer.push(formattedLog); // 追加到底部
+            });
+            terminalManager.logBuffers.set(moduleName, logBuffer);
+
+            // 刷新终端显示
+            terminalManager.refreshTerminal(moduleName);
+            console.log(`📍 模块 [${moduleName}] 历史显示日志加载完成，新日志将显示在底部`);
+        }
+
+        // 加载原始日志快照到终端
+        function loadHistoryRawLogsToTerminal(moduleName, rawLogs) {
+            const terminal = terminalManager.getTerminal(moduleName);
+            if (!terminal || !rawLogs || rawLogs.length === 0) {
+                return;
+            }
+
+            console.log(`📚 为模块 [${moduleName}] 加载 ${rawLogs.length} 条原始日志快照`);
+
+            // 清空终端和缓冲区
+            terminalManager.clearTerminal(moduleName);
+
+            const logBuffer = terminalManager.logBuffers.get(moduleName) || [];
+            rawLogs.forEach(logText => {
+                // 从日志文本中提取级别并应用相应颜色
+                const level = extractLogLevelFromText(logText);
+
+                // 检查是否是聚合日志
+                const isAggregated = logText.includes('🔄') && logText.includes('聚合');
+                const finalLevel = isAggregated ? 'AGGREGATE' : level;
+
+                const colorCode = getColorCodeForLevel(finalLevel);
+                const resetCode = '\x1b[0m';
+                const formattedLog = `${colorCode}${logText}${resetCode}`;
+                logBuffer.push(formattedLog);
+            });
+            terminalManager.logBuffers.set(moduleName, logBuffer);
+
+            // 刷新终端显示
+            terminalManager.refreshTerminal(moduleName);
+            console.log(`📍 模块 [${moduleName}] 原始日志快照加载完成`);
+        }
+
+
+
+
+
+        // 从文本中提取日志级别
+        function extractLogLevelFromText(logText) {
+            if (typeof logText === 'string') {
+                if (logText.includes('ERROR')) return 'ERROR';
+                if (logText.includes('WARN')) return 'WARN';
+                if (logText.includes('INFO')) return 'INFO';
+                if (logText.includes('DEBUG')) return 'DEBUG';
             }
             return 'INFO';
         }
 
-        // 跟踪已创建的模块（已在上面声明）
+        // 从数据更新模块统计信息
+        function updateModuleStatsFromData(moduleName, moduleData) {
+            const containerId = getModuleContainerId(moduleName);
 
-        function getModuleContainerId(moduleName) {
-            // 将模块名转换为有效的HTML ID
-            return 'module-' + moduleName.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+            // 更新总日志数
+            const totalEl = document.getElementById(`${containerId}-total`);
+            if (totalEl && moduleData.total_logs !== undefined) {
+                totalEl.textContent = moduleData.total_logs;
+            }
+
+            // 更新错误数
+            const errorsEl = document.getElementById(`${containerId}-errors`);
+            if (errorsEl && moduleData.error_count !== undefined) {
+                errorsEl.textContent = moduleData.error_count;
+            }
+
+            // 更新最后更新时间
+            const lastUpdateEl = document.getElementById(`${containerId}-last-update`);
+            if (lastUpdateEl) {
+                lastUpdateEl.textContent = new Date().toLocaleTimeString();
+            }
+
+            // 更新状态为运行中
+            const statusEl = document.getElementById(`${containerId}-status`);
+            if (statusEl) {
+                statusEl.textContent = '运行中';
+                statusEl.className = 'module-status status-running';
+            }
         }
 
+
+
+
+
+
+
+
+
+        // 确保模块容器存在
         function ensureModuleContainer(moduleName) {
             if (createdModules.has(moduleName)) {
                 return; // 模块已存在
@@ -741,7 +962,7 @@
 
             console.log('🆕 创建模块:', moduleName);
             const containerId = getModuleContainerId(moduleName);
-            const logsId = containerId + '-logs';
+            const terminalId = containerId + '-terminal';
 
             // 创建模块容器
             const moduleDiv = document.createElement('div');
@@ -765,561 +986,158 @@
                         <span id="${containerId}-last-update">--:--:--</span>
                     </div>
                 </div>
-                <div class="module-logs" id="${logsId}" tabindex="0" title="点击获得焦点，然后滚动查看历史日志">
-                    <div class="scroll-hint">可滚动</div>
-                    <button onclick="testScroll('${logsId}')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff6600; color: white; border: none; border-radius: 3px;">测试滚动</button>
-                    <button onclick="addTestContent('${logsId}')" style="position: absolute; top: 45px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #00ff00; color: black; border: none; border-radius: 3px;">添加测试内容</button>
-                    <button onclick="diagnoseContainer('${logsId}')" style="position: absolute; top: 65px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
-                    <div class="log-entry">等待日志数据...</div>
-                </div>
+                <div class="module-terminal" id="${terminalId}"></div>
             `;
 
-            // 添加到模块容器中
-            const modulesContainer = document.querySelector('.modules-container');
-            modulesContainer.appendChild(moduleDiv);
+            // 添加到动态模块容器中
+            const dynamicModulesContainer = document.querySelector('.dynamic-modules-area');
+            dynamicModulesContainer.appendChild(moduleDiv);
 
-            // 为新创建的日志容器绑定滚动事件
-            const logsContainer = moduleDiv.querySelector('.module-logs');
-            if (logsContainer) {
-                // 点击获得焦点，使鼠标滚轮能够正常工作
-                logsContainer.addEventListener('click', function(event) {
-                    // 如果点击的不是日志条目，则获得焦点
-                    if (!event.target.closest('.log-entry')) {
-                        logsContainer.focus();
-                        console.log(`🎯 模块 [${moduleName}] 点击获得焦点`, {
-                            hasFocus: document.activeElement === logsContainer,
-                            tabIndex: logsContainer.tabIndex,
-                            canScroll: logsContainer.scrollHeight > logsContainer.clientHeight
-                        });
-                    }
-                });
-
-                // 鼠标进入时自动获得焦点（更好的用户体验）
-                logsContainer.addEventListener('mouseenter', function(event) {
-                    logsContainer.focus();
-                    console.log(`🖱️ 模块 [${moduleName}] 鼠标进入获得焦点`, {
-                        hasFocus: document.activeElement === logsContainer,
-                        tabIndex: logsContainer.tabIndex,
-                        canScroll: logsContainer.scrollHeight > logsContainer.clientHeight
-                    });
-                });
-
-                // 添加详细的滚动事件日志
-                logsContainer.addEventListener('wheel', function(event) {
-                    const canScroll = logsContainer.scrollHeight > logsContainer.clientHeight;
-                    console.log(`🖱️ 模块 [${moduleName}] 鼠标滚轮事件:`, {
-                        deltaY: event.deltaY,
-                        deltaX: event.deltaX,
-                        target: event.target.tagName,
-                        scrollTop: logsContainer.scrollTop,
-                        scrollHeight: logsContainer.scrollHeight,
-                        clientHeight: logsContainer.clientHeight,
-                        canScroll: canScroll
-                    });
-
-                    // 手动处理滚动，确保滚动事件被触发
-                    if (canScroll) {
-                        const currentScrollTop = logsContainer.scrollTop;
-                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
-                        const newScrollTop = Math.max(0, Math.min(
-                            logsContainer.scrollHeight - logsContainer.clientHeight,
-                            currentScrollTop + scrollAmount
-                        ));
-
-                        console.log(`🔄 模块 [${moduleName}] 手动滚动: ${currentScrollTop} -> ${newScrollTop}`);
-                        logsContainer.scrollTop = newScrollTop;
-
-                        // 手动触发滚动事件
-                        const scrollEvent = new Event('scroll', { bubbles: true });
-                        logsContainer.dispatchEvent(scrollEvent);
-                    }
-
-                    // 阻止默认滚动和事件冒泡
-                    event.preventDefault();
-                    event.stopPropagation();
-                });
-
-                // 阻止触摸滚动事件冒泡（移动设备支持）
-                logsContainer.addEventListener('touchmove', function(event) {
-                    console.log(`👆 模块 [${moduleName}] 触摸滚动事件`);
-                    event.stopPropagation();
-                });
-
-                // 添加滚动事件监听器，用于加载历史数据
-                logsContainer.addEventListener('scroll', function(event) {
-                    console.log(`📜 模块 [${moduleName}] 滚动事件:`, {
-                        scrollTop: logsContainer.scrollTop,
-                        scrollHeight: logsContainer.scrollHeight,
-                        clientHeight: logsContainer.clientHeight,
-                        canScrollMore: logsContainer.scrollHeight > logsContainer.clientHeight
-                    });
-                    handleModuleScroll(event, moduleName, logsContainer);
-                });
-            }
+            // 创建终端
+            terminalManager.createTerminal(terminalId, moduleName);
 
             createdModules.add(moduleName);
         }
 
-        // 更新模块名称列表（从聚合数据中提取）
-        function updateModuleNamesFromAggregatedData(moduleLogs) {
-            const moduleNames = Object.keys(moduleLogs || {});
-            updateModuleNamesList(moduleNames);
-        }
-
-
-
-
-
-        // 跟踪当前展开的日志
-        let activeLogId = null;
-
-        // 测试滚动函数
-        function testScroll(containerId) {
-            const container = document.getElementById(containerId);
-            if (container) {
-                console.log(`🧪 测试滚动 [${containerId}]:`, {
-                    scrollTop: container.scrollTop,
-                    scrollHeight: container.scrollHeight,
-                    clientHeight: container.clientHeight,
-                    canScroll: container.scrollHeight > container.clientHeight,
-                    hasFocus: document.activeElement === container,
-                    tabIndex: container.tabIndex
-                });
-
-                // 手动触发滚动到顶部
-                container.scrollTop = 0;
-                console.log(`🧪 手动滚动到顶部后:`, {
-                    scrollTop: container.scrollTop
-                });
-
-                // 手动触发滚动事件
-                const scrollEvent = new Event('scroll', { bubbles: true });
-                container.dispatchEvent(scrollEvent);
-                console.log(`🧪 手动触发滚动事件完成`);
-            } else {
-                console.error(`🧪 找不到容器: ${containerId}`);
+        // 更新固定模块状态
+        function updateFixedModuleStatus() {
+            // 更新原始快照模块状态
+            const rawLogsStatusEl = document.getElementById('raw-logs-status');
+            if (rawLogsStatusEl) {
+                rawLogsStatusEl.textContent = '运行中';
+                rawLogsStatusEl.className = 'module-status status-running';
             }
         }
 
-        // 添加测试内容函数
-        function addTestContent(containerId) {
-            const container = document.getElementById(containerId);
-            if (container) {
-                console.log(`🧪 为容器 [${containerId}] 添加测试内容`);
 
-                // 清空现有内容
-                container.innerHTML = `
-                    <div class="scroll-hint">可滚动</div>
-                    <button onclick="testScroll('${containerId}')" style="position: absolute; top: 25px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff6600; color: white; border: none; border-radius: 3px;">测试滚动</button>
-                    <button onclick="addTestContent('${containerId}')" style="position: absolute; top: 45px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #00ff00; color: black; border: none; border-radius: 3px;">添加测试内容</button>
-                    <button onclick="diagnoseContainer('${containerId}')" style="position: absolute; top: 65px; right: 5px; z-index: 20; padding: 2px 6px; font-size: 10px; background: #ff00ff; color: white; border: none; border-radius: 3px;">诊断容器</button>
-                `;
 
-                // 添加50条测试日志
-                for (let i = 1; i <= 50; i++) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-level-INFO';
-                    logEntry.innerHTML = `<div class="log-message">测试日志条目 ${i} - 这是一条用于测试滚动功能的日志</div>`;
-                    container.appendChild(logEntry);
-                }
+        // 增量添加日志条目 - 简化版（主要通过 DashboardUpdate 处理）
+        function addLogEntryIncremental(logEntry) {
+            // 只处理未被聚合的日志，直接添加到对应模块终端
+            const moduleName = logEntry.target || 'unknown';
+            ensureModuleContainer(moduleName);
 
-                // 存储测试数据到容器属性
-                const testLogs = [];
-                for (let i = 1; i <= 100; i++) {
-                    testLogs.push({
-                        message: `历史测试日志 ${i} - 这是历史数据`,
-                        level: 'INFO',
-                        timestamp: new Date().toISOString(),
-                        is_aggregated: false
-                    });
-                }
-                container.setAttribute('data-all-logs', JSON.stringify(testLogs));
-                container.setAttribute('data-current-display-count', '50');
+            const logText = formatLogEntry(logEntry);
+            const level = extractLogLevel(logEntry);
+            terminalManager.writeLog(moduleName, logText, level);
 
-                console.log(`🧪 添加完成，容器现在可以滚动:`, {
-                    scrollHeight: container.scrollHeight,
-                    clientHeight: container.clientHeight,
-                    canScroll: container.scrollHeight > container.clientHeight,
-                    totalTestLogs: testLogs.length
-                });
-            } else {
-                console.error(`🧪 找不到容器: ${containerId}`);
-            }
+            // 更新固定模块状态
+            updateFixedModuleStatus();
+
+            // 更新模块名称列表
+            updateModuleNamesList([moduleName]);
+
+            // 更新统计信息
+            updateModuleStats(moduleName, logEntry);
         }
 
-        // 诊断容器函数
-        function diagnoseContainer(containerId) {
-            const container = document.getElementById(containerId);
-            if (container) {
-                const computedStyle = window.getComputedStyle(container);
-                const children = Array.from(container.children);
-
-                console.log(`🔍 容器 [${containerId}] 诊断报告:`);
-                console.log(`📏 尺寸信息:`, {
-                    scrollHeight: container.scrollHeight,
-                    clientHeight: container.clientHeight,
-                    offsetHeight: container.offsetHeight,
-                    scrollWidth: container.scrollWidth,
-                    clientWidth: container.clientWidth,
-                    offsetWidth: container.offsetWidth
-                });
-                console.log(`🎨 CSS样式:`, {
-                    height: computedStyle.height,
-                    maxHeight: computedStyle.maxHeight,
-                    minHeight: computedStyle.minHeight,
-                    overflowY: computedStyle.overflowY,
-                    overflowX: computedStyle.overflowX,
-                    display: computedStyle.display,
-                    position: computedStyle.position,
-                    boxSizing: computedStyle.boxSizing
-                });
-                console.log(`👶 子元素信息:`, {
-                    childCount: children.length,
-                    childTypes: children.map(child => child.tagName + '.' + child.className),
-                    totalChildHeight: children.reduce((sum, child) => sum + child.offsetHeight, 0)
-                });
-                console.log(`🔄 滚动状态:`, {
-                    canScroll: container.scrollHeight > container.clientHeight,
-                    scrollTop: container.scrollTop,
-                    maxScrollTop: container.scrollHeight - container.clientHeight,
-                    hasScrollbar: container.scrollHeight > container.clientHeight
-                });
-            } else {
-                console.error(`🔍 找不到容器: ${containerId}`);
-            }
-        }
-
-        // 处理模块滚动事件，加载更多显示数据
-        function handleModuleScroll(event, moduleName, container) {
-            // 检查是否滚动到顶部（允许5px误差）
-            if (container.scrollTop <= 5) {
-                console.log(`🔄 模块 [${moduleName}] 滚动到顶部，scrollTop: ${container.scrollTop}`);
-                loadMoreDisplayLogsForModule(moduleName, container);
-            }
-        }
-
-        // 为指定模块加载更多显示数据（从本地数据）
-        function loadMoreDisplayLogsForModule(moduleName, container) {
-            // 防止重复加载
-            if (moduleLoadingHistory[moduleName]) {
-                return;
+        // 格式化日志条目
+        function formatLogEntry(logEntry) {
+            if (typeof logEntry === 'string') {
+                return logEntry;
             }
 
-            // 获取存储的完整数据
-            const allLogsJson = container.getAttribute('data-all-logs');
-            if (!allLogsJson) {
-                console.log(`ℹ️ 模块 [${moduleName}] 没有更多数据`);
-                return;
-            }
+            if (logEntry.message) {
+                const timestamp = logEntry.timestamp ? new Date(logEntry.timestamp).toLocaleTimeString() : '';
+                const level = logEntry.level || 'INFO';
+                const module = logEntry.module || '';
 
-            const allLogs = JSON.parse(allLogsJson);
-            const currentDisplayCount = parseInt(container.getAttribute('data-current-display-count') || '20');
-
-            // 检查是否还有更多数据
-            if (currentDisplayCount >= allLogs.length) {
-                console.log(`ℹ️ 模块 [${moduleName}] 已显示所有数据`);
-                return;
-            }
-
-            moduleLoadingHistory[moduleName] = true;
-
-            try {
-                console.log(`📜 加载模块 [${moduleName}] 的更多显示数据，当前: ${currentDisplayCount}/${allLogs.length}`);
-
-                // 显示加载指示器
-                showLoadingIndicator(container);
-
-                // 模拟异步加载（给用户反馈）
-                setTimeout(() => {
-                    const nextBatchSize = 20;
-                    const nextDisplayCount = Math.min(currentDisplayCount + nextBatchSize, allLogs.length);
-                    const newLogs = allLogs.slice(currentDisplayCount, nextDisplayCount);
-
-                    if (newLogs.length > 0) {
-                        prependDisplayLogsToContainer(container, newLogs, moduleName, currentDisplayCount);
-                        container.setAttribute('data-current-display-count', nextDisplayCount.toString());
-                        console.log(`✅ 成功加载 ${newLogs.length} 条显示日志`);
-
-                        // 更新"加载更多"提示
-                        updateLoadMoreIndicator(container, allLogs.length, nextDisplayCount);
-                    }
-
-                    moduleLoadingHistory[moduleName] = false;
-                    hideLoadingIndicator(container);
-                }, 100); // 100ms延迟，给用户反馈
-
-            } catch (error) {
-                console.error(`❌ 加载模块 [${moduleName}] 显示数据失败:`, error);
-                moduleLoadingHistory[moduleName] = false;
-                hideLoadingIndicator(container);
-            }
-        }
-
-        // 在容器顶部添加显示日志
-        function prependDisplayLogsToContainer(container, newLogs, moduleName, startIndex) {
-            const containerId = getModuleContainerId(moduleName);
-            const fragment = document.createDocumentFragment();
-
-            // 记录当前滚动位置
-            const currentScrollTop = container.scrollTop;
-            const currentScrollHeight = container.scrollHeight;
-
-            // 为每个新日志创建元素
-            newLogs.forEach((logEntry, index) => {
-                const logElement = createAggregatedLogElement(logEntry, containerId, startIndex + index);
-                fragment.appendChild(logElement);
-            });
-
-            // 找到加载更多指示器的位置，在它之前插入
-            const loadMoreIndicator = container.querySelector('.load-more-indicator');
-            if (loadMoreIndicator) {
-                container.insertBefore(fragment, loadMoreIndicator);
-            } else {
-                // 如果没有指示器，插入到容器顶部
-                container.insertBefore(fragment, container.firstChild);
-            }
-
-            // 调整滚动位置，保持用户当前的视图
-            const newScrollHeight = container.scrollHeight;
-            const heightDifference = newScrollHeight - currentScrollHeight;
-            container.scrollTop = currentScrollTop + heightDifference;
-        }
-
-        // 更新"加载更多"指示器
-        function updateLoadMoreIndicator(container, totalLogs, currentDisplayCount) {
-            const indicator = container.querySelector('.load-more-indicator');
-            if (indicator) {
-                if (currentDisplayCount >= totalLogs) {
-                    indicator.textContent = '已显示所有日志';
-                    indicator.style.cursor = 'default';
+                if (timestamp && module) {
+                    return `[${timestamp}] ${level} ${module}: ${logEntry.message}`;
+                } else if (timestamp) {
+                    return `[${timestamp}] ${level}: ${logEntry.message}`;
                 } else {
-                    indicator.textContent = `还有 ${totalLogs - currentDisplayCount} 条日志，滚动到顶部加载更多`;
-                }
-            }
-        }
-
-        // 显示加载指示器
-        function showLoadingIndicator(container) {
-            // 检查是否已经有加载指示器
-            let indicator = container.querySelector('.loading-indicator');
-            if (!indicator) {
-                indicator = document.createElement('div');
-                indicator.className = 'loading-indicator';
-                indicator.style.cssText = `
-                    padding: 10px;
-                    text-align: center;
-                    color: #888;
-                    font-size: 12px;
-                    border-bottom: 1px solid #333;
-                `;
-                indicator.textContent = '⏳ 加载历史数据...';
-                container.insertBefore(indicator, container.firstChild);
-            }
-        }
-
-        // 隐藏加载指示器
-        function hideLoadingIndicator(container) {
-            const indicator = container.querySelector('.loading-indicator');
-            if (indicator) {
-                indicator.remove();
-            }
-        }
-
-        // 为原始日志快照模块加载更多数据（专用函数）
-        function loadMoreDisplayLogsForRawSnapshot(container) {
-            const moduleName = 'RawLogSnapshot';
-
-            if (moduleLoadingHistory[moduleName]) {
-                console.log(`⏳ 原始日志快照模块正在加载历史数据，跳过重复请求`);
-                return;
-            }
-
-            const allLogsJson = container.getAttribute('data-all-logs');
-            if (!allLogsJson) {
-                console.log(`⚠️ 原始日志快照模块没有存储的完整数据`);
-                return;
-            }
-
-            const allLogs = JSON.parse(allLogsJson);
-            const currentDisplayCount = parseInt(container.getAttribute('data-current-display-count') || '0');
-
-            if (currentDisplayCount >= allLogs.length) {
-                console.log(`✅ 原始日志快照模块已显示所有数据 (${currentDisplayCount}/${allLogs.length})`);
-                return;
-            }
-
-            console.log(`🔄 原始日志快照模块开始加载更多数据: 当前显示 ${currentDisplayCount}/${allLogs.length}`);
-
-            // 设置加载状态
-            moduleLoadingHistory[moduleName] = true;
-            showLoadingIndicator(container);
-
-            // 模拟异步加载（给用户反馈）
-            setTimeout(() => {
-                const nextBatchSize = 20;
-                const nextDisplayCount = Math.min(currentDisplayCount + nextBatchSize, allLogs.length);
-                const newLogs = allLogs.slice(currentDisplayCount, nextDisplayCount);
-
-                if (newLogs.length > 0) {
-                    // 为原始日志快照模块添加新的日志元素
-                    prependDisplayLogsToRawSnapshotContainer(container, newLogs, currentDisplayCount);
-                    container.setAttribute('data-current-display-count', nextDisplayCount.toString());
-                    console.log(`✅ 原始日志快照模块成功加载 ${newLogs.length} 条显示日志`);
-
-                    // 更新"加载更多"提示
-                    updateLoadMoreIndicator(container, allLogs.length, nextDisplayCount);
-                }
-
-                moduleLoadingHistory[moduleName] = false;
-                hideLoadingIndicator(container);
-            }, 100); // 100ms延迟，给用户反馈
-        }
-
-        // 在原始日志快照容器顶部添加显示日志（专用函数）
-        function prependDisplayLogsToRawSnapshotContainer(container, newLogs, startIndex) {
-            const fragment = document.createDocumentFragment();
-
-            // 记录当前滚动位置
-            const currentScrollTop = container.scrollTop;
-            const currentScrollHeight = container.scrollHeight;
-
-            // 为每个新日志创建元素
-            newLogs.forEach((logEntry, index) => {
-                const logElement = createAggregatedLogElement(logEntry, 'raw-logs', startIndex + index);
-                fragment.appendChild(logElement);
-            });
-
-            // 找到加载更多指示器的位置，在它之前插入
-            const loadMoreIndicator = container.querySelector('.load-more-indicator');
-            if (loadMoreIndicator) {
-                container.insertBefore(fragment, loadMoreIndicator);
-            } else {
-                // 如果没有指示器，找到第一个日志条目，在它之前插入
-                const firstLogEntry = container.querySelector('.log-entry');
-                if (firstLogEntry) {
-                    container.insertBefore(fragment, firstLogEntry);
-                } else {
-                    // 如果没有日志条目，直接添加到容器末尾
-                    container.appendChild(fragment);
+                    return `${level}: ${logEntry.message}`;
                 }
             }
 
-            // 调整滚动位置，保持用户当前的视图
-            const newScrollHeight = container.scrollHeight;
-            const heightDifference = newScrollHeight - currentScrollHeight;
-            container.scrollTop = currentScrollTop + heightDifference;
+            return JSON.stringify(logEntry);
         }
 
-
-
-        // 切换JSON显示
-        function toggleJson(logId) {
-            // 隐藏其他已展开的JSON
-            if (activeLogId && activeLogId !== logId) {
-                hideJson(activeLogId);
+        // 提取日志级别
+        function extractLogLevel(logEntry) {
+            if (typeof logEntry === 'object' && logEntry.level) {
+                return logEntry.level.toUpperCase();
             }
 
-            const jsonDiv = document.getElementById(`json-${logId}`);
-            const logEntry = document.querySelector(`[data-log-id="${logId}"]`);
-
-            if (jsonDiv.classList.contains('expanded')) {
-                hideJson(logId);
-            } else {
-                showJson(logId);
+            if (typeof logEntry === 'string') {
+                if (logEntry.includes('ERROR')) return 'ERROR';
+                if (logEntry.includes('WARN')) return 'WARN';
+                if (logEntry.includes('INFO')) return 'INFO';
+                if (logEntry.includes('DEBUG')) return 'DEBUG';
             }
+
+            return 'INFO';
         }
 
-        // 显示JSON
-        function showJson(logId) {
-            const jsonDiv = document.getElementById(`json-${logId}`);
-            const logEntry = document.querySelector(`[data-log-id="${logId}"]`);
-
-            if (jsonDiv && logEntry) {
-                jsonDiv.classList.add('expanded');
-                logEntry.classList.add('active');
-                activeLogId = logId;
-            }
+        // 获取模块容器ID
+        function getModuleContainerId(moduleName) {
+            return 'module-' + moduleName.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
         }
 
-        // 隐藏JSON
-        function hideJson(logId) {
-            const jsonDiv = document.getElementById(`json-${logId}`);
-            const logEntry = document.querySelector(`[data-log-id="${logId}"]`);
-
-            if (jsonDiv && logEntry) {
-                jsonDiv.classList.remove('expanded');
-                logEntry.classList.remove('active');
-                if (activeLogId === logId) {
-                    activeLogId = null;
-                }
-            }
-        }
-
-        // HTML转义函数
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // 获取当前时间的格式化字符串
-        function getCurrentTimeString() {
-            return new Date().toLocaleTimeString('zh-CN', {
-                hour12: false,
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
-        }
-
-        // 存储每个模块的最后更新时间和日志计数
-        let moduleLastUpdateTimes = {};
-        let moduleLogCounts = {};
-
-        // 获取日志级别优先级（用于旧代码兼容）
-        function getLogLevelPriority(level) {
-            const priorities = {
-                'TRACE': 1,
-                'DEBUG': 2,
-                'INFO': 3,
-                'WARN': 4,
-                'ERROR': 5
-            };
-            return priorities[level] || 3;
-        }
-
-        // 存储当前的模块名称列表
-        let currentModuleNames = [];
-
-        // 更新模块名称列表
-        function updateModuleNamesList(moduleNames) {
+        // 更新模块名称列表（增量版本）
+        function updateModuleNamesList(newModuleNames) {
             const container = document.getElementById('module-names-list');
 
-            // 更新全局模块名称列表
-            currentModuleNames = moduleNames || [];
+            // 合并新模块名到现有列表
+            newModuleNames.forEach(moduleName => {
+                if (!currentModuleNames.includes(moduleName)) {
+                    currentModuleNames.push(moduleName);
 
-            if (!moduleNames || moduleNames.length === 0) {
-                container.innerHTML = '<span class="no-modules">暂无模块数据</span>';
-                return;
+                    // 创建新的模块标签
+                    const tag = document.createElement('span');
+                    tag.className = 'module-name-tag';
+                    tag.textContent = moduleName;
+                    tag.title = '点击复制模块名称';
+                    tag.id = `module-tag-${moduleName}`;
+
+                    // 添加点击复制功能
+                    tag.addEventListener('click', function() {
+                        copyToClipboard(moduleName, tag);
+                    });
+
+                    // 如果容器是空的，先清空"暂无模块"提示
+                    if (container.querySelector('.no-modules')) {
+                        container.innerHTML = '';
+                    }
+
+                    container.appendChild(tag);
+                }
+            });
+        }
+
+        // 更新模块统计信息（增量版本）
+        function updateModuleStats(moduleName, logEntry) {
+            const containerId = getModuleContainerId(moduleName);
+
+            // 更新总日志数
+            const totalEl = document.getElementById(`${containerId}-total`);
+            if (totalEl) {
+                const current = parseInt(totalEl.textContent) || 0;
+                totalEl.textContent = current + 1;
             }
 
-            // 清空容器
-            container.innerHTML = '';
+            // 更新错误数
+            if (logEntry.level === 'ERROR') {
+                const errorsEl = document.getElementById(`${containerId}-errors`);
+                if (errorsEl) {
+                    const current = parseInt(errorsEl.textContent) || 0;
+                    errorsEl.textContent = current + 1;
+                }
+            }
 
-            // 为每个模块名创建可点击的标签
-            moduleNames.forEach(moduleName => {
-                const tag = document.createElement('span');
-                tag.className = 'module-name-tag';
-                tag.textContent = moduleName;
-                tag.title = '点击复制模块名称';
+            // 更新最后更新时间
+            const lastUpdateEl = document.getElementById(`${containerId}-last-update`);
+            if (lastUpdateEl) {
+                lastUpdateEl.textContent = new Date().toLocaleTimeString();
+            }
 
-                // 添加点击复制功能
-                tag.addEventListener('click', function() {
-                    copyToClipboard(moduleName, tag);
-                });
-
-                container.appendChild(tag);
-            });
+            // 更新状态为运行中
+            const statusEl = document.getElementById(`${containerId}-status`);
+            if (statusEl) {
+                statusEl.textContent = '运行中';
+                statusEl.className = 'module-status status-running';
+            }
         }
 
         // 复制到剪贴板功能
@@ -1336,41 +1154,20 @@
                 }, 1000);
             }).catch(function(err) {
                 console.error('复制失败:', err);
-                // 降级方案：使用旧的复制方法
-                const textArea = document.createElement('textarea');
-                textArea.value = text;
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    element.classList.add('copied');
-                    const originalText = element.textContent;
-                    element.textContent = '已复制!';
-
-                    setTimeout(function() {
-                        element.classList.remove('copied');
-                        element.textContent = originalText;
-                    }, 1000);
-                } catch (err) {
-                    console.error('降级复制方法也失败:', err);
-                }
-                document.body.removeChild(textArea);
             });
         }
 
-        // 复制所有模块名称的函数
-        function copyAllModuleNames(buttonElement) {
+        // 复制所有模块名称
+        function copyAllModuleNames() {
             if (currentModuleNames.length === 0) {
                 alert('暂无模块数据可复制');
                 return;
             }
 
-            // 将所有模块名称用换行符连接
             const allModuleNames = currentModuleNames.join('\n');
-            const button = buttonElement;
+            const button = document.getElementById('header-copy-modules');
 
             navigator.clipboard.writeText(allModuleNames).then(function() {
-                // 显示复制成功的视觉反馈
                 button.classList.add('copied');
                 const originalText = button.textContent;
                 button.textContent = '✅ 已复制!';
@@ -1381,725 +1178,111 @@
                 }, 2000);
             }).catch(function(err) {
                 console.error('复制失败:', err);
-                // 降级方案：使用旧的复制方法
-                const textArea = document.createElement('textarea');
-                textArea.value = allModuleNames;
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    button.classList.add('copied');
-                    const originalText = button.textContent;
-                    button.textContent = '✅ 已复制!';
-
-                    setTimeout(function() {
-                        button.classList.remove('copied');
-                        button.textContent = originalText;
-                    }, 2000);
-                } catch (err) {
-                    console.error('降级复制方法也失败:', err);
-                    alert('复制失败，请手动复制模块名称');
-                }
-                document.body.removeChild(textArea);
             });
         }
 
-        // 切换实时原始日志显示/隐藏
-        function toggleRealtimeLogs(buttonElement) {
+        // 切换实时日志显示
+        function toggleRealtimeLogs() {
             const realtimeModule = document.getElementById('realtime-logs-module');
-            const button = buttonElement;
+            const button = document.getElementById('toggle-realtime-logs');
+            const staticArea = document.querySelector('.static-modules-area');
 
-            if (!realtimeModule) {
-                console.error('找不到实时原始日志模块');
-                return;
-            }
+            if (!realtimeModule || !staticArea) return;
 
             const isCurrentlyHidden = realtimeModule.style.display === 'none';
 
             if (isCurrentlyHidden) {
-                // 显示模块
+                // 显示实时日志模块
                 realtimeModule.style.display = '';
                 button.classList.add('active');
                 button.textContent = '📊 隐藏实时原始日志';
-                button.title = '隐藏实时原始日志';
+
+                // 调整静态模块区域宽度为800px（两个模块）
+                staticArea.style.flex = '0 0 820px'; // 考虑边框和内边距
+
+                // 调整终端大小
+                setTimeout(() => {
+                    terminalManager.resizeTerminal('RealtimeLogs');
+                    terminalManager.resizeTerminal('RawLogSnapshot');
+                }, 150);
             } else {
-                // 隐藏模块
+                // 隐藏实时日志模块
                 realtimeModule.style.display = 'none';
                 button.classList.remove('active');
                 button.textContent = '📊 显示实时原始日志';
-                button.title = '显示实时原始日志';
+
+                // 调整静态模块区域宽度为420px（一个模块）
+                staticArea.style.flex = '0 0 420px'; // 考虑边框和内边距
+
+                // 调整剩余模块的终端大小
+                setTimeout(() => {
+                    terminalManager.resizeTerminal('RawLogSnapshot');
+                }, 150);
             }
         }
 
-        // 定期清理过期状态
-        function startCleanup() {
-            setInterval(() => {
-                // 清理过期的展开JSON状态
-                if (activeLogId) {
-                    const jsonDiv = document.getElementById(`json-${activeLogId}`);
-                    if (!jsonDiv) {
-                        activeLogId = null;
-                    }
-                }
-            }, 10000); // 每10秒清理一次
-        }
+        // 检查Xterm.js是否加载完成 (适配新版本 @xterm/* 包)
+        function checkXtermLoaded() {
+            const terminalLoaded = typeof Terminal !== 'undefined';
+            const fitAddonLoaded = typeof FitAddon !== 'undefined';
+            const webLinksLoaded = typeof WebLinksAddon !== 'undefined';
 
-
-
-        // 页面加载时连接WebSocket并绑定事件
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('页面加载完成');
-            connectWebSocket();
-            startCleanup();
-
-            // 绑定顶部复制按钮的点击事件
-            const headerCopyButton = document.getElementById('header-copy-modules');
-            if (headerCopyButton) {
-                headerCopyButton.addEventListener('click', function() {
-                    copyAllModuleNames(this);
-                });
-            }
-
-            // 绑定实时原始日志切换按钮的点击事件
-            const toggleRealtimeButton = document.getElementById('toggle-realtime-logs');
-            if (toggleRealtimeButton) {
-                toggleRealtimeButton.addEventListener('click', function() {
-                    toggleRealtimeLogs(this);
-                });
-            }
-
-            // 为原始日志快照模块绑定滚动事件处理
-            const rawLogsDisplay = document.getElementById('raw-logs-display');
-            if (rawLogsDisplay) {
-                // 点击获得焦点，使鼠标滚轮能够正常工作
-                rawLogsDisplay.addEventListener('click', function(event) {
-                    if (!event.target.closest('.log-entry')) {
-                        rawLogsDisplay.focus();
-                        console.log('🎯 原始日志快照模块获得焦点');
-                    }
-                });
-
-                // 鼠标进入时自动获得焦点
-                rawLogsDisplay.addEventListener('mouseenter', function(event) {
-                    rawLogsDisplay.focus();
-                });
-
-                // 添加详细的滚动事件日志
-                rawLogsDisplay.addEventListener('wheel', function(event) {
-                    const canScroll = rawLogsDisplay.scrollHeight > rawLogsDisplay.clientHeight;
-                    console.log(`🖱️ 原始日志快照模块 鼠标滚轮事件:`, {
-                        deltaY: event.deltaY,
-                        deltaX: event.deltaX,
-                        target: event.target.tagName,
-                        scrollTop: rawLogsDisplay.scrollTop,
-                        scrollHeight: rawLogsDisplay.scrollHeight,
-                        clientHeight: rawLogsDisplay.clientHeight,
-                        canScroll: canScroll,
-                        计算: `${rawLogsDisplay.scrollHeight} > ${rawLogsDisplay.clientHeight} = ${canScroll}`
-                    });
-
-                    // 手动处理滚动，确保滚动事件被触发
-                    if (canScroll) {
-                        console.log(`✅ 开始手动滚动处理`);
-                        const currentScrollTop = rawLogsDisplay.scrollTop;
-                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
-                        const newScrollTop = Math.max(0, Math.min(
-                            rawLogsDisplay.scrollHeight - rawLogsDisplay.clientHeight,
-                            currentScrollTop + scrollAmount
-                        ));
-
-                        console.log(`🔄 手动滚动: ${currentScrollTop} -> ${newScrollTop} (scrollAmount: ${scrollAmount})`);
-                        rawLogsDisplay.scrollTop = newScrollTop;
-
-                        // 手动触发滚动事件
-                        const scrollEvent = new Event('scroll', { bubbles: true });
-                        rawLogsDisplay.dispatchEvent(scrollEvent);
-                        console.log(`📤 已手动触发滚动事件`);
-                    } else {
-                        console.log(`❌ 无法滚动: scrollHeight=${rawLogsDisplay.scrollHeight}, clientHeight=${rawLogsDisplay.clientHeight}`);
-                    }
-
-                    // 阻止默认滚动和事件冒泡
-                    event.preventDefault();
-                    event.stopPropagation();
-                });
-
-                // 阻止触摸滚动事件冒泡（移动设备支持）
-                rawLogsDisplay.addEventListener('touchmove', function(event) {
-                    console.log(`👆 原始日志快照模块 触摸滚动事件`);
-                    event.stopPropagation();
-                });
-
-                // 添加滚动事件监听器，用于加载历史数据
-                rawLogsDisplay.addEventListener('scroll', function(event) {
-                    console.log(`📜 原始日志快照模块 滚动事件:`, {
-                        scrollTop: rawLogsDisplay.scrollTop,
-                        scrollHeight: rawLogsDisplay.scrollHeight,
-                        clientHeight: rawLogsDisplay.clientHeight,
-                        canScrollMore: rawLogsDisplay.scrollHeight > rawLogsDisplay.clientHeight
-                    });
-                    // 启用原始日志快照模块的历史加载功能
-                    if (rawLogsDisplay.scrollTop <= 5) {
-                        console.log(`🔄 原始日志快照模块滚动到顶部，scrollTop: ${rawLogsDisplay.scrollTop}`);
-                        loadMoreDisplayLogsForRawSnapshot(rawLogsDisplay);
-                    }
-                });
-            }
-
-            // 为实时原始日志模块绑定完整的滚动事件处理
-            const realtimeLogsDisplay = document.getElementById('realtime-logs-display');
-            if (realtimeLogsDisplay) {
-                // 点击获得焦点，使鼠标滚轮能够正常工作
-                realtimeLogsDisplay.addEventListener('click', function(event) {
-                    if (!event.target.closest('.log-entry')) {
-                        realtimeLogsDisplay.focus();
-                        console.log('🎯 实时原始日志模块获得焦点');
-                    }
-                });
-
-                // 鼠标进入时自动获得焦点
-                realtimeLogsDisplay.addEventListener('mouseenter', function(event) {
-                    realtimeLogsDisplay.focus();
-                });
-
-                // 添加详细的滚动事件日志
-                realtimeLogsDisplay.addEventListener('wheel', function(event) {
-                    const canScroll = realtimeLogsDisplay.scrollHeight > realtimeLogsDisplay.clientHeight;
-                    console.log(`🖱️ 实时原始日志模块 鼠标滚轮事件:`, {
-                        deltaY: event.deltaY,
-                        deltaX: event.deltaX,
-                        target: event.target.tagName,
-                        scrollTop: realtimeLogsDisplay.scrollTop,
-                        scrollHeight: realtimeLogsDisplay.scrollHeight,
-                        clientHeight: realtimeLogsDisplay.clientHeight,
-                        canScroll: canScroll
-                    });
-
-                    // 手动处理滚动，确保滚动事件被触发
-                    if (canScroll) {
-                        const currentScrollTop = realtimeLogsDisplay.scrollTop;
-                        const scrollAmount = event.deltaY * 0.5; // 调整滚动速度
-                        const newScrollTop = Math.max(0, Math.min(
-                            realtimeLogsDisplay.scrollHeight - realtimeLogsDisplay.clientHeight,
-                            currentScrollTop + scrollAmount
-                        ));
-
-                        console.log(`🔄 实时日志模块 手动滚动: ${currentScrollTop} -> ${newScrollTop}`);
-                        realtimeLogsDisplay.scrollTop = newScrollTop;
-
-                        // 手动触发滚动事件
-                        const scrollEvent = new Event('scroll', { bubbles: true });
-                        realtimeLogsDisplay.dispatchEvent(scrollEvent);
-                    }
-
-                    // 阻止默认滚动和事件冒泡
-                    event.preventDefault();
-                    event.stopPropagation();
-                });
-
-                // 阻止触摸滚动事件冒泡（移动设备支持）
-                realtimeLogsDisplay.addEventListener('touchmove', function(event) {
-                    console.log(`👆 实时原始日志模块 触摸滚动事件`);
-                    event.stopPropagation();
-                });
-            }
-
-            // 键盘事件 - ESC键关闭展开的JSON
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && activeLogId) {
-                    hideJson(activeLogId);
-                }
+            console.log('Xterm.js 5.5.0 库加载状态:', {
+                Terminal: terminalLoaded,
+                FitAddon: fitAddonLoaded,
+                WebLinksAddon: webLinksLoaded,
+                // 检查全局对象中的所有可用变量
+                globalKeys: Object.keys(window).filter(key => key.toLowerCase().includes('addon') || key.toLowerCase().includes('fit') || key.toLowerCase().includes('weblinks')),
+                // 检查具体的构造函数
+                FitAddonType: typeof window.FitAddon,
+                WebLinksAddonType: typeof window.WebLinksAddon,
+                // 检查是否可以实例化
+                canCreateFitAddon: typeof window.FitAddon === 'function',
+                canCreateWebLinksAddon: typeof window.WebLinksAddon === 'function'
             });
+
+            // 至少Terminal必须加载，插件是可选的
+            return terminalLoaded;
+        }
+
+        // 等待Xterm.js加载完成后初始化
+        function waitForXtermAndInitialize() {
+            if (checkXtermLoaded()) {
+                console.log('✅ Xterm.js 库加载完成');
+
+                // 初始化固定终端
+                initializeFixedTerminals();
+
+                // 连接WebSocket
+                connectWebSocket();
+
+                // 绑定按钮事件
+                document.getElementById('header-copy-modules').addEventListener('click', copyAllModuleNames);
+                document.getElementById('toggle-realtime-logs').addEventListener('click', toggleRealtimeLogs);
+
+                console.log('✅ 初始化完成');
+            } else {
+                console.log('⏳ 等待 Xterm.js 库加载...');
+                setTimeout(waitForXtermAndInitialize, 300);
+            }
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 页面加载完成，开始初始化...');
+
+            // 等待Xterm.js库加载完成
+            waitForXtermAndInitialize();
         });
 
-        // ===== 新的聚合数据处理函数 =====
-
-        // 更新系统状态（从聚合数据）
-        function updateSystemStatusFromAggregatedData(data) {
-            const uptimeEl = document.getElementById('uptime');
-            const healthScoreEl = document.getElementById('health-score');
-
-            if (uptimeEl) {
-                const hours = Math.floor(data.uptime_seconds / 3600);
-                const minutes = Math.floor((data.uptime_seconds % 3600) / 60);
-                const seconds = data.uptime_seconds % 60;
-                uptimeEl.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            }
-
-            if (healthScoreEl) {
-                healthScoreEl.textContent = `${data.health_score}%`;
-            }
-        }
-
-        // 更新模块日志（从聚合数据）
-        function updateModuleLogsFromAggregatedData(moduleLogs) {
-            console.log('updateModuleLogsFromAggregatedData 被调用，模块数量:', Object.keys(moduleLogs).length);
-
-            // 更新模块名称列表
-            updateModuleNamesList(Object.keys(moduleLogs));
-
-            for (const [moduleName, moduleData] of Object.entries(moduleLogs)) {
-                console.log('处理模块:', moduleName, '数据:', moduleData);
-
-                // 确保模块容器存在
-                ensureModuleContainer(moduleName);
-
-                // 初始化模块历史数据状态
-                if (!(moduleName in moduleHistoryPages)) {
-                    moduleHistoryPages[moduleName] = 0;
-                    moduleLoadingHistory[moduleName] = false;
-                    moduleHasMoreHistory[moduleName] = moduleData.has_more_history !== false; // 默认假设有更多数据
-                }
-
-                // 更新模块统计
-                updateModuleStatsFromAggregatedData(moduleName, moduleData);
-
-                // 智能数据选择：优先使用数据量更多的源
-                const displayedCount = moduleData.displayed_logs ? moduleData.displayed_logs.length : 0;
-                const recentCount = moduleData.recent_logs ? moduleData.recent_logs.length : 0;
-
-                console.log(`📊 模块 [${moduleName}] 数据统计: displayed_logs=${displayedCount}, recent_logs=${recentCount}`);
-
-                if (displayedCount >= 20 || (displayedCount > 0 && recentCount === 0)) {
-                    // 如果聚合日志足够多，或者只有聚合日志，使用聚合日志
-                    console.log(`📦 渲染模块 [${moduleName}] 的 ${displayedCount} 条聚合日志`);
-                    renderAggregatedDisplayLogs(moduleName, moduleData.displayed_logs);
-                } else if (recentCount > 0) {
-                    // 如果原始日志更多，使用原始日志（转换为显示格式）
-                    console.log(`📦 渲染模块 [${moduleName}] 的 ${recentCount} 条原始日志（转换为滚动格式）`);
-                    renderRecentLogsWithScrollSupport(moduleName, moduleData.recent_logs);
-                } else {
-                    console.log(`⚠️ 模块 [${moduleName}] 没有日志数据`);
-                    const containerId = getModuleContainerId(moduleName) + '-logs';
-                    const container = document.getElementById(containerId);
-                    if (container) {
-                        container.innerHTML = '<div class="log-entry">等待日志数据...</div>';
-                    }
-                }
-            }
-        }
-
-        // 更新模块统计（从聚合数据）
-        function updateModuleStatsFromAggregatedData(moduleName, moduleData) {
-            const containerId = getModuleContainerId(moduleName);
-
-            const totalEl = document.getElementById(containerId + '-total');
-            const errorsEl = document.getElementById(containerId + '-errors');
-            const lastUpdateEl = document.getElementById(containerId + '-last-update');
-
-            const currentLogCount = moduleData.total_logs || 0;
-            const previousLogCount = moduleLogCounts[moduleName] || 0;
-
-            if (totalEl) totalEl.textContent = currentLogCount;
-            if (errorsEl) errorsEl.textContent = moduleData.error_count || 0;
-
-            if (lastUpdateEl) {
-                // 只有当日志数量增加时才更新时间
-                if (currentLogCount > previousLogCount) {
-                    const currentTime = getCurrentTimeString();
-                    moduleLastUpdateTimes[moduleName] = currentTime;
-                    lastUpdateEl.textContent = currentTime;
-                    console.log(`模块 ${moduleName} 有新日志: ${previousLogCount} -> ${currentLogCount}, 更新时间: ${currentTime}`);
-                } else {
-                    // 日志数量没有变化，显示之前记录的时间
-                    lastUpdateEl.textContent = moduleLastUpdateTimes[moduleName] || '--:--:--';
-                }
-            }
-
-            // 更新记录的日志数量
-            moduleLogCounts[moduleName] = currentLogCount;
-        }
-
-        // 渲染聚合的显示日志
-        function renderAggregatedDisplayLogs(moduleName, displayedLogs) {
-            const containerId = getModuleContainerId(moduleName);
-            const container = document.getElementById(containerId + '-logs');
-
-            if (!container) return;
-
-            // 清空容器
-            container.innerHTML = '';
-
-            if (!displayedLogs || displayedLogs.length === 0) {
-                container.innerHTML = '<div class="log-entry">等待日志数据...</div>';
-                return;
-            }
-
-            // 存储完整数据到容器的数据属性中，供滚动加载使用
-            container.setAttribute('data-all-logs', JSON.stringify(displayedLogs));
-            container.setAttribute('data-current-display-count', '20');
-            console.log(`📊 模块 [${moduleName}] 存储了 ${displayedLogs.length} 条完整数据，当前显示 20 条`);
-
-            // 只渲染前20条到DOM（UI层面的限制）
-            const logsToRender = displayedLogs.slice(0, 20);
-            logsToRender.forEach((logEntry, index) => {
-                const logElement = createAggregatedLogElement(logEntry, containerId, index);
-                container.appendChild(logElement);
-            });
-
-            // 如果有更多数据，添加"加载更多"提示
-            if (displayedLogs.length > 20) {
-                const loadMoreIndicator = document.createElement('div');
-                loadMoreIndicator.className = 'load-more-indicator';
-                loadMoreIndicator.style.cssText = `
-                    padding: 10px;
-                    text-align: center;
-                    color: #888;
-                    font-size: 12px;
-                    border-top: 1px solid #333;
-                    cursor: pointer;
-                `;
-                loadMoreIndicator.textContent = `还有 ${displayedLogs.length - 20} 条日志，滚动到顶部加载更多`;
-                container.appendChild(loadMoreIndicator);
-            }
-        }
-
-        // 创建聚合日志元素
-        function createAggregatedLogElement(logEntry, containerId, index) {
-            const logWrapper = document.createElement('div');
-            const logId = `${containerId}-log-${Date.now()}-${index}`;
-
-            // 构建显示消息
-            const displayMessage = logEntry.is_aggregated && logEntry.count > 1
-                ? `${logEntry.message} (×${logEntry.count})`
-                : logEntry.message;
-
-            // 构建JSON内容
-            const jsonContent = logEntry.is_aggregated
-                ? {
-                    message: logEntry.message,
-                    level: logEntry.level,
-                    count: logEntry.count,
-                    timestamp: logEntry.timestamp,
-                    variations: logEntry.variations || [],
-                    all_logs: logEntry.all_logs || []
-                  }
-                : logEntry.all_logs[0] || logEntry;
-
-            logWrapper.innerHTML = `
-                <!-- JSON详情 (默认隐藏) -->
-                <div id="json-${logId}" class="raw-json">
-                    <div class="json-container">
-                        <div class="json-header">
-                            <span>📄 ${logEntry.is_aggregated ? `聚合日志详情 (${logEntry.count}条)` : '原始JSON'}</span>
-                            <span class="json-close" onclick="hideJson('${logId}')">✕</span>
-                        </div>
-                        <div class="json-content">${JSON.stringify(jsonContent, null, 2)}</div>
-                    </div>
-                </div>
-
-                <!-- 日志条目 -->
-                <div class="log-entry log-level-${logEntry.level} ${logEntry.is_aggregated ? 'aggregated-log' : ''}"
-                     onclick="toggleJson('${logId}')" data-log-id="${logId}"
-                     title="${logEntry.is_aggregated ? `聚合日志: ${logEntry.variations?.length || 1}种变体` : logEntry.message}">
-                    <div class="log-message">${escapeHtml(displayMessage)}</div>
-                </div>
-            `;
-
-            return logWrapper;
-        }
-
-        // 将原始日志渲染为支持滚动的显示格式
-        function renderRecentLogsWithScrollSupport(moduleName, recentLogs) {
-            const containerId = getModuleContainerId(moduleName);
-            const container = document.getElementById(containerId + '-logs');
-
-            if (!container) {
-                console.error('找不到模块容器:', containerId + '-logs');
-                return;
-            }
-
-            // 清空容器
-            container.innerHTML = '';
-
-            if (!recentLogs || recentLogs.length === 0) {
-                container.innerHTML = '<div class="log-entry">等待日志数据...</div>';
-                return;
-            }
-
-            // 将原始日志转换为DisplayLogEntry格式以支持滚动
-            const displayLogs = recentLogs.map(logEntry => ({
-                message: logEntry.message,
-                level: logEntry.level,
-                timestamp: logEntry.timestamp,
-                count: 1,
-                is_aggregated: false,
-                variations: [logEntry.message],
-                all_logs: [logEntry]
-            }));
-
-            // 存储完整数据到容器的数据属性中，供滚动加载使用
-            container.setAttribute('data-all-logs', JSON.stringify(displayLogs));
-            container.setAttribute('data-current-display-count', '20');
-            console.log(`📊 模块 [${moduleName}] 存储了 ${displayLogs.length} 条完整数据（从原始日志转换），当前显示 20 条`);
-
-            // 只渲染前20条到DOM（UI层面的限制）
-            const logsToRender = displayLogs.slice(0, 20);
-            logsToRender.forEach((logEntry, index) => {
-                const logElement = createAggregatedLogElement(logEntry, containerId, index);
-                container.appendChild(logElement);
-            });
-
-            // 如果有更多数据，添加"加载更多"提示
-            if (displayLogs.length > 20) {
-                const loadMoreIndicator = document.createElement('div');
-                loadMoreIndicator.className = 'load-more-indicator';
-                loadMoreIndicator.style.cssText = `
-                    padding: 10px;
-                    text-align: center;
-                    color: #888;
-                    font-size: 12px;
-                    border-top: 1px solid #333;
-                    cursor: pointer;
-                `;
-                loadMoreIndicator.textContent = `还有 ${displayLogs.length - 20} 条日志，滚动到顶部加载更多`;
-                container.appendChild(loadMoreIndicator);
-            }
-        }
-
-        // 将原始日志渲染为显示格式（兼容recent_logs，旧版本）
-        function renderRecentLogsAsDisplay(moduleName, recentLogs) {
-            const containerId = getModuleContainerId(moduleName);
-            const container = document.getElementById(containerId + '-logs');
-
-            if (!container) {
-                console.error('找不到模块容器:', containerId + '-logs');
-                return;
-            }
-
-            // 清空容器
-            container.innerHTML = '';
-
-            if (!recentLogs || recentLogs.length === 0) {
-                container.innerHTML = '<div class="log-entry">等待日志数据...</div>';
-                return;
-            }
-
-            // 显示最新的20条日志
-            const logsToShow = recentLogs.slice(0, 20);
-            logsToShow.forEach((logEntry, index) => {
-                const logElement = createRecentLogElement(logEntry, containerId, index);
-                container.appendChild(logElement);
-            });
-        }
-
-        // 创建原始日志元素
-        function createRecentLogElement(logEntry, containerId, index) {
-            const logWrapper = document.createElement('div');
-            const logId = `${containerId}-recent-${Date.now()}-${index}`;
-
-            // 构建完整的JSON对象用于详情显示
-            const fullLogJson = {
-                timestamp: logEntry.timestamp,
-                level: logEntry.level,
-                target: logEntry.target,
-                message: logEntry.message,
-                module_path: logEntry.module_path,
-                file: logEntry.file,
-                line: logEntry.line,
-                fields: logEntry.fields,
-                span: logEntry.span
-            };
-
-            logWrapper.innerHTML = `
-                <!-- 原始JSON (默认隐藏) -->
-                <div id="json-${logId}" class="raw-json">
-                    <div class="json-container">
-                        <div class="json-header">
-                            <span>📄 原始日志详情</span>
-                            <span class="json-close" onclick="hideJson('${logId}')">✕</span>
-                        </div>
-                        <div class="json-content">${JSON.stringify(fullLogJson, null, 2)}</div>
-                    </div>
-                </div>
-
-                <!-- 日志条目 -->
-                <div class="log-entry log-level-${logEntry.level}"
-                     onclick="toggleJson('${logId}')" data-log-id="${logId}"
-                     title="${logEntry.message}">
-                    <div class="log-message">${escapeHtml(logEntry.message)}</div>
-                </div>
-            `;
-
-            return logWrapper;
-        }
-
-        // 更新实时日志（从聚合数据）
-        function updateRealtimeLogsFromAggregatedData(realtimeData) {
-            if (!realtimeData || !realtimeData.recent_logs) return;
-
-            const container = document.getElementById('realtime-logs-display');
-            if (!container) return;
-
-            // 更新状态信息
-            const statusEl = document.getElementById('realtime-logs-status');
-            const logCountEl = document.getElementById('realtime-log-count');
-            const lastLogTimeEl = document.getElementById('last-log-time');
-            const logFrequencyEl = document.getElementById('log-frequency');
-
-            if (statusEl) {
-                if (realtimeData.recent_logs.length > 0) {
-                    statusEl.textContent = '实时接收';
-                    statusEl.className = 'module-status status-running';
-                } else {
-                    statusEl.textContent = '等待日志';
-                    statusEl.className = 'module-status status-waiting';
-                }
-            }
-
-            if (logCountEl) logCountEl.textContent = realtimeData.total_count || realtimeData.recent_logs.length;
-            if (lastLogTimeEl) lastLogTimeEl.textContent = realtimeData.last_update_time || getCurrentTimeString();
-            if (logFrequencyEl) logFrequencyEl.textContent = `${realtimeData.logs_per_second || 0} 条/秒`;
-
-            // 清空容器
-            container.innerHTML = '';
-
-            if (realtimeData.recent_logs.length === 0) {
-                container.innerHTML = '<div class="log-entry">暂无实时日志</div>';
-                return;
-            }
-
-            // 只显示最新的20条实时日志
-            const logsToShow = realtimeData.recent_logs.slice(0, 20);
-
-            logsToShow.forEach(logLine => {
-                const logEl = document.createElement('div');
-                logEl.className = 'log-entry';
-                logEl.style.fontSize = '12px';
-                logEl.style.lineHeight = '1.3';
-                logEl.style.marginBottom = '2px';
-                logEl.style.wordBreak = 'break-all';
-
-                // 简单的日志着色
-                if (logLine.includes('ERROR')) {
-                    logEl.style.color = '#ff0000';
-                } else if (logLine.includes('WARN')) {
-                    logEl.style.color = '#ffff00';
-                } else if (logLine.includes('INFO')) {
-                    logEl.style.color = '#00ff00';
-                } else {
-                    logEl.style.color = '#cccccc';
-                }
-
-                logEl.textContent = logLine;
-                container.appendChild(logEl);
-            });
-        }
-
-        // 更新原始日志快照（从聚合数据）
-        function updateRawLogSnapshotFromAggregatedData(snapshot) {
-            if (!snapshot) {
-                return;
-            }
-
-            // 更新状态信息
-            const statusEl = document.getElementById('raw-logs-status');
-            if (statusEl) {
-                statusEl.textContent = '折叠已更新';
-                statusEl.className = 'module-status status-running';
-            }
-
-            // 更新统计信息
-            const timestampEl = document.getElementById('snapshot-timestamp');
-            const totalCountEl = document.getElementById('total-log-count');
-            const displayedCountEl = document.getElementById('displayed-log-count');
-
-            if (timestampEl) timestampEl.textContent = getCurrentTimeString();
-            if (totalCountEl) totalCountEl.textContent = snapshot.total_count;
-            if (displayedCountEl) displayedCountEl.textContent = snapshot.displayed_logs?.length || 0;
-
-            // 直接渲染后端提供的聚合日志
-            const container = document.getElementById('raw-logs-display');
-            if (!container) return;
-
-            // 保存固定的UI元素（滚动提示和诊断按钮）
-            const scrollHint = container.querySelector('.scroll-hint');
-            const diagnoseButton = container.querySelector('button[onclick*="diagnoseContainer"]');
-
-            // 清空容器但保留固定UI元素
-            container.innerHTML = '';
-
-            // 重新添加固定UI元素
-            if (scrollHint) container.appendChild(scrollHint);
-            if (diagnoseButton) container.appendChild(diagnoseButton);
-
-            if (!snapshot.displayed_logs || snapshot.displayed_logs.length === 0) {
-                const noDataEntry = document.createElement('div');
-                noDataEntry.className = 'log-entry';
-                noDataEntry.textContent = '暂无日志数据';
-                container.appendChild(noDataEntry);
-                return;
-            }
-
-            // 存储完整数据到容器的数据属性中，供滚动加载使用
-            container.setAttribute('data-all-logs', JSON.stringify(snapshot.displayed_logs));
-            container.setAttribute('data-current-display-count', '20');
-            console.log(`📊 原始日志快照模块存储了 ${snapshot.displayed_logs.length} 条完整数据，当前显示 20 条`);
-
-            // 只渲染前20条到DOM（UI层面的限制）
-            const logsToRender = snapshot.displayed_logs.slice(0, 20);
-            logsToRender.forEach((logEntry, index) => {
-                const logElement = createAggregatedLogElement(logEntry, 'raw-logs', index);
-                container.appendChild(logElement);
-            });
-
-            // 如果有更多数据，添加"加载更多"提示
-            if (snapshot.displayed_logs.length > 20) {
-                const loadMoreIndicator = document.createElement('div');
-                loadMoreIndicator.className = 'load-more-indicator';
-                loadMoreIndicator.style.cssText = `
-                    padding: 10px;
-                    text-align: center;
-                    color: #888;
-                    font-size: 12px;
-                    border-top: 1px solid #333;
-                    cursor: pointer;
-                `;
-                loadMoreIndicator.textContent = `还有 ${snapshot.displayed_logs.length - 20} 条日志，滚动到顶部加载更多`;
-                container.appendChild(loadMoreIndicator);
-            }
-        }
-
-
-
-        // 简化的实时日志条目添加（仅用于实时显示）
-        function addLogEntryToRealtimeDisplay(logEntry) {
-            const container = document.getElementById('realtime-logs-display');
-            if (!container) return;
-
-            const logEl = document.createElement('div');
-            logEl.className = 'log-entry';
-            logEl.style.fontSize = '12px';
-            logEl.style.lineHeight = '1.3';
-            logEl.style.marginBottom = '2px';
-            logEl.style.wordBreak = 'break-all';
-
-            // 根据日志级别着色
-            if (logEntry.level === 'ERROR') {
-                logEl.style.color = '#ff0000';
-            } else if (logEntry.level === 'WARN') {
-                logEl.style.color = '#ffff00';
-            } else if (logEntry.level === 'INFO') {
-                logEl.style.color = '#00ff00';
-            } else {
-                logEl.style.color = '#cccccc';
-            }
-
-            // 格式化日志内容（使用当前时间）
-            const timestamp = getCurrentTimeString();
-            logEl.textContent = `[${timestamp}] ${logEntry.level} ${logEntry.target}: ${logEntry.message}`;
-
-            // 添加到容器顶部（最新的在上面）
-            container.insertBefore(logEl, container.firstChild);
-
-            // 限制实时日志显示数量为20条
-            const children = Array.from(container.children);
-            if (children.length > 20) {
-                for (let i = 20; i < children.length; i++) {
-                    container.removeChild(children[i]);
-                }
-            }
-        }
+        // 窗口大小变化时调整所有终端
+        window.addEventListener('resize', function() {
+            setTimeout(() => {
+                terminalManager.terminals.forEach((terminal, moduleName) => {
+                    terminalManager.resizeTerminal(moduleName);
+                });
+            }, 100);
+        });
     </script>
 </body>
 </html>

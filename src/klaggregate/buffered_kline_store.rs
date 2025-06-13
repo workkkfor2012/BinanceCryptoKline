@@ -127,7 +127,16 @@ impl BufferedKlineStore {
                         let write_size = write_buffer.read().await.len();
                         let duration_ms = swap_duration.as_secs_f64() * 1000.0;
 
-                        info!(target: "buffered_kline_store", "缓冲区交换完成: swap_count={}, duration_ms={:.2}, read_buffer_size={}, write_buffer_size={}", count, duration_ms, read_size, write_size);
+                        info!(
+                            target: "buffered_kline_store",
+                            event_type = "BUFFER_SWAP_COMPLETED",
+                            is_high_freq = true,
+                            swap_count = count,
+                            duration_ms = duration_ms,
+                            read_buffer_size = read_size,
+                            write_buffer_size = write_size,
+                            "缓冲区交换完成"
+                        );
 
                         debug!(target: "buffered_kline_store", "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
 

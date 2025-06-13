@@ -53,12 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         web_port: cli.port,
         log_transport: LogTransport::NamedPipe(cli.pipe_name.clone()),
         pipe_name: Some(cli.pipe_name.clone()),
-        max_traces: cli.max_traces,
         max_log_entries: cli.max_logs,
     };
 
-    info!("📋 配置: Web端口={}, 最大日志={}, 最大Traces={}, 命名管道={}",
-          config.web_port, config.max_log_entries, config.max_traces, cli.pipe_name);
+    info!("📋 配置: Web端口={}, 最大日志={}, 命名管道={}",
+          config.web_port, config.max_log_entries, cli.pipe_name);
 
     // 创建应用状态
     let (state, _log_receiver) = AppState::new();
@@ -208,86 +207,20 @@ async fn create_named_pipe_server(_pipe_name: &str) -> Result<(), std::io::Error
 
 
 
-/// 处理单行日志 - 只支持JSON格式的tracing日志
+/// 处理单行日志 - 极简版本：解析 → 缓存 → 广播
 async fn process_log_line(state: &Arc<AppState>, line: &str) {
-    use weblog::{parse_tracing_log_line, validate_log_entry, ModuleLogEntry};
-
-    // 首先添加原始日志
-    state.add_raw_log(line.to_string());
+    use weblog::{parse_tracing_log_line, validate_log_entry};
 
     // 尝试解析JSON格式的tracing日志
     if let Some(log_entry) = parse_tracing_log_line(line) {
         if validate_log_entry(&log_entry) {
-                    // 更新统计信息
-                    {
-                        let mut log_stats = state.log_stats.lock().unwrap();
-                        log_stats.total_logs += 1;
-                        *log_stats.logs_by_level.entry(log_entry.level.clone()).or_insert(0) += 1;
-                        *log_stats.logs_by_target.entry(log_entry.target.clone()).or_insert(0) += 1;
-
-                        log_stats.recent_logs.push(log_entry.clone());
-                        if log_stats.recent_logs.len() > 100 {
-                            log_stats.recent_logs.remove(0);
-                        }
-                    }
-
-                    // 更新模块日志
-                    {
-                        let module_log_entry = ModuleLogEntry {
-                            timestamp: chrono::Utc::now().format("%H:%M:%S").to_string(),
-                            level: log_entry.level.clone(),
-                            module: log_entry.target.clone(),
-                            message: log_entry.message.clone(),
-                        };
-
-                        let mut module_logs = state.module_logs.lock().unwrap();
-                        let module_stat = module_logs.entry(log_entry.target.clone()).or_insert_with(|| weblog::ModuleLogStats {
-                            total_logs: 0,
-                            error_count: 0,
-                            warn_count: 0,
-                            info_count: 0,
-                            recent_logs: Vec::new(),
-                        });
-
-                        module_stat.total_logs += 1;
-                        match log_entry.level.as_str() {
-                            "ERROR" => module_stat.error_count += 1,
-                            "WARN" => module_stat.warn_count += 1,
-                            "INFO" => module_stat.info_count += 1,
-                            _ => {}
-                        }
-
-                        module_stat.recent_logs.push(module_log_entry);
-                        if module_stat.recent_logs.len() > 50 {
-                            module_stat.recent_logs.remove(0);
-                        }
-                    }
-
-                    // 更新Trace管理器
-                    {
-                        let mut trace_manager = state.trace_manager.lock().unwrap();
-                        trace_manager.process_log_entry(&log_entry);
-                    }
-
-                    // 更新模块聚合管理器
-                    state.module_aggregator_manager.process_log_entry(log_entry.clone()).await;
-
-                    // 更新最近日志
-                    {
-                        let mut recent_logs = state.recent_logs.lock().unwrap();
-                        recent_logs.push_back(log_entry.clone());
-                        if recent_logs.len() > 1000 {
-                            recent_logs.pop_front();
-                        }
-                    }
-
-                    // 广播日志条目
-                    let _ = state.log_sender.send(log_entry);
-                } else {
-                    warn!("日志条目验证失败: {}", line);
-                }
-            } else {
-                // 不是有效的JSON格式tracing日志，记录错误
-                error!("无法解析JSON格式日志: {}", line);
-            }
+            // 使用AppState的统一处理方法：缓存 + 广播
+            state.process_log_entry(log_entry);
+        } else {
+            warn!("日志条目验证失败: {}", line);
+        }
+    } else {
+        // 不是有效的JSON格式tracing日志，记录错误
+        error!("无法解析JSON格式日志: {}", line);
+    }
 }

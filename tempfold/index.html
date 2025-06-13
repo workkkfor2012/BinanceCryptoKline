@@ -195,13 +195,6 @@
             background-color: #000000 !important;
         }
 
-        /* 让xterm.js终端实例和它的视口100%填充其父容器(.module-terminal) */
-        .module-terminal .xterm,
-        .module-terminal .xterm-viewport,
-        .module-terminal .xterm-screen {
-            height: 100% !important;
-        }
-
         .connection-status {
             position: fixed;
             top: 15px;
@@ -1243,23 +1236,6 @@
             wsManager.connect();
 
             console.log('✅ WebLog前端聚合系统初始化完成');
-
-            // 添加窗口大小调整的监听器，以重新适配所有终端
-            let resizeTimer;
-            window.addEventListener('resize', () => {
-                // 使用节流防止高频触发
-                clearTimeout(resizeTimer);
-                resizeTimer = setTimeout(() => {
-                    console.log('🔄 窗口大小改变，适配所有终端');
-                    terminalManager.fitAddons.forEach(fitAddon => {
-                        try {
-                            fitAddon.fit();
-                        } catch (e) {
-                            // 忽略可能的错误，例如当终端容器被隐藏时
-                        }
-                    });
-                }, 250); // 250ms延迟
-            });
         });
     </script>
 </body>

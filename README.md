@@ -1,5 +1,3 @@
-db相关文档在docs/db.md中
-api相关文档在docs/api.md中
 
 # 币安U本位永续合约K线服务器
 

@@ -53,7 +53,10 @@ fn parse_tracing_json(json: &Value) -> Option<LogEntry> {
         }
     }
 
-
+    // 添加调试信息，特别关注buffered_kline_store的日志
+    if target == "buffered_kline_store" {
+        println!("🔍 [日志解析器] 解析buffered_kline_store日志: fields={:?}", fields);
+    }
 
     // 可选字段
     let module_path = json.get("module_path")
