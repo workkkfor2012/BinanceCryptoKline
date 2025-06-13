@@ -13,7 +13,8 @@
 # 定义目标文件夹的名称
 $targetFolderName = "tempfold"
 # 定义源文件路径
-$sourcePath = "src\weblog\src"
+#$sourcePath = "src\weblog\src"
+$sourcePath = "src\klaggregate"
 # 定义HTML文件路径
 $htmlFilePath = "src\weblog\static\index.html"
 # 获取当前脚本所在的路径
