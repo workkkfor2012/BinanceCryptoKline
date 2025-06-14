@@ -23,9 +23,9 @@ if ($startWeb) {
     Write-Host "🌐 启动WebLog系统..." -ForegroundColor Yellow
     $env:LOG_TRANSPORT = "named_pipe"
     $env:PIPE_NAME = $pipeName
-    $env:RUST_LOG = "info"
+    $env:RUST_LOG = "trace"
 
-    $webProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='$pipeName'; `$env:RUST_LOG='info'; cd src\weblog; cargo run --bin weblog -- --pipe-name '$pipeName'" -WindowStyle Hidden -PassThru
+    $webProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='$pipeName'; `$env:RUST_LOG='trace'; cd src\weblog; cargo run --bin weblog -- --pipe-name '$pipeName'" -WindowStyle Hidden -PassThru
 
     # 等待WebLog系统启动
     Start-Sleep -Seconds 3

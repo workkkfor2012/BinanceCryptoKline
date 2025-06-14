@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
-use tracing::{info, debug, warn, error, instrument};
+use tracing::{info, debug, warn, error, instrument, Instrument};
 
 /// 行情数据接入器
 pub struct MarketDataIngestor {
@@ -36,11 +36,12 @@ pub struct MarketDataIngestor {
 
 impl MarketDataIngestor {
     /// 创建新的行情数据接入器
+    #[instrument(target = "MarketDataIngestor", name="new_ingestor", skip_all, err)]
     pub async fn new(
         config: AggregateConfig,
         trade_router: Arc<TradeEventRouter>,
     ) -> Result<Self> {
-        info!(target: "market_data_ingestor", "创建行情数据接入器");
+        info!(target: "market_data_ingestor", event_name = "接入器初始化", "创建行情数据接入器");
         
         Ok(Self {
             config,
@@ -57,21 +58,22 @@ impl MarketDataIngestor {
     #[instrument(target = "MarketDataIngestor", fields(symbols_count), skip(self), err)]
     pub async fn start(&self) -> Result<()> {
         if self.is_running.load(Ordering::Relaxed) {
-            warn!(target: "market_data_ingestor", "行情数据接入器已经在运行");
+            warn!(target: "market_data_ingestor", event_name = "接入器已运行", "行情数据接入器已经在运行");
             return Ok(());
         }
 
-        info!(target: "market_data_ingestor", "启动行情数据接入器");
+        info!(target: "market_data_ingestor", event_name = "接入器启动开始", "启动行情数据接入器");
         self.is_running.store(true, Ordering::Relaxed);
 
         // 获取需要订阅的品种列表
         let symbols = self.trade_router.get_registered_symbols().await;
         if symbols.is_empty() {
+            error!(target: "market_data_ingestor", event_name = "无注册品种", "没有注册的交易品种");
             return Err(AppError::ConfigError("没有注册的交易品种".to_string()));
         }
 
         tracing::Span::current().record("symbols_count", symbols.len());
-        info!(target: "market_data_ingestor", "准备订阅品种的归集交易数据: symbols_count={}", symbols.len());
+        info!(target: "market_data_ingestor", event_name = "品种订阅准备", symbols_count = symbols.len(), "准备订阅品种的归集交易数据: symbols_count={}", symbols.len());
         
         // 创建WebSocket配置
         let ws_config = AggTradeConfig {
@@ -90,10 +92,10 @@ impl MarketDataIngestor {
             let mut receiver = trade_receiver;
             while let Some(trade_data) = receiver.recv().await {
                 if let Err(e) = trade_router.route_trade_event(trade_data).await {
-                    error!(target: "market_data_ingestor", "路由交易事件失败: {}", e);
+                    error!(target: "market_data_ingestor", event_name = "交易事件路由失败", error = %e, "路由交易事件失败");
                 }
             }
-        });
+        }.instrument(tracing::info_span!("trade_event_processor")));
 
         // 创建WebSocket客户端
         let client = Arc::new(RwLock::new(AggTradeWebSocketClient::new(
@@ -115,7 +117,7 @@ impl MarketDataIngestor {
         // 启动统计输出任务
         self.start_statistics_task().await;
         
-        info!(target: "market_data_ingestor", "行情数据接入器启动完成");
+        info!(target: "market_data_ingestor", event_name = "接入器启动完成", "行情数据接入器启动完成");
         Ok(())
     }
 
@@ -126,22 +128,21 @@ impl MarketDataIngestor {
             return Ok(());
         }
 
-        info!(target: "market_data_ingestor", "停止行情数据接入器");
+        info!(target: "market_data_ingestor", event_name = "接入器停止开始", "停止行情数据接入器");
         self.is_running.store(false, Ordering::Relaxed);
 
         // 停止WebSocket客户端
         let websocket_client = self.websocket_client.read().await;
         if let Some(_client) = &*websocket_client {
             // WebSocket客户端会在连接断开时自动停止
-            debug!(target: "market_data_ingestor", "WebSocket客户端将自动停止");
+            debug!(target: "market_data_ingestor", event_name = "WebSocket客户端自动停止", "WebSocket客户端将自动停止");
         }
 
-        info!(target: "market_data_ingestor", "行情数据接入器已停止");
+        info!(target: "market_data_ingestor", event_name = "接入器停止完成", "行情数据接入器已停止");
         Ok(())
     }
     
     /// 启动统计输出任务
-    #[instrument(target = "MarketDataIngestor", skip(self))]
     async fn start_statistics_task(&self) {
         let is_running = self.is_running.clone();
         let message_count = self.message_count.clone();
@@ -163,12 +164,21 @@ impl MarketDataIngestor {
                 let message_rate = current_messages - last_message_count;
                 let error_rate = current_errors - last_error_count;
 
-                info!(target: "market_data_ingestor", "行情数据统计报告: connections={}, total_messages={}, message_rate={}, total_errors={}, error_rate={}", connections, current_messages, message_rate, current_errors, error_rate);
+                info!(
+                    target: "market_data_ingestor",
+                    event_name = "接入器统计报告",
+                    connections = connections,
+                    total_messages = current_messages,
+                    message_rate = message_rate,
+                    total_errors = current_errors,
+                    error_rate = error_rate,
+                    "行情数据统计报告"
+                );
                 
                 last_message_count = current_messages;
                 last_error_count = current_errors;
             }
-        });
+        }.instrument(tracing::info_span!("ingestor_statistics_task")));
     }
     
     /// 获取连接数量
@@ -203,8 +213,9 @@ impl AggTradeWebSocketClient {
 }
 
 impl WebSocketClient for AggTradeWebSocketClient {
+    #[instrument(target = "AggTradeWebSocketClient", name="start_websocket", skip(self), err)]
     async fn start(&mut self) -> Result<()> {
-        info!(target: "market_data_ingestor", "启动归集交易WebSocket客户端");
+        info!(target: "market_data_ingestor", event_name = "WebSocket客户端启动", "启动归集交易WebSocket客户端");
 
         // 创建归集交易配置
         let agg_trade_config = crate::klcommon::websocket::AggTradeConfig {
@@ -227,7 +238,7 @@ impl WebSocketClient for AggTradeWebSocketClient {
         // 启动WebSocket客户端
         agg_trade_client.start().await?;
 
-        info!(target: "market_data_ingestor", "归集交易WebSocket客户端启动完成");
+        info!(target: "market_data_ingestor", event_name = "WebSocket客户端启动完成", "归集交易WebSocket客户端启动完成");
         Ok(())
     }
 

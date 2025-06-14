@@ -33,7 +33,7 @@ pub use config::AggregateConfig;
 use crate::klcommon::{Result, ServerTimeSyncManager};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, error, instrument};
+use tracing::{info, error, instrument, Instrument};
 
 /// K线聚合系统的主要协调器
 #[derive(Clone)]
@@ -50,14 +50,17 @@ pub struct KlineAggregateSystem {
 
 impl KlineAggregateSystem {
     /// 创建新的K线聚合系统
+    #[instrument(target = "KlineAggregateSystem", skip_all, err)]
     pub async fn new(config: AggregateConfig) -> Result<Self> {
+        info!(target: "mod", event_name = "系统初始化开始", "初始化K线聚合系统...");
+
         // 初始化服务器时间同步管理器
         let time_sync_manager = Arc::new(ServerTimeSyncManager::new());
 
         // 进行一次时间同步
-        info!(target: "mod", "初始化服务器时间同步...");
+        info!(target: "mod", event_name = "时间同步初始化", "初始化服务器时间同步...");
         time_sync_manager.sync_time_once().await?;
-        info!(target: "mod", "服务器时间同步完成");
+        info!(target: "mod", event_name = "时间同步完成", "服务器时间同步完成");
 
         // 初始化符号元数据注册表
         let symbol_registry = Arc::new(SymbolMetadataRegistry::new(config.clone()).await?);
@@ -84,6 +87,7 @@ impl KlineAggregateSystem {
             trade_router.clone(),
         ).await?);
 
+        info!(target: "mod", event_name = "系统初始化完成", "K线聚合系统初始化完成");
         Ok(Self {
             config,
             symbol_registry,
@@ -99,15 +103,15 @@ impl KlineAggregateSystem {
     /// 启动整个聚合系统
     #[instrument(target = "KlineAggregateSystem", skip(self), err)]
     pub async fn start(&self) -> Result<()> {
-        info!(target: "mod", "启动K线聚合系统");
+        info!(target: "mod", event_name = "系统启动开始", "启动K线聚合系统");
 
         // 1. 启动服务器时间同步任务
         let time_sync_manager = self.time_sync_manager.clone();
         tokio::spawn(async move {
             if let Err(e) = time_sync_manager.start().await {
-                error!(target: "mod", "服务器时间同步任务失败: {}", e);
+                error!(target: "mod", event_name = "时间同步任务失败", error = %e, "服务器时间同步任务失败");
             }
-        });
+        }.instrument(tracing::info_span!("time_sync_manager_task")));
 
         // 2. 启动双缓冲存储的定时切换
         self.buffered_store.start_scheduler().await?;
@@ -121,15 +125,18 @@ impl KlineAggregateSystem {
         // 5. 启动市场数据接入
         self.market_ingestor.start().await?;
 
-        info!(target: "mod", "K线聚合系统启动完成");
+        info!(target: "mod", event_name = "系统启动完成", "K线聚合系统启动完成");
         Ok(())
     }
     
     /// 初始化所有交易品种的聚合器
+    #[instrument(target = "KlineAggregateSystem", skip(self), err)]
     async fn initialize_aggregators(&self) -> Result<()> {
         let symbols = self.symbol_registry.get_all_symbols().await?;
         let mut aggregators = self.aggregators.write().await;
-        
+
+        info!(target: "mod", event_name = "聚合器初始化开始", symbols_count = symbols.len(), "开始初始化 {} 个品种的K线聚合器", symbols.len());
+
         for (symbol, symbol_index) in symbols {
             let aggregator = Arc::new(SymbolKlineAggregator::new(
                 symbol.clone(),
@@ -144,14 +151,15 @@ impl KlineAggregateSystem {
 
             aggregators.push(aggregator);
         }
-        
-        info!(target: "mod", "已初始化 {} 个品种的K线聚合器", aggregators.len());
+
+        info!(target: "mod", event_name = "聚合器初始化完成", aggregators_count = aggregators.len(), "已初始化 {} 个品种的K线聚合器", aggregators.len());
         Ok(())
     }
     
     /// 停止系统
+    #[instrument(target = "KlineAggregateSystem", skip(self), err)]
     pub async fn stop(&self) -> Result<()> {
-        info!(target: "mod", "停止K线聚合系统...");
+        info!(target: "mod", event_name = "系统停止开始", "停止K线聚合系统...");
 
         // 停止市场数据接入
         self.market_ingestor.stop().await?;
@@ -162,7 +170,7 @@ impl KlineAggregateSystem {
         // 停止双缓冲存储调度器
         self.buffered_store.stop_scheduler().await?;
 
-        info!(target: "mod", "K线聚合系统已停止");
+        info!(target: "mod", event_name = "系统停止完成", "K线聚合系统已停止");
         Ok(())
     }
     

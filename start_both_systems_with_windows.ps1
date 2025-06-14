@@ -53,7 +53,7 @@ Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
 cd src\weblog
 `$env:LOG_TRANSPORT='named_pipe'
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动WebLog服务器（前端聚合版）...' -ForegroundColor Green
@@ -88,7 +88,7 @@ Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow

@@ -54,7 +54,7 @@ pub struct AppState {
 impl AppState {
     /// 创建新的应用状态
     pub fn new() -> (Self, tokio::sync::broadcast::Receiver<LogEntry>) {
-        let (log_sender, log_receiver) = tokio::sync::broadcast::channel(1000);
+        let (log_sender, log_receiver) = tokio::sync::broadcast::channel(10000000);
 
         let state = Self {
             start_time: SystemTime::now(),
@@ -78,7 +78,7 @@ impl AppState {
             logs.push_back(log_entry.clone());
             
             // 保持最近5000条日志
-            if logs.len() > 5000 {
+            if logs.len() > 50000000 {
                 logs.pop_front();
             }
         }

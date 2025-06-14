@@ -8,6 +8,7 @@ use kline_server::klcommon::{Result, AppError};
 use std::path::Path;
 use tokio::signal;
 use tokio::time::{Duration};
+use tracing::{instrument, info, error, warn, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 use chrono;
 
@@ -15,6 +16,7 @@ use chrono;
 const DEFAULT_CONFIG_PATH: &str = "config/aggregate_config.toml";
 
 #[tokio::main]
+#[instrument(target = "KlineAggregateService")]
 async fn main() -> Result<()> {
     // 处理命令行参数
     if !handle_args() {
@@ -24,31 +26,31 @@ async fn main() -> Result<()> {
     // 初始化可观察性系统
     init_observability_system()?;
 
-    tracing::info!(target = "KlineAggregateService", "启动K线聚合服务...");
+    info!(target = "KlineAggregateService", event_name = "服务启动", "启动K线聚合服务...");
 
     // 加载配置
     let config = load_config().await?;
-    tracing::info!(target = "KlineAggregateService", "配置加载完成");
+    info!(target = "KlineAggregateService", event_name = "配置加载完成", "配置加载完成");
 
     // 创建K线聚合系统
     let system = match KlineAggregateSystem::new(config).await {
         Ok(system) => {
-            tracing::info!(target = "KlineAggregateService", "K线聚合系统创建成功");
+            info!(target = "KlineAggregateService", event_name = "系统创建成功", "K线聚合系统创建成功");
             system
         }
         Err(e) => {
-            tracing::error!(target = "KlineAggregateService", "创建K线聚合系统失败: {}", e);
+            error!(target = "KlineAggregateService", event_name = "系统创建失败", error = %e, "创建K线聚合系统失败");
             return Err(e);
         }
     };
 
     // 启动系统
     if let Err(e) = system.start().await {
-        tracing::error!(target = "KlineAggregateService", "启动K线聚合系统失败: {}", e);
+        error!(target = "KlineAggregateService", event_name = "系统启动失败", error = %e, "启动K线聚合系统失败");
         return Err(e);
     }
 
-    tracing::info!(target = "KlineAggregateService", "K线聚合服务启动完成");
+    info!(target = "KlineAggregateService", event_name = "服务启动完成", "K线聚合服务启动完成");
 
     // 启动状态监控任务
     start_status_monitor(system.clone()).await;
@@ -60,11 +62,11 @@ async fn main() -> Result<()> {
     wait_for_shutdown_signal().await;
 
     // 优雅关闭
-    tracing::info!(target = "KlineAggregateService", "收到关闭信号，开始优雅关闭...");
+    info!(target = "KlineAggregateService", event_name = "收到关闭信号", "收到关闭信号，开始优雅关闭...");
     if let Err(e) = system.stop().await {
-        tracing::error!(target = "KlineAggregateService", "关闭K线聚合系统失败: {}", e);
+        error!(target = "KlineAggregateService", event_name = "系统停止失败", error = %e, "关闭K线聚合系统失败");
     } else {
-        tracing::info!(target = "KlineAggregateService", "K线聚合服务已优雅关闭");
+        info!(target = "KlineAggregateService", event_name = "服务优雅关闭", "K线聚合服务已优雅关闭");
     }
 
     Ok(())
@@ -119,7 +121,7 @@ fn init_observability_system() -> Result<()> {
 /// 内部初始化函数，只会被调用一次
 fn init_observability_system_inner() -> Result<()> {
     // 设置日志级别
-    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "trace".to_string());
 
     // 检查传输方式配置
     let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "named_pipe".to_string());
@@ -192,61 +194,62 @@ fn init_observability_system_inner() -> Result<()> {
         match tracing_log::LogTracer::init() {
             Ok(_) => {
                 // 初始化成功
-                tracing::debug!(target = "KlineAggregateService", "log桥接器初始化成功");
+                tracing::debug!(target = "KlineAggregateService", event_name = "log桥接器初始化成功", "log桥接器初始化成功");
             }
             Err(e) => {
                 // 这种情况很少见，但也是可能的
-                tracing::debug!(target = "KlineAggregateService", "log桥接器初始化失败: {}", e);
+                tracing::debug!(target = "KlineAggregateService", event_name = "log桥接器初始化失败", error = %e, "log桥接器初始化失败");
             }
         }
     } else {
         // tracing订阅器已存在，说明日志系统已经完整初始化，不需要再初始化LogTracer
-        tracing::debug!(target = "KlineAggregateService", "检测到现有日志系统，跳过log桥接器初始化");
+        tracing::debug!(target = "KlineAggregateService", event_name = "log桥接器初始化跳过", "检测到现有日志系统，跳过log桥接器初始化");
     }
 
     // 等待一小段时间确保tracing系统完全初始化
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    tracing::info!(target = "KlineAggregateService", "🔍 可观察性系统初始化完成，级别: {}", log_level);
-    tracing::info!(target = "KlineAggregateService", "📊 规格验证层已禁用，减少日志输出");
-    tracing::info!(target = "KlineAggregateService", "📡 日志传输方式: {}", log_transport);
+    tracing::info!(target = "KlineAggregateService", event_name = "可观察性系统初始化完成", log_level = %log_level, "🔍 可观察性系统初始化完成，级别: {}", log_level);
+    tracing::info!(target = "KlineAggregateService", event_name = "规格验证层状态", "📊 规格验证层已禁用，减少日志输出");
+    tracing::info!(target = "KlineAggregateService", event_name = "日志传输配置", transport = %log_transport, "📡 日志传输方式: {}", log_transport);
 
     // 显示传输配置信息
     match log_transport.as_str() {
         "named_pipe" => {
             let pipe_name = std::env::var("PIPE_NAME")
                 .unwrap_or_else(|_| r"\\.\pipe\kline_log_pipe".to_string());
-            tracing::info!(target = "KlineAggregateService", "📡 使用命名管道传输日志: {}", pipe_name);
+            tracing::info!(target = "KlineAggregateService", event_name = "日志传输详情", transport_type = "named_pipe", pipe_name = %pipe_name, "📡 使用命名管道传输日志: {}", pipe_name);
         }
         "websocket" => {
             let web_port = std::env::var("WEB_PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse::<u16>()
                 .unwrap_or(3000);
-            tracing::info!(target = "KlineAggregateService", "🌐 使用WebSocket传输日志，端口: {}", web_port);
+            tracing::info!(target = "KlineAggregateService", event_name = "日志传输详情", transport_type = "websocket", web_port = web_port, "🌐 使用WebSocket传输日志，端口: {}", web_port);
         }
         _ => {
-            tracing::info!(target = "KlineAggregateService", "⚠️ 未知传输方式 '{}', 使用默认命名管道", log_transport);
+            tracing::warn!(target = "KlineAggregateService", event_name = "未知传输方式", configured_transport = %log_transport, "⚠️ 未知传输方式 '{}', 使用默认命名管道", log_transport);
         }
     }
 
     // 发送测试日志确保传输工作
-    tracing::info!(target = "KlineAggregateService", "🧪 测试日志1: 可观察性系统测试");
-    tracing::warn!(target = "KlineAggregateService", "🧪 测试日志2: 警告级别测试");
-    tracing::error!(target = "KlineAggregateService", "🧪 测试日志3: 错误级别测试");
+    tracing::info!(target = "KlineAggregateService", event_name = "可观测性测试日志", test_id = 1, "🧪 测试日志1: 可观察性系统测试");
+    tracing::warn!(target = "KlineAggregateService", event_name = "可观测性测试日志", test_id = 2, "🧪 测试日志2: 警告级别测试");
+    tracing::error!(target = "KlineAggregateService", event_name = "可观测性测试日志", test_id = 3, "🧪 测试日志3: 错误级别测试");
 
     Ok(())
 }
 
 /// 加载配置
+#[instrument(target = "KlineAggregateService", err)]
 async fn load_config() -> Result<AggregateConfig> {
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
     
     if Path::new(&config_path).exists() {
-        tracing::info!(target = "KlineAggregateService", "从文件加载配置: {}", config_path);
+        info!(target = "KlineAggregateService", event_name = "从文件加载配置", path = %config_path, "从文件加载配置: {}", config_path);
         AggregateConfig::from_file(&config_path)
     } else {
-        tracing::warn!(target = "KlineAggregateService", "配置文件不存在: {}，使用默认配置", config_path);
+        warn!(target = "KlineAggregateService", event_name = "配置文件不存在", path = %config_path, "配置文件不存在: {}，使用默认配置", config_path);
 
         // 创建默认配置
         let config = AggregateConfig::default();
@@ -261,9 +264,9 @@ async fn load_config() -> Result<AggregateConfig> {
 
         // 保存默认配置到文件
         if let Err(e) = config.save_to_file(&config_path) {
-            tracing::warn!(target = "KlineAggregateService", "保存默认配置失败: {}", e);
+            warn!(target = "KlineAggregateService", event_name = "默认配置保存失败", path = %config_path, error = %e, "保存默认配置失败");
         } else {
-            tracing::info!(target = "KlineAggregateService", "默认配置已保存到: {}", config_path);
+            info!(target = "KlineAggregateService", event_name = "默认配置已保存", path = %config_path, "默认配置已保存到: {}", config_path);
         }
         
         Ok(config)
@@ -272,47 +275,54 @@ async fn load_config() -> Result<AggregateConfig> {
 
 /// 启动状态监控任务
 async fn start_status_monitor(system: KlineAggregateSystem) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+    tokio::spawn(
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
 
-        loop {
-            interval.tick().await;
+            loop {
+                interval.tick().await;
 
-            let status = system.get_status().await;
-            tracing::info!(
-                target = "KlineAggregateService",
-                "系统状态 - 品种数: {}, 活跃连接: {}, 缓冲切换: {}, 持久化: {}",
-                status.total_symbols,
-                status.active_connections,
-                status.buffer_swap_count,
-                status.persistence_status
-            );
-        }
-    });
+                let status = system.get_status().await;
+                info!(
+                    target = "KlineAggregateService",
+                    event_name = "系统状态报告",
+                    total_symbols = status.total_symbols,
+                    active_connections = status.active_connections,
+                    buffer_swap_count = status.buffer_swap_count,
+                    persistence_status = %status.persistence_status,
+                    "系统状态报告"
+                );
+            }
+        }.instrument(tracing::info_span!("status_monitor_task"))
+    );
 }
 
 /// 启动测试日志任务（每10秒发送一次测试日志）
 async fn start_test_logging() {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
-        let mut counter = 0;
+    tokio::spawn(
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            let mut counter = 0;
 
-        loop {
-            interval.tick().await;
-            counter += 1;
+            loop {
+                interval.tick().await;
+                counter += 1;
 
-            tracing::info!(
-                target = "KlineAggregateService",
-                "🧪 定期测试日志 #{}: 系统运行正常，时间戳: {}",
-                counter,
-                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-            );
+                info!(
+                    target = "KlineAggregateService",
+                    event_name = "定期测试日志",
+                    counter = counter,
+                    timestamp = %chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                    "🧪 定期测试日志 #{}: 系统运行正常",
+                    counter
+                );
 
-            if counter % 3 == 0 {
-                tracing::warn!(target = "KlineAggregateService", "🧪 警告测试日志 #{}: 这是一个测试警告", counter);
+                if counter % 3 == 0 {
+                    warn!(target = "KlineAggregateService", event_name = "定期测试警告", counter = counter, "🧪 警告测试日志 #{}: 这是一个测试警告", counter);
+                }
             }
-        }
-    });
+        }.instrument(tracing::info_span!("periodic_test_log_task"))
+    );
 }
 
 /// 等待关闭信号
@@ -336,10 +346,10 @@ async fn wait_for_shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            tracing::info!(target = "KlineAggregateService", "收到Ctrl+C信号");
+            info!(target = "KlineAggregateService", event_name = "信号接收", signal = "Ctrl+C", "收到Ctrl+C信号");
         },
         _ = terminate => {
-            tracing::info!(target = "KlineAggregateService", "收到SIGTERM信号");
+            info!(target = "KlineAggregateService", event_name = "信号接收", signal = "SIGTERM", "收到SIGTERM信号");
         },
     }
 }
@@ -357,7 +367,7 @@ fn show_help() {
     println!();
     println!("环境变量:");
     println!("  CONFIG_PATH    配置文件路径 (默认: {})", DEFAULT_CONFIG_PATH);
-    println!("  RUST_LOG       日志级别 (默认: info)");
+    println!("  RUST_LOG       日志级别 (默认: trace)");
     println!();
     println!("示例:");
     println!("  # 使用默认配置启动");

@@ -84,16 +84,16 @@ if ($useNamedPipe) {
     Write-Host "🔧 设置命名管道环境变量..." -ForegroundColor Cyan
     $env:LOG_TRANSPORT = "named_pipe"
     $env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
-    $env:RUST_LOG = "info"
+    $env:RUST_LOG = "trace"
     Write-Host "  LOG_TRANSPORT = named_pipe" -ForegroundColor Gray
     Write-Host "  PIPE_NAME = \\.\pipe\kline_log_pipe" -ForegroundColor Gray
-    Write-Host "  RUST_LOG = info" -ForegroundColor Gray
+    Write-Host "  RUST_LOG = trace" -ForegroundColor Gray
 } else {
     Write-Host "🔧 设置文件日志环境变量..." -ForegroundColor Cyan
     $env:LOG_TRANSPORT = "file"
-    $env:RUST_LOG = "info"
+    $env:RUST_LOG = "trace"
     Write-Host "  LOG_TRANSPORT = file" -ForegroundColor Gray
-    Write-Host "  RUST_LOG = info" -ForegroundColor Gray
+    Write-Host "  RUST_LOG = trace" -ForegroundColor Gray
 }
 Write-Host ""
 

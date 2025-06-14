@@ -7,7 +7,7 @@ use crate::klcommon::{Result, AppError, api::get_aligned_time, ServerTimeSyncMan
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
-use tracing::{instrument, event, Level, debug, warn};
+use tracing::{instrument, event, Level, debug, warn, info};
 
 /// 单品种K线聚合器
 pub struct SymbolKlineAggregator {
@@ -85,6 +85,7 @@ impl KlineAggregationState {
 
 impl SymbolKlineAggregator {
     /// 创建新的品种K线聚合器
+    #[instrument(target = "SymbolKlineAggregator", name="new_aggregator", fields(symbol = %symbol, symbol_index), skip_all, err)]
     pub async fn new(
         symbol: String,
         symbol_index: u32,
@@ -92,7 +93,7 @@ impl SymbolKlineAggregator {
         buffered_store: Arc<BufferedKlineStore>,
         time_sync_manager: Arc<ServerTimeSyncManager>,
     ) -> Result<Self> {
-        debug!(target: "symbol_kline_aggregator", "创建品种K线聚合器: symbol={}, symbol_index={}", symbol, symbol_index);
+        info!(target: "symbol_kline_aggregator", event_name = "聚合器初始化开始", symbol = %symbol, symbol_index = symbol_index, "创建品种K线聚合器: symbol={}, symbol_index={}", symbol, symbol_index);
         
         // 创建周期信息
         let mut period_infos = Vec::new();
@@ -117,7 +118,7 @@ impl SymbolKlineAggregator {
             time_sync_manager,
         };
 
-        debug!(target: "symbol_kline_aggregator", "品种K线聚合器创建完成: symbol={}, symbol_index={}, period_count={}", symbol, symbol_index, period_count);
+        info!(target: "symbol_kline_aggregator", event_name = "聚合器初始化完成", symbol = %symbol, symbol_index = symbol_index, period_count = period_count, "品种K线聚合器创建完成: symbol={}, symbol_index={}, period_count={}", symbol, symbol_index, period_count);
         Ok(aggregator)
     }
     
@@ -150,7 +151,7 @@ impl SymbolKlineAggregator {
             self.time_sync_manager.get_calibrated_server_time()
         } else {
             // 如果时间同步失效，使用交易时间作为备选
-            warn!(target: "symbol_kline_aggregator", "服务器时间同步失效，使用交易时间: trade_timestamp={}, symbol={}", trade.timestamp_ms, trade.symbol);
+            warn!(target: "symbol_kline_aggregator", event_name = "时间同步失效", trade_timestamp = trade.timestamp_ms, symbol = %trade.symbol, "服务器时间同步失效，使用交易时间: trade_timestamp={}, symbol={}", trade.timestamp_ms, trade.symbol);
             trade.timestamp_ms
         };
 
@@ -167,6 +168,7 @@ impl SymbolKlineAggregator {
     }
     
     /// 为特定周期处理交易
+    #[instrument(target = "SymbolKlineAggregator", name="process_trade_for_period", fields(interval = %state.period_info.interval), skip_all)]
     async fn process_trade_for_period(
         &self,
         state: &mut KlineAggregationState,
@@ -182,7 +184,8 @@ impl SymbolKlineAggregator {
             event!(
                 Level::INFO,
                 target = "SymbolKlineAggregator",
-                event_type = "kline_finalized",
+                event_name = "K线已完成",
+                is_high_freq = true,
                 symbol = %self.symbol,
                 interval = %state.period_info.interval,
                 open_time = state.current_kline.open_time,
@@ -264,7 +267,7 @@ impl SymbolKlineAggregator {
             event!(
                 Level::DEBUG,
                 target = "SymbolKlineAggregator",
-                event_type = "kline_generated",
+                event_name = "新K线已生成",
                 symbol = %self.symbol,
                 interval = %state.period_info.interval,
                 open_time = kline.open_time,
@@ -293,7 +296,7 @@ impl SymbolKlineAggregator {
     }
     
     /// 强制完成所有当前K线（用于系统关闭时）
-    #[instrument(target = "SymbolKlineAggregator", skip(self), err)]
+    #[instrument(target = "SymbolKlineAggregator", name="finalize_all", skip(self), err)]
     pub async fn finalize_all_klines(&self) -> Result<()> {
         let mut states = self.aggregation_states.write().await;
         
@@ -307,7 +310,7 @@ impl SymbolKlineAggregator {
                     &state.current_kline,
                 ).await?;
                 
-                debug!(target: "symbol_kline_aggregator", "强制完成K线: symbol={}, interval={}, open_time={}, period_index={}", self.symbol, state.period_info.interval, state.current_kline.open_time, period_index);
+                debug!(target: "symbol_kline_aggregator", event_name = "K线强制完成", symbol = %self.symbol, interval = %state.period_info.interval, open_time = state.current_kline.open_time, period_index = *period_index, "强制完成K线: symbol={}, interval={}, open_time={}, period_index={}", self.symbol, state.period_info.interval, state.current_kline.open_time, period_index);
             }
         }
         

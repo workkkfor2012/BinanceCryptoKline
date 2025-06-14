@@ -160,7 +160,7 @@ fn init_logging(verbose: bool) {
     });
 
     // 设置日志级别
-    let log_level = if verbose { "debug" } else { "info" };
+    let log_level = if verbose { "trace" } else { "trace" };
 
     // 创建文件输出层
     let file_appender = tracing_appender::rolling::daily(log_dir, "kline_server.log");

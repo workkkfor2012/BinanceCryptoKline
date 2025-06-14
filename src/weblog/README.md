@@ -194,7 +194,7 @@ async fn custom_api_handler(State(state): State<Arc<AppState>>) -> impl IntoResp
 
 ### 调试模式
 ```powershell
-$env:RUST_LOG = "debug"
+$env:RUST_LOG = "trace"
 cargo run --bin weblog -- --pipe-name "\\.\pipe\kline_log_pipe"
 ```
 

@@ -23,7 +23,7 @@ struct Cli {
     pipe_name: String,
 
     /// 日志级别过滤
-    #[arg(long, default_value = "info")]
+    #[arg(long, default_value = "trace")]
     log_level: String,
 
     /// 最大保留的日志条目数量

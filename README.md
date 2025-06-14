@@ -54,8 +54,7 @@ cargo run --release --bin kline_data_service
 # 仅下载历史数据，不启动最新K线更新器
 cargo run --release --bin kline_data_service -- --no-latest-kline-updater
 
-# 仅启动实时更新，不下载历史数据
-cargo run --release --bin kline_data_service -- --stream-only
+
 
 # 启动Web服务器
 cargo run --release --bin kline_server

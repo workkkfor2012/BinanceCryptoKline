@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{RwLock, Notify};
 use tokio::time::{interval, Duration, Instant};
-use tracing::{info, debug, warn, instrument};
+use tracing::{info, debug, warn, instrument, Instrument};
 
 /// 双缓冲K线存储
 pub struct BufferedKlineStore {
@@ -42,7 +42,7 @@ pub struct BufferedKlineStore {
 
 impl BufferedKlineStore {
     /// 创建新的双缓冲存储
-    #[instrument(target = "BufferedKlineStore", fields(total_slots), skip_all, err)]
+    #[instrument(target = "BufferedKlineStore", name="new_store", fields(total_slots), skip_all, err)]
     pub async fn new(
         symbol_registry: Arc<SymbolMetadataRegistry>,
         swap_interval_ms: u64,
@@ -50,7 +50,7 @@ impl BufferedKlineStore {
         let total_slots = symbol_registry.get_total_kline_slots();
         tracing::Span::current().record("total_slots", total_slots);
 
-        info!(target: "buffered_kline_store", "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
+        info!(target: "buffered_kline_store", event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
         
         // 创建两个相同大小的缓冲区
         let write_buffer = Self::create_buffer(total_slots);
@@ -68,7 +68,7 @@ impl BufferedKlineStore {
             total_slots,
         };
         
-        info!(target: "buffered_kline_store", "双缓冲K线存储初始化完成: total_slots={}", total_slots);
+        info!(target: "buffered_kline_store", event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
         Ok(store)
     }
     
@@ -85,11 +85,11 @@ impl BufferedKlineStore {
     #[instrument(target = "BufferedKlineStore", fields(swap_interval_ms = self.swap_interval_ms), skip(self), err)]
     pub async fn start_scheduler(&self) -> Result<()> {
         if self.scheduler_running.load(Ordering::Relaxed) {
-            warn!(target: "buffered_kline_store", "调度器已经在运行");
+            warn!(target: "buffered_kline_store", event_name = "调度器已运行", "调度器已经在运行");
             return Ok(());
         }
 
-        info!(target: "buffered_kline_store", "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
+        info!(target: "buffered_kline_store", event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
         self.scheduler_running.store(true, Ordering::Relaxed);
         
         let write_buffer = self.write_buffer.clone();
@@ -129,7 +129,7 @@ impl BufferedKlineStore {
 
                         info!(
                             target: "buffered_kline_store",
-                            event_type = "BUFFER_SWAP_COMPLETED",
+                            event_name = "缓冲区交换完成",
                             is_high_freq = true,
                             swap_count = count,
                             duration_ms = duration_ms,
@@ -144,41 +144,47 @@ impl BufferedKlineStore {
                         snapshot_ready_notify.notify_waiters();
                     }
                     _ = stop_signal.notified() => {
-                        info!(target: "buffered_kline_store", "收到停止信号，调度器退出");
+                        info!(target: "buffered_kline_store", event_name = "调度器停止信号", "收到停止信号，调度器退出");
                         break;
                     }
                 }
             }
 
             scheduler_running.store(false, Ordering::Relaxed);
-            info!(target: "buffered_kline_store", "双缓冲调度器已停止");
-        });
+            info!(target: "buffered_kline_store", event_name = "调度器已停止", "双缓冲调度器已停止");
+        }.instrument(tracing::info_span!("buffer_swap_scheduler")));
         
         Ok(())
     }
     
     /// 停止调度器
-    #[instrument(target = "BufferedKlineStore", skip(self), err)]
+    #[instrument(target = "BufferedKlineStore", name="stop_scheduler", skip(self), err)]
     pub async fn stop_scheduler(&self) -> Result<()> {
         if !self.scheduler_running.load(Ordering::Relaxed) {
+            info!(target: "buffered_kline_store", event_name = "调度器未运行", "调度器未在运行，无需停止");
             return Ok(());
         }
 
-        info!(target: "buffered_kline_store", "停止双缓冲调度器");
+        info!(target: "buffered_kline_store", event_name = "调度器停止开始", "停止双缓冲调度器");
         self.scheduler_running.store(false, Ordering::Relaxed);
         self.stop_signal.notify_waiters();
 
         // 等待调度器完全停止
+        let start_wait = Instant::now();
         while self.scheduler_running.load(Ordering::Relaxed) {
+            if start_wait.elapsed() > Duration::from_secs(5) {
+                warn!(target: "buffered_kline_store", event_name = "调度器停止超时", "等待调度器停止超时(5s)");
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        info!(target: "buffered_kline_store", "双缓冲调度器已停止");
+        info!(target: "buffered_kline_store", event_name = "调度器停止确认", "双缓冲调度器已停止");
         Ok(())
     }
     
     /// 写入K线数据
-    #[instrument(target = "BufferedKlineStore", fields(symbol_index, period_index, flat_index), skip(self, kline_data), err)]
+    #[instrument(target = "BufferedKlineStore", name="write_kline", fields(symbol_index, period_index, flat_index), skip(self, kline_data), err)]
     pub async fn write_kline_data(
         &self,
         symbol_index: u32,
@@ -207,7 +213,7 @@ impl BufferedKlineStore {
     }
     
     /// 读取K线数据
-    #[instrument(target = "BufferedKlineStore", fields(symbol_index, period_index, flat_index), skip(self), err)]
+    #[instrument(target = "BufferedKlineStore", name="read_kline", fields(symbol_index, period_index, flat_index), skip(self), err)]
     pub async fn read_kline_data(
         &self,
         symbol_index: u32,
@@ -215,6 +221,7 @@ impl BufferedKlineStore {
     ) -> Result<KlineData> {
         // 计算扁平化索引
         let flat_index = self.symbol_registry.calculate_flat_index(symbol_index, period_index);
+        tracing::Span::current().record("flat_index", flat_index);
         
         if flat_index >= self.total_slots {
             return Err(AppError::DataError(format!(

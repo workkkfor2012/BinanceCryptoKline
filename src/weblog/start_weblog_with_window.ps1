@@ -45,7 +45,7 @@ Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
 `$env:LOG_TRANSPORT='named_pipe'
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动WebLog服务器...' -ForegroundColor Green

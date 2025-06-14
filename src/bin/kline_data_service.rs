@@ -189,7 +189,7 @@ fn init_logging(verbose: bool, intervals: &[String]) {
     });
 
     // 设置日志级别
-    let log_level = if verbose { "debug" } else { "info" };
+    let log_level = if verbose { "trace" } else { "trace" };
 
     // 检查日志传输方式
     let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "file".to_string());
