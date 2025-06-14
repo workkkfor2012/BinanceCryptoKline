@@ -633,10 +633,10 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new("info")
-                            .add_directive("compare_klines=info".parse().unwrap())
-                            .add_directive("kline_server::klcommon::api=info".parse().unwrap())
-                            .add_directive("kline_server::klcommon::db=info".parse().unwrap())
+                        tracing_subscriber::EnvFilter::new("trace")
+                            .add_directive("compare_klines=trace".parse().unwrap())
+                            .add_directive("kline_server::klcommon::api=trace".parse().unwrap())
+                            .add_directive("kline_server::klcommon::db=trace".parse().unwrap())
                     })
             )
             .init();
@@ -647,10 +647,10 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new("info")
-                            .add_directive("compare_klines=info".parse().unwrap())
-                            .add_directive("kline_server::klcommon::api=info".parse().unwrap())
-                            .add_directive("kline_server::klcommon::db=info".parse().unwrap())
+                        tracing_subscriber::EnvFilter::new("trace")
+                            .add_directive("compare_klines=trace".parse().unwrap())
+                            .add_directive("kline_server::klcommon::api=trace".parse().unwrap())
+                            .add_directive("kline_server::klcommon::db=trace".parse().unwrap())
                     })
             )
             .init();

@@ -1,0 +1,2769 @@
+好的，收到您的任务。作为一名顶级的Rust可观测性专家，我将严格遵循您提出的 “四加一”黄金日志范式，对您提供的所有Rust代码文件进行全面的日志埋点改造。
+
+我的目标是：
+
+不改变任何核心业务逻辑。
+
+严格应用“四加一”范式，对并发、函数、事件和状态进行深度追踪。
+
+输出对AI诊断高度友好的、结构化的JSON日志流。
+
+保持代码风格和注释语言的一致性（使用中文）。
+
+以下是根据您的要求，对每个文件进行改造后的代码。我已经仔细审查并应用了所有规则。
+
+kline_aggregate_service.txt (入口文件)
+
+改造说明:
+
+并发追踪: 为start_status_monitor和start_test_logging的tokio::spawn添加了instrument宏，明确标识了后台任务。
+
+关键事件: 为服务启动、关闭、配置加载等关键生命周期事件添加了event_type。
+
+关键状态: 在日志中明确记录了日志级别、传输方式等关键配置状态。
+
+错误详情: 在系统创建和启动失败的路径上，使用error = %e记录了详细错误。
+
+//! K线聚合服务启动文件
+//!
+//! 启动完整的K线聚合系统，包括数据接入、聚合、存储和持久化。
+
+use kline_server::klaggregate::{KlineAggregateSystem, AggregateConfig};
+use kline_server::klaggregate::observability::WebSocketLogForwardingLayer;
+use kline_server::klcommon::{Result, AppError};
+use std::path::Path;
+use tokio::signal;
+use tokio::time::{Duration};
+use tracing::{instrument, info, error, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+use chrono;
+
+/// 默认配置文件路径
+const DEFAULT_CONFIG_PATH: &str = "config/aggregate_config.toml";
+
+#[tokio::main]
+#[instrument(target = "KlineAggregateService")]
+async fn main() -> Result<()> {
+    // 处理命令行参数
+    if !handle_args() {
+        return Ok(());
+    }
+
+    // 初始化可观察性系统
+    init_observability_system()?;
+
+    info!(target: "KlineAggregateService", event_type = "SERVICE_STARTING", "启动K线聚合服务...");
+
+    // 加载配置
+    let config = load_config().await?;
+    info!(target = "KlineAggregateService", event_type = "CONFIG_LOADED", "配置加载完成");
+
+    // 创建K线聚合系统
+    let system = match KlineAggregateSystem::new(config).await {
+        Ok(system) => {
+            info!(target: "KlineAggregateService", event_type = "SYSTEM_CREATED_SUCCESS", "K线聚合系统创建成功");
+            system
+        }
+        Err(e) => {
+            error!(target: "KlineAggregateService", event_type = "SYSTEM_CREATION_FAILED", error = %e, "创建K线聚合系统失败");
+            return Err(e);
+        }
+    };
+
+    // 启动系统
+    if let Err(e) = system.start().await {
+        error!(target: "KlineAggregateService", event_type = "SYSTEM_START_FAILED", error = %e, "启动K线聚合系统失败");
+        return Err(e);
+    }
+
+    info!(target = "KlineAggregateService", event_type = "SERVICE_STARTED_SUCCESSFULLY", "K线聚合服务启动完成");
+
+    // 启动状态监控任务
+    start_status_monitor(system.clone()).await;
+
+    // 启动测试日志任务
+    start_test_logging().await;
+
+    // 等待关闭信号
+    wait_for_shutdown_signal().await;
+
+    // 优雅关闭
+    info!(target = "KlineAggregateService", event_type = "SHUTDOWN_SIGNAL_RECEIVED", "收到关闭信号，开始优雅关闭...");
+    if let Err(e) = system.stop().await {
+        error!(target = "KlineAggregateService", event_type = "SYSTEM_STOP_FAILED", error = %e, "关闭K线聚合系统失败");
+    } else {
+        info!(target: "KlineAggregateService", event_type = "SERVICE_SHUTDOWN_COMPLETED", "K线聚合服务已优雅关闭");
+    }
+
+    Ok(())
+}
+
+/// 初始化可观察性系统
+fn init_observability_system() -> Result<()> {
+    use std::sync::{Once, Mutex};
+
+    // 使用更安全的方式存储初始化结果
+    static OBSERVABILITY_INIT: Once = Once::new();
+    static INIT_RESULT: Mutex<Option<bool>> = Mutex::new(None);
+
+    let mut init_success = false;
+
+    OBSERVABILITY_INIT.call_once(|| {
+        match init_observability_system_inner() {
+            Ok(_) => {
+                init_success = true;
+                if let Ok(mut result) = INIT_RESULT.lock() {
+                    *result = Some(true);
+                }
+            }
+            Err(e) => {
+                eprintln!("可观察性系统初始化失败: {}", e);
+                if let Ok(mut result) = INIT_RESULT.lock() {
+                    *result = Some(false);
+                }
+            }
+        }
+    });
+
+    // 检查初始化结果
+    if let Ok(result) = INIT_RESULT.lock() {
+        match *result {
+            Some(true) => Ok(()),
+            Some(false) => Err(AppError::ConfigError("可观察性系统初始化失败".to_string())),
+            None => {
+                // 如果是第一次调用且在call_once中成功了
+                if init_success {
+                    Ok(())
+                } else {
+                    Err(AppError::ConfigError("可观察性系统初始化状态未知".to_string()))
+                }
+            }
+        }
+    } else {
+        Err(AppError::ConfigError("无法获取初始化状态".to_string()))
+    }
+}
+
+/// 内部初始化函数，只会被调用一次
+fn init_observability_system_inner() -> Result<()> {
+    // 设置日志级别
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+
+    // 检查传输方式配置
+    let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "named_pipe".to_string());
+
+    let log_forwarding_layer = match log_transport.as_str() {
+        "named_pipe" => {
+            let pipe_name = std::env::var("PIPE_NAME")
+                .unwrap_or_else(|_| r"\\.\pipe\kline_log_pipe".to_string());
+            WebSocketLogForwardingLayer::new_named_pipe(pipe_name)
+        }
+        "websocket" => {
+            let web_port = std::env::var("WEB_PORT")
+                .unwrap_or_else(|_| "3000".to_string())
+                .parse::<u16>()
+                .unwrap_or(3000);
+            WebSocketLogForwardingLayer::new_websocket(web_port)
+        }
+        _ => {
+            let pipe_name = r"\\.\pipe\kline_log_pipe".to_string();
+            WebSocketLogForwardingLayer::new_named_pipe(pipe_name)
+        }
+    };
+
+    // 设置tracing订阅器，遵循WebLog日志规范
+    let init_result = match log_transport.as_str() {
+        "named_pipe" => {
+            // 命名管道模式：只发送JSON格式到WebLog，不使用控制台输出层
+            Registry::default()
+                .with(log_forwarding_layer) // 只有JSON格式发送到WebLog
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level))
+                )
+                .try_init()
+        }
+        _ => {
+            // 其他模式：保持原有行为
+            Registry::default()
+                .with(log_forwarding_layer)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_target(true)
+                        .with_level(true)
+                ) // 添加控制台输出层（文本格式）
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level))
+                )
+                .try_init()
+        }
+    };
+
+    // 检查tracing订阅器初始化结果并决定是否初始化LogTracer
+    let tracing_init_success = match init_result {
+        Ok(_) => {
+            // tracing订阅器初始化成功，我们是第一个初始化的
+            true
+        }
+        Err(e) => {
+            // 如果已经初始化过，这是正常情况，不需要报错
+            eprintln!("注意: tracing订阅器已存在: {}", e);
+            false
+        }
+    };
+
+    // 设置log到tracing的桥接，捕获第三方库的log日志
+    // 只有当我们成功初始化了tracing订阅器时，才初始化LogTracer
+    if tracing_init_success {
+        // 我们是第一个初始化tracing的，所以也需要初始化LogTracer
+        match tracing_log::LogTracer::init() {
+            Ok(_) => {
+                // 初始化成功
+                tracing::debug!(target = "KlineAggregateService", event_type = "LOG_BRIDGE_INIT_SUCCESS", "log桥接器初始化成功");
+            }
+            Err(e) => {
+                // 这种情况很少见，但也是可能的
+                tracing::debug!(target = "KlineAggregateService", event_type = "LOG_BRIDGE_INIT_FAILED", error = %e, "log桥接器初始化失败");
+            }
+        }
+    } else {
+        // tracing订阅器已存在，说明日志系统已经完整初始化，不需要再初始化LogTracer
+        tracing::debug!(target = "KlineAggregateService", event_type = "LOG_BRIDGE_INIT_SKIPPED", "检测到现有日志系统，跳过log桥接器初始化");
+    }
+
+    // 等待一小段时间确保tracing系统完全初始化
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    info!(target = "KlineAggregateService", event_type = "OBSERVABILITY_SYSTEM_INITIALIZED", "🔍 可观察性系统初始化完成，级别: {}", log_level);
+    info!(target = "KlineAggregateService", event_type = "SPEC_VALIDATION_LAYER_STATUS", "📊 规格验证层已禁用，减少日志输出");
+    info!(target = "KlineAggregateService", event_type = "LOG_TRANSPORT_CONFIGURED", "📡 日志传输方式: {}", log_transport);
+
+    // 显示传输配置信息
+    match log_transport.as_str() {
+        "named_pipe" => {
+            let pipe_name = std::env::var("PIPE_NAME")
+                .unwrap_or_else(|_| r"\\.\pipe\kline_log_pipe".to_string());
+            info!(target = "KlineAggregateService", event_type = "LOG_TRANSPORT_DETAILS", transport_type = "named_pipe", pipe_name = %pipe_name, "📡 使用命名管道传输日志: {}", pipe_name);
+        }
+        "websocket" => {
+            let web_port = std::env::var("WEB_PORT")
+                .unwrap_or_else(|_| "3000".to_string())
+                .parse::<u16>()
+                .unwrap_or(3000);
+            info!(target = "KlineAggregateService", event_type = "LOG_TRANSPORT_DETAILS", transport_type = "websocket", web_port = web_port, "🌐 使用WebSocket传输日志，端口: {}", web_port);
+        }
+        _ => {
+            warn!(target = "KlineAggregateService", event_type = "UNKNOWN_LOG_TRANSPORT", configured_transport = %log_transport, "⚠️ 未知传输方式 '{}', 使用默认命名管道", log_transport);
+        }
+    }
+
+    // 发送测试日志确保传输工作
+    info!(target = "KlineAggregateService", event_type = "OBSERVABILITY_TEST_LOG", test_id = 1, "🧪 测试日志1: 可观察性系统测试");
+    warn!(target = "KlineAggregateService", event_type = "OBSERVABILITY_TEST_LOG", test_id = 2, "🧪 测试日志2: 警告级别测试");
+    error!(target = "KlineAggregateService", event_type = "OBSERVABILITY_TEST_LOG", test_id = 3, "🧪 测试日志3: 错误级别测试");
+
+    Ok(())
+}
+
+/// 加载配置
+#[instrument(target = "KlineAggregateService", err)]
+async fn load_config() -> Result<AggregateConfig> {
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+    
+    if Path::new(&config_path).exists() {
+        info!(target = "KlineAggregateService", event_type = "CONFIG_LOADING_FROM_FILE", path = %config_path, "从文件加载配置: {}", config_path);
+        AggregateConfig::from_file(&config_path)
+    } else {
+        warn!(target = "KlineAggregateService", event_type = "CONFIG_FILE_NOT_FOUND", path = %config_path, "配置文件不存在: {}，使用默认配置", config_path);
+
+        // 创建默认配置
+        let config = AggregateConfig::default();
+
+        // 尝试创建配置目录
+        if let Some(parent) = Path::new(&config_path).parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| AppError::IoError(e))?;
+            }
+        }
+
+        // 保存默认配置到文件
+        if let Err(e) = config.save_to_file(&config_path) {
+            warn!(target = "KlineAggregateService", event_type = "DEFAULT_CONFIG_SAVE_FAILED", path = %config_path, error = %e, "保存默认配置失败");
+        } else {
+            info!(target = "KlineAggregateService", event_type = "DEFAULT_CONFIG_SAVED", path = %config_path, "默认配置已保存到: {}", config_path);
+        }
+        
+        Ok(config)
+    }
+}
+
+/// 启动状态监控任务
+async fn start_status_monitor(system: KlineAggregateSystem) {
+    tokio::spawn(
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            loop {
+                interval.tick().await;
+
+                let status = system.get_status().await;
+                info!(
+                    target = "KlineAggregateService",
+                    event_type = "SYSTEM_STATUS_REPORT",
+                    total_symbols = status.total_symbols,
+                    active_connections = status.active_connections,
+                    buffer_swap_count = status.buffer_swap_count,
+                    persistence_status = %status.persistence_status,
+                    "系统状态报告"
+                );
+            }
+        }.instrument(tracing::info_span!("status_monitor_task"))
+    );
+}
+
+/// 启动测试日志任务（每10秒发送一次测试日志）
+async fn start_test_logging() {
+    tokio::spawn(
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            let mut counter = 0;
+
+            loop {
+                interval.tick().await;
+                counter += 1;
+
+                info!(
+                    target = "KlineAggregateService",
+                    event_type = "PERIODIC_TEST_LOG",
+                    counter = counter,
+                    timestamp = %chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                    "🧪 定期测试日志 #{}: 系统运行正常",
+                    counter
+                );
+
+                if counter % 3 == 0 {
+                    warn!(target = "KlineAggregateService", event_type = "PERIODIC_TEST_WARNING", counter = counter, "🧪 警告测试日志 #{}: 这是一个测试警告", counter);
+                }
+            }
+        }.instrument(tracing::info_span!("periodic_test_log_task"))
+    );
+}
+
+/// 等待关闭信号
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("安装Ctrl+C处理器失败");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("安装SIGTERM处理器失败")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!(target = "KlineAggregateService", event_type = "SIGNAL_RECEIVED", signal = "Ctrl+C", "收到Ctrl+C信号");
+        },
+        _ = terminate => {
+            info!(target = "KlineAggregateService", event_type = "SIGNAL_RECEIVED", signal = "SIGTERM", "收到SIGTERM信号");
+        },
+    }
+}
+
+/// 显示帮助信息
+fn show_help() {
+    println!("K线聚合服务");
+    println!();
+    println!("用法:");
+    println!("  kline_aggregate_service [选项]");
+    println!();
+    println!("选项:");
+    println!("  -h, --help     显示此帮助信息");
+    println!("  -v, --version  显示版本信息");
+    println!();
+    println!("环境变量:");
+    println!("  CONFIG_PATH    配置文件路径 (默认: {})", DEFAULT_CONFIG_PATH);
+    println!("  RUST_LOG       日志级别 (默认: info)");
+    println!();
+    println!("示例:");
+    println!("  # 使用默认配置启动");
+    println!("  kline_aggregate_service");
+    println!();
+    println!("  # 使用自定义配置文件");
+    println!("  CONFIG_PATH=my_config.toml kline_aggregate_service");
+    println!();
+    println!("  # 启用调试日志");
+    println!("  RUST_LOG=debug kline_aggregate_service");
+}
+
+/// 显示版本信息
+fn show_version() {
+    println!("K线聚合服务 v{}", env!("CARGO_PKG_VERSION"));
+}
+
+/// 处理命令行参数
+fn handle_args() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+
+    for arg in &args[1..] {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                show_help();
+                return false;
+            }
+            "-v" | "--version" => {
+                show_version();
+                return false;
+            }
+            _ => {
+                eprintln!("未知参数: {}", arg);
+                eprintln!("使用 --help 查看帮助信息");
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+mod.txt (KlineAggregateSystem)
+
+改造说明:
+
+关键函数: 为new, start, stop, initialize_aggregators等核心生命周期函数添加了#[instrument]。
+
+并发追踪: 为time_sync_manager的启动tokio::spawn添加了instrument。
+
+关键事件: 为系统启动、停止、初始化聚合器等关键步骤添加了event_type。
+
+错误详情: 在启动失败时记录详细错误信息。
+
+//! K线聚合模块
+//! 
+//! 本模块实现基于币安归集交易数据的实时K线聚合系统，包含以下核心组件：
+//! 
+//! - `MarketDataIngestor`: 行情数据接入与解析模块
+//! - `TradeEventRouter`: 交易事件路由模块  
+//! - `SymbolKlineAggregator`: 单品种K线聚合模块
+//! - `SymbolMetadataRegistry`: 交易品种元数据注册模块
+//! - `BufferedKlineStore`: 自调度双缓冲K线存储模块
+//! - `KlineDataPersistence`: K线数据持久化模块
+
+pub mod types;
+pub mod symbol_metadata_registry;
+pub mod buffered_kline_store;
+pub mod symbol_kline_aggregator;
+pub mod market_data_ingestor;
+pub mod trade_event_router;
+pub mod kline_data_persistence;
+pub mod config;
+pub mod observability;
+pub mod validation_rules;
+
+// 重新导出核心类型
+pub use types::*;
+pub use symbol_metadata_registry::SymbolMetadataRegistry;
+pub use buffered_kline_store::BufferedKlineStore;
+pub use symbol_kline_aggregator::SymbolKlineAggregator;
+pub use market_data_ingestor::MarketDataIngestor;
+pub use trade_event_router::TradeEventRouter;
+pub use kline_data_persistence::KlineDataPersistence;
+pub use config::AggregateConfig;
+
+use crate::klcommon::{Result, ServerTimeSyncManager};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{info, error, instrument};
+
+/// K线聚合系统的主要协调器
+#[derive(Clone)]
+pub struct KlineAggregateSystem {
+    config: AggregateConfig,
+    symbol_registry: Arc<SymbolMetadataRegistry>,
+    buffered_store: Arc<BufferedKlineStore>,
+    market_ingestor: Arc<MarketDataIngestor>,
+    trade_router: Arc<TradeEventRouter>,
+    persistence: Arc<KlineDataPersistence>,
+    aggregators: Arc<RwLock<Vec<Arc<SymbolKlineAggregator>>>>,
+    time_sync_manager: Arc<ServerTimeSyncManager>,
+}
+
+impl KlineAggregateSystem {
+    /// 创建新的K线聚合系统
+    #[instrument(target = "KlineAggregateSystem", skip_all, err)]
+    pub async fn new(config: AggregateConfig) -> Result<Self> {
+        info!(target: "mod", event_type = "SYSTEM_INITIALIZING", "初始化K线聚合系统...");
+        // 初始化服务器时间同步管理器
+        let time_sync_manager = Arc::new(ServerTimeSyncManager::new());
+
+        // 进行一次时间同步
+        info!(target: "mod", event_type = "TIME_SYNC_INITIALIZING", "初始化服务器时间同步...");
+        time_sync_manager.sync_time_once().await?;
+        info!(target: "mod", event_type = "TIME_SYNC_INITIALIZED", "服务器时间同步完成");
+
+        // 初始化符号元数据注册表
+        let symbol_registry = Arc::new(SymbolMetadataRegistry::new(config.clone()).await?);
+
+        // 初始化双缓冲存储
+        let buffered_store = Arc::new(BufferedKlineStore::new(
+            symbol_registry.clone(),
+            config.buffer_swap_interval_ms,
+        ).await?);
+
+        // 初始化数据持久化模块
+        let persistence = Arc::new(KlineDataPersistence::new(
+            config.clone(),
+            buffered_store.clone(),
+            symbol_registry.clone(),
+        ).await?);
+
+        // 初始化交易事件路由器
+        let trade_router = Arc::new(TradeEventRouter::new());
+
+        // 初始化市场数据接入器
+        let market_ingestor = Arc::new(MarketDataIngestor::new(
+            config.clone(),
+            trade_router.clone(),
+        ).await?);
+        
+        info!(target: "mod", event_type = "SYSTEM_INITIALIZED", "K线聚合系统初始化完成");
+        Ok(Self {
+            config,
+            symbol_registry,
+            buffered_store,
+            market_ingestor,
+            trade_router,
+            persistence,
+            aggregators: Arc::new(RwLock::new(Vec::new())),
+            time_sync_manager,
+        })
+    }
+    
+    /// 启动整个聚合系统
+    #[instrument(target = "KlineAggregateSystem", skip(self), err)]
+    pub async fn start(&self) -> Result<()> {
+        info!(target: "mod", event_type = "SYSTEM_STARTING", "启动K线聚合系统");
+
+        // 1. 启动服务器时间同步任务
+        let time_sync_manager = self.time_sync_manager.clone();
+        tokio::spawn(async move {
+            if let Err(e) = time_sync_manager.start().await {
+                error!(target: "mod", event_type = "TIME_SYNC_TASK_FAILED", error = %e, "服务器时间同步任务失败");
+            }
+        }.instrument(tracing::info_span!("time_sync_manager_task")));
+
+        // 2. 启动双缓冲存储的定时切换
+        self.buffered_store.start_scheduler().await?;
+
+        // 3. 启动数据持久化
+        self.persistence.start().await?;
+
+        // 4. 为每个交易品种创建聚合器
+        self.initialize_aggregators().await?;
+
+        // 5. 启动市场数据接入
+        self.market_ingestor.start().await?;
+
+        info!(target: "mod", event_type = "SYSTEM_STARTED", "K线聚合系统启动完成");
+        Ok(())
+    }
+    
+    /// 初始化所有交易品种的聚合器
+    #[instrument(target = "KlineAggregateSystem", skip(self), err)]
+    async fn initialize_aggregators(&self) -> Result<()> {
+        let symbols = self.symbol_registry.get_all_symbols().await?;
+        let mut aggregators = self.aggregators.write().await;
+        
+        info!(target: "mod", event_type = "AGGREGATORS_INITIALIZING", "开始初始化 {} 个品种的K线聚合器", symbols.len());
+        
+        for (symbol, symbol_index) in symbols {
+            let aggregator = Arc::new(SymbolKlineAggregator::new(
+                symbol.clone(),
+                symbol_index,
+                self.config.supported_intervals.clone(),
+                self.buffered_store.clone(),
+                self.time_sync_manager.clone(),
+            ).await?);
+
+            // 注册到路由器
+            self.trade_router.register_aggregator(symbol, aggregator.clone()).await?;
+
+            aggregators.push(aggregator);
+        }
+        
+        info!(target: "mod", event_type = "AGGREGATORS_INITIALIZED", "已初始化 {} 个品种的K线聚合器", aggregators.len());
+        Ok(())
+    }
+    
+    /// 停止系统
+    #[instrument(target = "KlineAggregateSystem", skip(self), err)]
+    pub async fn stop(&self) -> Result<()> {
+        info!(target: "mod", event_type = "SYSTEM_STOPPING", "停止K线聚合系统...");
+
+        // 停止市场数据接入
+        self.market_ingestor.stop().await?;
+
+        // 停止数据持久化
+        self.persistence.stop().await?;
+
+        // 停止双缓冲存储调度器
+        self.buffered_store.stop_scheduler().await?;
+
+        info!(target: "mod", event_type = "SYSTEM_STOPPED", "K线聚合系统已停止");
+        Ok(())
+    }
+    
+    /// 获取系统状态
+    pub async fn get_status(&self) -> SystemStatus {
+        let aggregators = self.aggregators.read().await;
+        
+        SystemStatus {
+            total_symbols: aggregators.len(),
+            active_connections: self.market_ingestor.get_connection_count().await,
+            buffer_swap_count: self.buffered_store.get_swap_count().await,
+            persistence_status: self.persistence.get_status().await,
+        }
+    }
+}
+
+/// 系统状态信息
+#[derive(Debug, Clone)]
+pub struct SystemStatus {
+    pub total_symbols: usize,
+    pub active_connections: usize,
+    pub buffer_swap_count: u64,
+    pub persistence_status: String,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+buffered_kline_store.txt
+
+改造说明:
+
+关键函数: 为所有公共方法添加了#[instrument]，并对write_kline_data等热点路径的fields进行了审查。
+
+并发追踪: 为start_scheduler中的tokio::spawn添加了instrument，使其拥有独立的Span，并命名为buffer_swap_scheduler。
+
+关键事件: 将缓冲区交换完成的info!日志规范化，添加event_type = "BUFFER_SWAP_COMPLETED"，并增加is_high_freq = true字段用于潜在的日志采样。为启动、停止调度器事件添加了event_type。
+
+关键状态: 在日志中记录了total_slots、swap_interval_ms、scheduler_running等关键状态和配置。
+
+//! 自调度双缓冲K线存储模块
+//! 
+//! 实现高性能的双缓冲K线数据存储，支持无锁并发读写操作。
+
+use crate::klaggregate::{SymbolMetadataRegistry, KlineData, AtomicKlineData};
+use crate::klcommon::{Result, AppError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::{RwLock, Notify};
+use tokio::time::{interval, Duration, Instant};
+use tracing::{info, debug, warn, instrument};
+
+/// 双缓冲K线存储
+pub struct BufferedKlineStore {
+    /// 符号元数据注册表
+    symbol_registry: Arc<SymbolMetadataRegistry>,
+    
+    /// 写缓冲区（当前正在写入的缓冲区）
+    write_buffer: Arc<RwLock<Vec<AtomicKlineData>>>,
+    
+    /// 读缓冲区（当前可以读取的缓冲区）
+    read_buffer: Arc<RwLock<Vec<AtomicKlineData>>>,
+    
+    /// 缓冲区切换间隔（毫秒）
+    swap_interval_ms: u64,
+    
+    /// 切换计数器
+    swap_count: Arc<AtomicU64>,
+
+    /// 调度器运行状态
+    scheduler_running: Arc<AtomicBool>,
+    
+    /// 停止信号
+    stop_signal: Arc<Notify>,
+    
+    /// 新快照就绪通知
+    snapshot_ready_notify: Arc<Notify>,
+    
+    /// 总存储槽数量
+    total_slots: usize,
+}
+
+impl BufferedKlineStore {
+    /// 创建新的双缓冲存储
+    #[instrument(target = "BufferedKlineStore", name="new_store", fields(total_slots), skip_all, err)]
+    pub async fn new(
+        symbol_registry: Arc<SymbolMetadataRegistry>,
+        swap_interval_ms: u64,
+    ) -> Result<Self> {
+        let total_slots = symbol_registry.get_total_kline_slots();
+        tracing::Span::current().record("total_slots", total_slots);
+
+        info!(target: "buffered_kline_store", event_type = "STORE_INITIALIZING", "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
+        
+        // 创建两个相同大小的缓冲区
+        let write_buffer = Self::create_buffer(total_slots);
+        let read_buffer = Self::create_buffer(total_slots);
+        
+        let store = Self {
+            symbol_registry,
+            write_buffer: Arc::new(RwLock::new(write_buffer)),
+            read_buffer: Arc::new(RwLock::new(read_buffer)),
+            swap_interval_ms,
+            swap_count: Arc::new(AtomicU64::new(0)),
+            scheduler_running: Arc::new(AtomicBool::new(false)),
+            stop_signal: Arc::new(Notify::new()),
+            snapshot_ready_notify: Arc::new(Notify::new()),
+            total_slots,
+        };
+        
+        info!(target: "buffered_kline_store", event_type = "STORE_INITIALIZED", "双缓冲K线存储初始化完成: total_slots={}", total_slots);
+        Ok(store)
+    }
+    
+    /// 创建缓冲区
+    fn create_buffer(size: usize) -> Vec<AtomicKlineData> {
+        let mut buffer = Vec::with_capacity(size);
+        for _ in 0..size {
+            buffer.push(AtomicKlineData::new());
+        }
+        buffer
+    }
+    
+    /// 启动调度器
+    #[instrument(target = "BufferedKlineStore", name="start_scheduler", fields(swap_interval_ms = self.swap_interval_ms), skip(self), err)]
+    pub async fn start_scheduler(&self) -> Result<()> {
+        if self.scheduler_running.swap(true, Ordering::Relaxed) {
+            warn!(target: "buffered_kline_store", event_type = "SCHEDULER_ALREADY_RUNNING", "调度器已经在运行");
+            return Ok(());
+        }
+
+        info!(target: "buffered_kline_store", event_type = "SCHEDULER_STARTING", "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
+        
+        let write_buffer = self.write_buffer.clone();
+        let read_buffer = self.read_buffer.clone();
+        let swap_count = self.swap_count.clone();
+        let scheduler_running = self.scheduler_running.clone();
+        let stop_signal = self.stop_signal.clone();
+        let snapshot_ready_notify = self.snapshot_ready_notify.clone();
+        let swap_interval_ms = self.swap_interval_ms;
+        
+        tokio::spawn(async move {
+            let mut interval_timer = interval(Duration::from_millis(swap_interval_ms));
+            
+            while scheduler_running.load(Ordering::Relaxed) {
+                tokio::select! {
+                    _ = interval_timer.tick() => {
+                        // 执行缓冲区切换
+                        let start_time = Instant::now();
+                        
+                        // 获取写锁进行原子切换
+                        let mut write_guard = write_buffer.write().await;
+                        let mut read_guard = read_buffer.write().await;
+                        
+                        // 交换缓冲区引用（这里实际上是交换Vec的内容）
+                        std::mem::swap(&mut *write_guard, &mut *read_guard);
+                        
+                        drop(write_guard);
+                        drop(read_guard);
+                        
+                        let swap_duration = start_time.elapsed();
+                        let count = swap_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+                        // 记录缓冲区交换事件
+                        let read_size = read_buffer.read().await.len();
+                        let write_size = write_buffer.read().await.len();
+                        let duration_ms = swap_duration.as_secs_f64() * 1000.0;
+
+                        info!(
+                            target: "buffered_kline_store",
+                            event_type = "BUFFER_SWAP_COMPLETED",
+                            is_high_freq = true,
+                            swap_count = count,
+                            duration_ms = duration_ms,
+                            read_buffer_size = read_size,
+                            write_buffer_size = write_size,
+                            "缓冲区交换完成"
+                        );
+
+                        debug!(target: "buffered_kline_store", "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
+
+                        // 通知新快照就绪
+                        snapshot_ready_notify.notify_waiters();
+                    }
+                    _ = stop_signal.notified() => {
+                        info!(target: "buffered_kline_store", event_type = "SCHEDULER_STOP_SIGNAL_RECEIVED", "收到停止信号，调度器退出");
+                        break;
+                    }
+                }
+            }
+
+            scheduler_running.store(false, Ordering::Relaxed);
+            info!(target: "buffered_kline_store", event_type = "SCHEDULER_STOPPED", "双缓冲调度器已停止");
+        }.instrument(tracing::info_span!("buffer_swap_scheduler")));
+        
+        Ok(())
+    }
+    
+    /// 停止调度器
+    #[instrument(target = "BufferedKlineStore", name="stop_scheduler", skip(self), err)]
+    pub async fn stop_scheduler(&self) -> Result<()> {
+        if !self.scheduler_running.load(Ordering::Relaxed) {
+            info!(target: "buffered_kline_store", event_type = "SCHEDULER_ALREADY_STOPPED", "调度器未在运行，无需停止");
+            return Ok(());
+        }
+
+        info!(target: "buffered_kline_store", event_type = "SCHEDULER_STOPPING", "开始停止双缓冲调度器");
+        self.scheduler_running.store(false, Ordering::Relaxed);
+        self.stop_signal.notify_waiters();
+
+        // 等待调度器完全停止
+        let start_wait = Instant::now();
+        while self.is_scheduler_running() {
+            if start_wait.elapsed() > Duration::from_secs(5) {
+                warn!(target: "buffered_kline_store", event_type = "SCHEDULER_STOP_TIMEOUT", "等待调度器停止超时(5s)");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        info!(target: "buffered_kline_store", event_type = "SCHEDULER_STOPPED_CONFIRMED", "双缓冲调度器已确认停止");
+        Ok(())
+    }
+    
+    /// 写入K线数据
+    #[instrument(target = "BufferedKlineStore", name="write_kline", fields(symbol_index, period_index, flat_index), skip(self, kline_data), err)]
+    pub async fn write_kline_data(
+        &self,
+        symbol_index: u32,
+        period_index: u32,
+        kline_data: &KlineData,
+    ) -> Result<()> {
+        // 计算扁平化索引
+        let flat_index = self.symbol_registry.calculate_flat_index(symbol_index, period_index);
+        tracing::Span::current().record("flat_index", flat_index);
+
+        if flat_index >= self.total_slots {
+            return Err(AppError::DataError(format!(
+                "索引超出范围: {} >= {}",
+                flat_index,
+                self.total_slots
+            )));
+        }
+        
+        // 获取写缓冲区的读锁（允许并发写入）
+        let write_buffer = self.write_buffer.read().await;
+        
+        // 原子地更新数据
+        write_buffer[flat_index].load_from(kline_data);
+        
+        Ok(())
+    }
+    
+    /// 读取K线数据
+    #[instrument(target = "BufferedKlineStore", name="read_kline", fields(symbol_index, period_index, flat_index), skip(self), err)]
+    pub async fn read_kline_data(
+        &self,
+        symbol_index: u32,
+        period_index: u32,
+    ) -> Result<KlineData> {
+        // 计算扁平化索引
+        let flat_index = self.symbol_registry.calculate_flat_index(symbol_index, period_index);
+        tracing::Span::current().record("flat_index", flat_index);
+        
+        if flat_index >= self.total_slots {
+            return Err(AppError::DataError(format!(
+                "索引超出范围: {} >= {}",
+                flat_index,
+                self.total_slots
+            )));
+        }
+        
+        // 获取读缓冲区的读锁
+        let read_buffer = self.read_buffer.read().await;
+        
+        // 原子地读取数据
+        let kline_data = read_buffer[flat_index].to_kline_data();
+        
+        Ok(kline_data)
+    }
+    
+    /// 批量读取所有K线数据快照
+    #[instrument(target = "BufferedKlineStore", name="get_snapshot", skip(self), err)]
+    pub async fn get_read_buffer_snapshot(&self) -> Result<Vec<KlineData>> {
+        let read_buffer = self.read_buffer.read().await;
+        let mut snapshot = Vec::with_capacity(self.total_slots);
+        
+        for atomic_kline in read_buffer.iter() {
+            snapshot.push(atomic_kline.to_kline_data());
+        }
+        
+        Ok(snapshot)
+    }
+    
+    /// 批量读取指定品种的所有周期K线数据
+    #[instrument(target = "BufferedKlineStore", name="get_symbol_klines", fields(symbol_index), skip(self), err)]
+    pub async fn get_symbol_klines(&self, symbol_index: u32) -> Result<Vec<KlineData>> {
+        let periods_per_symbol = self.symbol_registry.get_periods_per_symbol();
+        let mut klines = Vec::with_capacity(periods_per_symbol);
+        
+        for period_index in 0..periods_per_symbol as u32 {
+            let kline_data = self.read_kline_data(symbol_index, period_index).await?;
+            klines.push(kline_data);
+        }
+        
+        Ok(klines)
+    }
+    
+    /// 批量读取指定周期的所有品种K线数据
+    #[instrument(target = "BufferedKlineStore", name="get_period_klines", fields(period_index), skip(self), err)]
+    pub async fn get_period_klines(&self, period_index: u32) -> Result<Vec<KlineData>> {
+        let symbol_count = self.symbol_registry.get_symbol_count().await;
+        let mut klines = Vec::with_capacity(symbol_count);
+        
+        for symbol_index in 0..symbol_count as u32 {
+            let kline_data = self.read_kline_data(symbol_index, period_index).await?;
+            klines.push(kline_data);
+        }
+        
+        Ok(klines)
+    }
+    
+    /// 等待新快照就绪
+    pub async fn wait_for_snapshot(&self) {
+        self.snapshot_ready_notify.notified().await;
+    }
+    
+    /// 获取切换计数
+    pub async fn get_swap_count(&self) -> u64 {
+        self.swap_count.load(Ordering::Relaxed)
+    }
+    
+    /// 获取调度器运行状态
+    pub fn is_scheduler_running(&self) -> bool {
+        self.scheduler_running.load(Ordering::Relaxed)
+    }
+    
+    /// 获取存储统计信息
+    pub async fn get_statistics(&self) -> BufferStatistics {
+        let swap_count = self.swap_count.load(Ordering::Relaxed);
+        let is_running = self.scheduler_running.load(Ordering::Relaxed);
+        
+        BufferStatistics {
+            total_slots: self.total_slots,
+            swap_count,
+            is_scheduler_running: is_running,
+            swap_interval_ms: self.swap_interval_ms,
+        }
+    }
+}
+
+/// 缓冲区统计信息
+#[derive(Debug, Clone)]
+pub struct BufferStatistics {
+    /// 总存储槽数量
+    pub total_slots: usize,
+    /// 切换计数
+    pub swap_count: u64,
+    /// 调度器是否运行
+    pub is_scheduler_running: bool,
+    /// 切换间隔（毫秒）
+    pub swap_interval_ms: u64,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+kline_data_persistence.txt
+
+改造说明:
+
+关键函数: 为new, start, stop, execute_persistence_task, persist_kline_batch等关键函数添加了#[instrument]，并记录了batch_size等重要参数。
+
+并发追踪: 为start_persistence_task和start_statistics_task中的tokio::spawn添加了instrument，并为每个异步持久化任务也添加了instrument，形成了清晰的并发调用链。
+
+关键事件: 将批量持久化完成的event!规范化，使用event_type = "BATCH_PERSISTENCE_COMPLETED"。为启动、停止、任务繁忙跳过等事件添加了event_type。
+
+错误详情: 在持久化失败和等待任务完成失败的路径记录了详细错误。
+
+关键状态: 在日志中记录了is_running状态，以及各种统计计数。
+
+//! K线数据持久化模块
+//! 
+//! 负责将内存中的K线数据定期持久化到数据库。
+
+use crate::klaggregate::{AggregateConfig, BufferedKlineStore, SymbolMetadataRegistry, KlineData};
+use crate::klcommon::{Result, AppError, Database};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::time::{interval, Duration, Instant};
+use tokio::sync::Semaphore;
+use tracing::{info, debug, warn, error, instrument, event, Level};
+
+/// K线数据持久化器
+pub struct KlineDataPersistence {
+    /// 配置
+    config: AggregateConfig,
+    
+    /// 双缓冲存储引用
+    buffered_store: Arc<BufferedKlineStore>,
+    
+    /// 符号元数据注册表
+    symbol_registry: Arc<SymbolMetadataRegistry>,
+    
+    /// 数据库连接
+    database: Arc<Database>,
+    
+    /// 运行状态
+    is_running: Arc<AtomicBool>,
+
+    /// 持久化计数
+    persistence_count: Arc<AtomicU64>,
+
+    /// 成功计数
+    success_count: Arc<AtomicU64>,
+
+    /// 错误计数
+    error_count: Arc<AtomicU64>,
+    
+    /// 并发控制信号量
+    semaphore: Arc<Semaphore>,
+}
+
+impl KlineDataPersistence {
+    /// 创建新的K线数据持久化器
+    #[instrument(target = "KlineDataPersistence", name="new_persistence", fields(batch_size = config.persistence.batch_size), skip_all, err)]
+    pub async fn new(
+        config: AggregateConfig,
+        buffered_store: Arc<BufferedKlineStore>,
+        symbol_registry: Arc<SymbolMetadataRegistry>,
+    ) -> Result<Self> {
+        info!(target: "kline_data_persistence", event_type = "PERSISTENCE_INITIALIZING", "创建K线数据持久化器: batch_size={}", config.persistence.batch_size);
+        
+        // 创建数据库连接
+        let database = Arc::new(Database::new(&config.database.database_path)?);
+        
+        // 创建并发控制信号量（限制同时进行的持久化任务数量）
+        let semaphore = Arc::new(Semaphore::new(config.persistence.batch_size.min(10)));
+        
+        Ok(Self {
+            config,
+            buffered_store,
+            symbol_registry,
+            database,
+            is_running: Arc::new(AtomicBool::new(false)),
+            persistence_count: Arc::new(AtomicU64::new(0)),
+            success_count: Arc::new(AtomicU64::new(0)),
+            error_count: Arc::new(AtomicU64::new(0)),
+            semaphore,
+        })
+    }
+    
+    /// 启动持久化服务
+    #[instrument(target = "KlineDataPersistence", name="start_persistence", fields(persistence_interval_ms = self.config.persistence_interval_ms), skip(self), err)]
+    pub async fn start(&self) -> Result<()> {
+        if self.is_running.swap(true, Ordering::Relaxed) {
+            warn!(target: "kline_data_persistence", event_type = "PERSISTENCE_ALREADY_RUNNING", "K线数据持久化器已经在运行");
+            return Ok(());
+        }
+
+        info!(target: "kline_data_persistence", event_type = "PERSISTENCE_STARTING", "启动K线数据持久化器: persistence_interval_ms={}", self.config.persistence_interval_ms);
+        
+        // 启动定时持久化任务
+        self.start_persistence_task().await;
+        
+        // 启动统计输出任务
+        self.start_statistics_task().await;
+
+        info!(target: "kline_data_persistence", event_type = "PERSISTENCE_STARTED", "K线数据持久化器启动完成");
+        Ok(())
+    }
+    
+    /// 停止持久化服务
+    #[instrument(target = "KlineDataPersistence", name="stop_persistence", skip(self), err)]
+    pub async fn stop(&self) -> Result<()> {
+        if !self.is_running.swap(false, Ordering::Relaxed) {
+            info!(target: "kline_data_persistence", event_type = "PERSISTENCE_ALREADY_STOPPED", "持久化器未在运行，无需停止");
+            return Ok(());
+        }
+        
+        info!(target: "kline_data_persistence", event_type = "PERSISTENCE_STOPPING", "停止K线数据持久化器");
+
+        // 等待所有持久化任务完成
+        let batch_size = self.config.persistence.batch_size as u32;
+        let _permits = self.semaphore.acquire_many(batch_size).await
+            .map_err(|e| {
+                let app_err = AppError::DataError(format!("等待持久化任务完成失败: {}", e));
+                error!(target = "kline_data_persistence", event_type="PERSISTENCE_STOP_WAIT_FAILED", error = %app_err, "等待信号量许可失败");
+                app_err
+            })?;
+
+        info!(target: "kline_data_persistence", event_type = "PERSISTENCE_STOPPED", "K线数据持久化器已停止");
+        Ok(())
+    }
+    
+    /// 启动定时持久化任务
+    async fn start_persistence_task(&self) {
+        let is_running = self.is_running.clone();
+        let buffered_store = self.buffered_store.clone();
+        let symbol_registry = self.symbol_registry.clone();
+        let database = self.database.clone();
+        let persistence_count = self.persistence_count.clone();
+        let success_count = self.success_count.clone();
+        let error_count = self.error_count.clone();
+        let semaphore = self.semaphore.clone();
+        let batch_size = self.config.persistence.batch_size;
+        let persistence_interval_ms = self.config.persistence_interval_ms;
+        
+        tokio::spawn(async move {
+            let mut interval_timer = interval(Duration::from_millis(persistence_interval_ms));
+            
+            while is_running.load(Ordering::Relaxed) {
+                interval_timer.tick().await;
+                
+                // 获取信号量许可
+                let permit = match semaphore.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        debug!(target: "kline_data_persistence", event_type = "PERSISTENCE_TASK_SKIPPED_BUSY", "持久化任务繁忙，跳过本次执行");
+                        continue;
+                    }
+                };
+                
+                let buffered_store = buffered_store.clone();
+                let symbol_registry = symbol_registry.clone();
+                let database = database.clone();
+                let persistence_count = persistence_count.clone();
+                let success_count = success_count.clone();
+                let error_count = error_count.clone();
+                
+                // 异步执行持久化任务
+                tokio::spawn(async move {
+                    let _permit = permit; // 确保permit在任务结束时释放
+                    
+                    let start_time = Instant::now();
+                    let count = persistence_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    
+                    match Self::execute_persistence_task(
+                        &buffered_store,
+                        &symbol_registry,
+                        &database,
+                        batch_size,
+                    ).await {
+                        Ok(persisted_count) => {
+                            success_count.fetch_add(1, Ordering::Relaxed);
+                            let duration = start_time.elapsed();
+                            
+                            if persisted_count > 0 {
+                                debug!(target: "kline_data_persistence", "持久化完成: persisted_count={}, duration_ms={:.2}", persisted_count, duration.as_secs_f64() * 1000.0);
+                            }
+                        }
+                        Err(e) => {
+                            error_count.fetch_add(1, Ordering::Relaxed);
+                            error!(target: "kline_data_persistence", event_type = "PERSISTENCE_EXECUTION_FAILED", error = %e, "持久化任务执行失败");
+                        }
+                    }
+                }.instrument(tracing::info_span!("single_persistence_job", job_id = count)));
+            }
+        }.instrument(tracing::info_span!("persistence_scheduler_task")));
+    }
+    
+    /// 执行持久化任务
+    #[instrument(
+        target = "KlineDataPersistence",
+        name = "execute_persistence_task",
+        fields(batch_size, persisted_count = 0),
+        skip_all,
+        err
+    )]
+    async fn execute_persistence_task(
+        buffered_store: &Arc<BufferedKlineStore>,
+        symbol_registry: &Arc<SymbolMetadataRegistry>,
+        database: &Arc<Database>,
+        batch_size: usize,
+    ) -> Result<usize> {
+        // 获取K线数据快照
+        let kline_snapshot = buffered_store.get_read_buffer_snapshot().await?;
+        
+        let mut persisted_count = 0;
+        let mut batch = Vec::new();
+        
+        for kline_data in kline_snapshot {
+            // 跳过空的K线数据
+            if kline_data.is_empty() {
+                continue;
+            }
+            
+            batch.push(kline_data);
+            
+            // 当批次达到指定大小时，执行持久化
+            if batch.len() >= batch_size {
+                persisted_count += Self::persist_kline_batch(
+                    &batch,
+                    symbol_registry,
+                    database,
+                ).await?;
+                batch.clear();
+            }
+        }
+        
+        // 持久化剩余的K线数据
+        if !batch.is_empty() {
+            persisted_count += Self::persist_kline_batch(
+                &batch,
+                symbol_registry,
+                database,
+            ).await?;
+        }
+        
+        tracing::Span::current().record("persisted_count", persisted_count);
+        Ok(persisted_count)
+    }
+    
+    /// 持久化K线批次
+    #[instrument(
+        target = "KlineDataPersistence",
+        name = "persist_kline_batch",
+        fields(
+            batch_size = batch.len(),
+            persisted_count = 0
+        ),
+        skip_all,
+        err
+    )]
+    async fn persist_kline_batch(
+        batch: &[KlineData],
+        symbol_registry: &Arc<SymbolMetadataRegistry>,
+        database: &Arc<Database>,
+    ) -> Result<usize> {
+        let mut persisted_count = 0;
+        
+        for kline_data in batch {
+            // 获取品种名称和周期字符串
+            let symbol = match symbol_registry.get_symbol_by_index(kline_data.symbol_index).await {
+                Some(symbol) => symbol,
+                None => {
+                    warn!(target: "kline_data_persistence", event_type = "SYMBOL_INDEX_NOT_FOUND", symbol_index = kline_data.symbol_index, "持久化时未找到索引对应的品种");
+                    continue;
+                }
+            };
+
+            let interval = match symbol_registry.get_interval_by_index(kline_data.period_index).await {
+                Some(interval) => interval,
+                None => {
+                    warn!(target: "kline_data_persistence", event_type = "PERIOD_INDEX_NOT_FOUND", period_index = kline_data.period_index, "持久化时未找到索引对应的周期");
+                    continue;
+                }
+            };
+            
+            // 转换为数据库格式
+            let kline = kline_data.to_kline(&symbol, &interval);
+            
+            // 执行UPSERT操作
+            match Self::upsert_kline(database, &symbol, &interval, &kline).await {
+                Ok(()) => {
+                    persisted_count += 1;
+                }
+                Err(e) => {
+                    error!(target: "kline_data_persistence", event_type = "KLINE_UPSERT_FAILED", symbol = %symbol, interval = %interval, error = %e, "持久化K线失败");
+                }
+            }
+        }
+
+        // 记录批量持久化完成事件
+        let total_records = batch.len() as u64;
+        let failed_count = batch.len() - persisted_count;
+
+        event!(
+            Level::INFO,
+            target = "kline_data_persistence",
+            event_type = "BATCH_PERSISTENCE_COMPLETED",
+            total_records = total_records,
+            success_count = persisted_count,
+            failed_count = failed_count,
+            "批量持久化完成"
+        );
+
+        tracing::Span::current().record("persisted_count", persisted_count);
+
+        Ok(persisted_count)
+    }
+    
+    /// 执行K线UPSERT操作
+    #[instrument(target = "KlineDataPersistence", name="upsert_kline_db", fields(symbol=%symbol, interval=%interval), skip_all, err)]
+    async fn upsert_kline(
+        database: &Arc<Database>,
+        symbol: &str,
+        interval: &str,
+        kline: &crate::klcommon::Kline,
+    ) -> Result<()> {
+        let database = database.clone();
+        let symbol_owned = symbol.to_string();
+        let interval_owned = interval.to_string();
+        let kline_owned = kline.clone();
+        
+        // 在阻塞任务中执行数据库操作
+        tokio::task::spawn_blocking(move || {
+            database.save_kline(&symbol_owned, &interval_owned, &kline_owned)
+        })
+        .await
+        .map_err(|e| AppError::DataError(format!("数据库任务执行失败: {}", e)))??;
+        
+        Ok(())
+    }
+    
+    /// 启动统计输出任务
+    async fn start_statistics_task(&self) {
+        let is_running = self.is_running.clone();
+        let persistence_count = self.persistence_count.clone();
+        let success_count = self.success_count.clone();
+        let error_count = self.error_count.clone();
+        
+        tokio::spawn(async move {
+            let mut interval_timer = interval(Duration::from_secs(60)); // 每分钟输出一次统计
+            let mut last_persistence_count = 0;
+            let mut last_success_count = 0;
+            let mut last_error_count = 0;
+            
+            while is_running.load(Ordering::Relaxed) {
+                interval_timer.tick().await;
+                
+                let current_persistence = persistence_count.load(Ordering::Relaxed);
+                let current_success = success_count.load(Ordering::Relaxed);
+                let current_error = error_count.load(Ordering::Relaxed);
+                
+                let persistence_rate = current_persistence - last_persistence_count;
+                let success_rate = current_success - last_success_count;
+                let error_rate = current_error - last_error_count;
+                
+                if persistence_rate > 0 || error_rate > 0 {
+                    info!(
+                        target: "kline_data_persistence",
+                        event_type = "PERSISTENCE_STATS_REPORT",
+                        total_persistence = current_persistence,
+                        persistence_rate_per_min = persistence_rate,
+                        total_success = current_success,
+                        success_rate_per_min = success_rate,
+                        total_errors = current_error,
+                        error_rate_per_min = error_rate,
+                        "持久化统计报告"
+                    );
+                }
+                
+                last_persistence_count = current_persistence;
+                last_success_count = current_success;
+                last_error_count = current_error;
+            }
+        }.instrument(tracing::info_span!("persistence_statistics_task")));
+    }
+    
+    /// 获取状态字符串
+    pub async fn get_status(&self) -> String {
+        if self.is_running.load(Ordering::Relaxed) {
+            format!(
+                "运行中 (执行: {}, 成功: {}, 错误: {})",
+                self.persistence_count.load(Ordering::Relaxed),
+                self.success_count.load(Ordering::Relaxed),
+                self.error_count.load(Ordering::Relaxed)
+            )
+        } else {
+            "已停止".to_string()
+        }
+    }
+    
+    /// 获取统计信息
+    pub async fn get_statistics(&self) -> PersistenceStatistics {
+        PersistenceStatistics {
+            is_running: self.is_running.load(Ordering::Relaxed),
+            persistence_count: self.persistence_count.load(Ordering::Relaxed),
+            success_count: self.success_count.load(Ordering::Relaxed),
+            error_count: self.error_count.load(Ordering::Relaxed),
+            available_permits: self.semaphore.available_permits(),
+        }
+    }
+}
+
+/// 持久化统计信息
+#[derive(Debug, Clone)]
+pub struct PersistenceStatistics {
+    /// 是否运行中
+    pub is_running: bool,
+    /// 持久化执行次数
+    pub persistence_count: u64,
+    /// 成功次数
+    pub success_count: u64,
+    /// 错误次数
+    pub error_count: u64,
+    /// 可用的并发许可数
+    pub available_permits: usize,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+symbol_kline_aggregator.txt
+
+改造说明:
+
+关键函数: 对核心业务逻辑process_agg_trade, process_trade_for_period, aggregate_trade_to_kline等添加/优化了#[instrument]。
+
+关键事件: 对kline_finalized和kline_generated事件的event!宏调用进行了规范化，添加了event_type字段。增加了新的debug!事件来追踪K线完成的详细信息。
+
+关键状态: 在日志中记录了is_final状态、开盘价、最高价等K线关键数据。
+
+错误详情: 在process_agg_trade中对品种不匹配错误进行了记录。
+
+//! 单品种K线聚合模块
+//! 
+//! 负责单个交易品种的实时K线聚合，支持多个时间周期的同时聚合。
+
+use crate::klaggregate::{AggTradeData, KlineData, BufferedKlineStore, PeriodInfo};
+use crate::klcommon::{Result, AppError, api::get_aligned_time, ServerTimeSyncManager};
+use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+use tracing::{instrument, event, Level, debug, warn};
+
+/// 单品种K线聚合器
+pub struct SymbolKlineAggregator {
+    /// 品种名称
+    symbol: String,
+    
+    /// 品种索引
+    symbol_index: u32,
+    
+    /// 支持的时间周期信息
+    period_infos: Vec<PeriodInfo>,
+    
+    /// 当前聚合状态（周期索引 -> K线聚合状态）
+    aggregation_states: Arc<RwLock<HashMap<u32, KlineAggregationState>>>,
+    
+    /// 双缓冲存储引用
+    buffered_store: Arc<BufferedKlineStore>,
+
+    /// 服务器时间同步管理器
+    time_sync_manager: Arc<ServerTimeSyncManager>,
+}
+
+/// K线聚合状态
+#[derive(Debug, Clone)]
+struct KlineAggregationState {
+    /// 当前K线数据
+    current_kline: KlineData,
+    /// 周期信息
+    period_info: PeriodInfo,
+    /// 是否已初始化（收到第一笔交易）
+    initialized: bool,
+}
+
+impl KlineAggregationState {
+    /// 创建新的聚合状态
+    fn new(symbol_index: u32, period_info: PeriodInfo) -> Self {
+        Self {
+            current_kline: KlineData::new(symbol_index, period_info.index, 0),
+            period_info,
+            initialized: false,
+        }
+    }
+    
+    /// 重置到新的时间周期
+    fn reset_to_new_period(&mut self, new_open_time: i64) {
+        self.current_kline.reset(new_open_time);
+        self.initialized = false;
+    }
+    
+    /// 检查交易时间是否属于当前K线周期
+    fn is_trade_in_current_period(&self, trade_time: i64) -> bool {
+        if !self.initialized {
+            return true; // 如果还没初始化，任何交易都可以开始新周期
+        }
+        
+        let period_end_time = self.current_kline.open_time + self.period_info.duration_ms;
+        trade_time >= self.current_kline.open_time && trade_time < period_end_time
+    }
+    
+    /// 检查当前K线是否应该结束
+    fn should_finalize(&self, current_time: i64) -> bool {
+        if !self.initialized {
+            return false;
+        }
+        
+        let period_end_time = self.current_kline.open_time + self.period_info.duration_ms;
+        current_time >= period_end_time
+    }
+    
+    /// 计算下一个周期的开始时间
+    fn get_next_period_start(&self, trade_time: i64) -> i64 {
+        get_aligned_time(trade_time, &self.period_info.interval)
+    }
+}
+
+impl SymbolKlineAggregator {
+    /// 创建新的品种K线聚合器
+    #[instrument(target = "SymbolKlineAggregator", name="new_aggregator", fields(symbol=%symbol, symbol_index), skip_all, err)]
+    pub async fn new(
+        symbol: String,
+        symbol_index: u32,
+        supported_intervals: Vec<String>,
+        buffered_store: Arc<BufferedKlineStore>,
+        time_sync_manager: Arc<ServerTimeSyncManager>,
+    ) -> Result<Self> {
+        debug!(target: "symbol_kline_aggregator", event_type = "AGGREGATOR_INITIALIZING", "创建品种K线聚合器: symbol={}, symbol_index={}", symbol, symbol_index);
+        
+        // 创建周期信息
+        let mut period_infos = Vec::new();
+        for (index, interval) in supported_intervals.iter().enumerate() {
+            period_infos.push(PeriodInfo::new(interval.clone(), index as u32));
+        }
+
+        // 初始化聚合状态
+        let mut aggregation_states = HashMap::new();
+        for period_info in &period_infos {
+            let state = KlineAggregationState::new(symbol_index, period_info.clone());
+            aggregation_states.insert(period_info.index, state);
+        }
+
+        let period_count = period_infos.len();
+        let aggregator = Self {
+            symbol: symbol.clone(),
+            symbol_index,
+            period_infos,
+            aggregation_states: Arc::new(RwLock::new(aggregation_states)),
+            buffered_store,
+            time_sync_manager,
+        };
+
+        debug!(target: "symbol_kline_aggregator", event_type = "AGGREGATOR_INITIALIZED", "品种K线聚合器创建完成: symbol={}, symbol_index={}, period_count={}", symbol, symbol_index, period_count);
+        Ok(aggregator)
+    }
+    
+    /// 处理归集交易数据
+    #[instrument(
+        target = "SymbolKlineAggregator",
+        name = "process_agg_trade",
+        fields(
+            symbol = %trade.symbol,
+            price = %trade.price,
+            quantity = %trade.quantity,
+            timestamp_ms = %trade.timestamp_ms,
+            is_buyer_maker = %trade.is_buyer_maker
+        ),
+        skip(self),
+        err
+    )]
+    pub async fn process_agg_trade(&self, trade: &AggTradeData) -> Result<()> {
+        if trade.symbol != self.symbol {
+            let err = AppError::DataError(format!(
+                "交易品种不匹配: 期望 {}, 实际 {}",
+                self.symbol,
+                trade.symbol
+            ));
+            warn!(target: "symbol_kline_aggregator", event_type = "SYMBOL_MISMATCH", expected_symbol = %self.symbol, actual_symbol = %trade.symbol, error = %err);
+            return Err(err);
+        }
+
+        // 使用校准后的服务器时间进行K线结束判断
+        let current_time = if self.time_sync_manager.is_time_sync_valid() {
+            // 使用校准后的服务器时间
+            self.time_sync_manager.get_calibrated_server_time()
+        } else {
+            // 如果时间同步失效，使用交易时间作为备选
+            warn!(target: "symbol_kline_aggregator", event_type = "TIME_SYNC_INVALID", fallback_time = trade.timestamp_ms, symbol = %trade.symbol, "服务器时间同步失效，使用交易时间");
+            trade.timestamp_ms
+        };
+
+        let mut states = self.aggregation_states.write().await;
+        
+        // 处理每个时间周期
+        for period_info in &self.period_infos {
+            if let Some(state) = states.get_mut(&period_info.index) {
+                self.process_trade_for_period(state, trade, current_time).await?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 为特定周期处理交易
+    #[instrument(target = "SymbolKlineAggregator", name="process_trade_for_period", fields(interval=%state.period_info.interval), skip(self, state, trade, current_time), err)]
+    async fn process_trade_for_period(
+        &self,
+        state: &mut KlineAggregationState,
+        trade: &AggTradeData,
+        current_time: i64,
+    ) -> Result<()> {
+        // 检查是否需要结束当前K线
+        if state.should_finalize(current_time) && state.initialized {
+            // 标记当前K线为最终状态
+            state.current_kline.is_final = true;
+
+            // 记录K线完成事件
+            event!(
+                Level::INFO,
+                target = "SymbolKlineAggregator",
+                event_type = "KLINE_FINALIZED",
+                is_high_freq = true, // 标记为高频事件
+                symbol = %self.symbol,
+                interval = %state.period_info.interval,
+                open_time = state.current_kline.open_time,
+                is_final = state.current_kline.is_final,
+                finalize_trigger_time = current_time,
+                open = state.current_kline.open,
+                high = state.current_kline.high,
+                low = state.current_kline.low,
+                close = state.current_kline.close,
+                volume = state.current_kline.volume,
+                trade_count = state.current_kline.trade_count,
+                "K线已完成"
+            );
+
+            // 写入到缓冲存储
+            self.buffered_store.write_kline_data(
+                self.symbol_index,
+                state.period_info.index,
+                &state.current_kline,
+            ).await?;
+
+            debug!(target: "symbol_kline_aggregator", "K线完成详情: symbol={}, interval={}, open_time={}, open={}, high={}, low={}, close={}, volume={}", self.symbol, state.period_info.interval, state.current_kline.open_time, state.current_kline.open, state.current_kline.high, state.current_kline.low, state.current_kline.close, state.current_kline.volume);
+
+            // 重置到下一个周期
+            let next_period_start = state.get_next_period_start(trade.timestamp_ms);
+            state.reset_to_new_period(next_period_start);
+        }
+        
+        // 检查交易是否属于当前周期
+        if !state.is_trade_in_current_period(trade.timestamp_ms) {
+            // 交易属于新周期，重置状态
+            let new_period_start = state.get_next_period_start(trade.timestamp_ms);
+            state.reset_to_new_period(new_period_start);
+        }
+        
+        // 聚合交易数据到当前K线
+        self.aggregate_trade_to_kline(state, trade)?;
+        
+        // 写入当前状态到缓冲存储（未完成的K线）
+        self.buffered_store.write_kline_data(
+            self.symbol_index,
+            state.period_info.index,
+            &state.current_kline,
+        ).await?;
+        
+        Ok(())
+    }
+    
+    /// 将交易数据聚合到K线
+    fn aggregate_trade_to_kline(
+        &self,
+        state: &mut KlineAggregationState,
+        trade: &AggTradeData,
+    ) -> Result<()> {
+        if !state.initialized {
+            // 第一笔交易，初始化K线
+            let open_time = state.get_next_period_start(trade.timestamp_ms);
+            let kline = &mut state.current_kline;
+            kline.open_time = open_time;
+            kline.open = trade.price;
+            kline.high = trade.price;
+            kline.low = trade.price;
+            kline.close = trade.price;
+            kline.volume = trade.quantity;
+            kline.turnover = trade.price * trade.quantity;
+            kline.trade_count = 1;
+            
+            if trade.is_buyer_maker {
+                kline.taker_buy_volume = 0.0;
+                kline.taker_buy_turnover = 0.0;
+            } else {
+                kline.taker_buy_volume = trade.quantity;
+                kline.taker_buy_turnover = trade.price * trade.quantity;
+            }
+            
+            state.initialized = true;
+
+            // 记录K线生成事件
+            event!(
+                Level::DEBUG,
+                target = "SymbolKlineAggregator",
+                event_type = "KLINE_GENERATED",
+                symbol = %self.symbol,
+                interval = %state.period_info.interval,
+                open_time = kline.open_time,
+                is_final = kline.is_final,
+                initial_trade_id = trade.agg_trade_id,
+                "新K线已生成"
+            );
+        } else {
+            // 更新现有K线
+            let kline = &mut state.current_kline;
+            kline.high = kline.high.max(trade.price);
+            kline.low = kline.low.min(trade.price);
+            kline.close = trade.price;
+            kline.volume += trade.quantity;
+            kline.turnover += trade.price * trade.quantity;
+            kline.trade_count += 1;
+
+            if !trade.is_buyer_maker {
+                kline.taker_buy_volume += trade.quantity;
+                kline.taker_buy_turnover += trade.price * trade.quantity;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 强制完成所有当前K线（用于系统关闭时）
+    #[instrument(target = "SymbolKlineAggregator", name="finalize_all", skip(self), err)]
+    pub async fn finalize_all_klines(&self) -> Result<()> {
+        let mut states = self.aggregation_states.write().await;
+        
+        for (period_index, state) in states.iter_mut() {
+            if state.initialized && !state.current_kline.is_final {
+                state.current_kline.is_final = true;
+                
+                self.buffered_store.write_kline_data(
+                    self.symbol_index,
+                    *period_index,
+                    &state.current_kline,
+                ).await?;
+                
+                debug!(target: "symbol_kline_aggregator", event_type = "KLINE_FORCE_FINALIZED", symbol = %self.symbol, interval = %state.period_info.interval, open_time = state.current_kline.open_time, period_index = *period_index, "强制完成K线");
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 获取当前所有K线状态
+    pub async fn get_current_klines(&self) -> Result<Vec<KlineData>> {
+        let states = self.aggregation_states.read().await;
+        let mut klines = Vec::new();
+        
+        for state in states.values() {
+            if state.initialized {
+                klines.push(state.current_kline.clone());
+            }
+        }
+        
+        Ok(klines)
+    }
+    
+    /// 获取品种名称
+    pub fn get_symbol(&self) -> &str {
+        &self.symbol
+    }
+    
+    /// 获取品种索引
+    pub fn get_symbol_index(&self) -> u32 {
+        self.symbol_index
+    }
+    
+    /// 获取支持的周期数量
+    pub fn get_period_count(&self) -> usize {
+        self.period_infos.len()
+    }
+    
+    /// 获取聚合统计信息
+    pub async fn get_statistics(&self) -> AggregatorStatistics {
+        let states = self.aggregation_states.read().await;
+        let mut initialized_periods = 0;
+        let mut finalized_klines = 0;
+        
+        for state in states.values() {
+            if state.initialized {
+                initialized_periods += 1;
+                if state.current_kline.is_final {
+                    finalized_klines += 1;
+                }
+            }
+        }
+        
+        AggregatorStatistics {
+            symbol: self.symbol.clone(),
+            symbol_index: self.symbol_index,
+            total_periods: self.period_infos.len(),
+            initialized_periods,
+            finalized_klines,
+        }
+    }
+}
+
+/// 聚合器统计信息
+#[derive(Debug, Clone)]
+pub struct AggregatorStatistics {
+    /// 品种名称
+    pub symbol: String,
+    /// 品种索引
+    pub symbol_index: u32,
+    /// 总周期数
+    pub total_periods: usize,
+    /// 已初始化的周期数
+    pub initialized_periods: usize,
+    /// 已完成的K线数
+    pub finalized_klines: usize,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+
+我已完成对以上文件的改造，并准备好继续处理剩余的文件。请确认这些修改符合您的预期，然后我们可以继续。
+
+继续处理剩余文件...
+
+symbol_metadata_registry.txt
+
+改造说明:
+
+关键函数: 为所有公共方法和核心初始化函数（如initialize_symbol_info, batch_get_symbol_listing_times）添加了#[instrument]。
+
+关键事件: 为初始化、注册、查询等关键步骤的日志添加了event_type。
+
+关键状态: 在Span和事件中记录了total_kline_slots, max_symbols, registered_count等关键指标。
+
+错误详情: 在API调用失败、数据库查询失败等路径记录了详细错误。
+
+//! 交易品种元数据注册模块
+//! 
+//! 负责管理所有交易品种的元数据，包括品种索引分配、上市时间查询等功能。
+
+use crate::klaggregate::{AggregateConfig, SymbolInfo, PeriodInfo};
+use crate::klcommon::{Result, AppError, BinanceApi, Database};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{info, warn, error, debug, instrument};
+
+/// 交易品种元数据注册表
+pub struct SymbolMetadataRegistry {
+    /// 配置
+    config: AggregateConfig,
+    
+    /// 币安API客户端
+    api_client: BinanceApi,
+    
+    /// 数据库连接
+    database: Arc<Database>,
+    
+    /// 品种名到索引的映射
+    symbol_to_index: Arc<RwLock<HashMap<String, u32>>>,
+    
+    /// 索引到品种名的映射
+    index_to_symbol: Arc<RwLock<HashMap<u32, String>>>,
+    
+    /// 品种信息映射
+    symbol_info: Arc<RwLock<HashMap<String, SymbolInfo>>>,
+    
+    /// 周期信息映射
+    period_info: Arc<RwLock<HashMap<String, PeriodInfo>>>,
+    
+    /// 总的K线存储槽数量
+    total_kline_slots: usize,
+}
+
+impl SymbolMetadataRegistry {
+    /// 创建新的品种元数据注册表
+    #[instrument(target = "SymbolMetadataRegistry", name="new_registry", fields(total_kline_slots), skip_all, err)]
+    pub async fn new(config: AggregateConfig) -> Result<Self> {
+        let total_kline_slots = config.get_total_kline_slots();
+        tracing::Span::current().record("total_kline_slots", total_kline_slots);
+
+        info!(target: "symbol_metadata_registry", event_type = "REGISTRY_INITIALIZING", "初始化交易品种元数据注册表: max_symbols={}, supported_intervals_count={}", config.max_symbols, config.supported_intervals.len());
+        
+        // 创建API客户端
+        let api_client = BinanceApi::new();
+        
+        // 创建数据库连接
+        let database = Arc::new(Database::new(&config.database.database_path)?);
+        
+        // 使用之前计算的总存储槽数量
+        
+        let registry = Self {
+            config: config.clone(),
+            api_client,
+            database,
+            symbol_to_index: Arc::new(RwLock::new(HashMap::new())),
+            index_to_symbol: Arc::new(RwLock::new(HashMap::new())),
+            symbol_info: Arc::new(RwLock::new(HashMap::new())),
+            period_info: Arc::new(RwLock::new(HashMap::new())),
+            total_kline_slots,
+        };
+        
+        // 初始化周期信息
+        registry.initialize_period_info().await?;
+        
+        // 初始化品种信息
+        registry.initialize_symbol_info().await?;
+        
+        info!(target: "symbol_metadata_registry", event_type = "REGISTRY_INITIALIZED", "交易品种元数据注册表初始化完成: total_kline_slots={}", total_kline_slots);
+        Ok(registry)
+    }
+
+    /// 初始化周期信息
+    #[instrument(target = "SymbolMetadataRegistry", name="init_period_info", fields(intervals_count = self.config.supported_intervals.len()), skip(self), err)]
+    async fn initialize_period_info(&self) -> Result<()> {
+        info!(target: "symbol_metadata_registry", event_type = "PERIOD_INFO_INITIALIZING", "初始化周期信息: intervals_count={}", self.config.supported_intervals.len());
+
+        let mut period_info = self.period_info.write().await;
+
+        for (index, interval) in self.config.supported_intervals.iter().enumerate() {
+            let info = PeriodInfo::new(interval.clone(), index as u32);
+            period_info.insert(interval.clone(), info);
+            debug!(target: "symbol_metadata_registry", event_type = "PERIOD_REGISTERED", "注册周期: interval={}, index={}", interval, index);
+        }
+
+        info!(target: "symbol_metadata_registry", event_type = "PERIOD_INFO_INITIALIZED", "已注册时间周期: periods_count={}", period_info.len());
+        Ok(())
+    }
+    
+    /// 初始化品种信息
+    #[instrument(target = "SymbolMetadataRegistry", name="init_symbol_info", fields(symbols_count = 0, registered_count = 0), skip(self), err)]
+    async fn initialize_symbol_info(&self) -> Result<()> {
+        info!(target: "symbol_metadata_registry", event_type = "SYMBOL_INFO_INITIALIZING", "初始化品种信息");
+
+        // 1. 获取当前所有活跃的交易品种
+        let symbols = self.fetch_active_symbols().await?;
+        tracing::Span::current().record("symbols_count", symbols.len());
+
+        info!(target: "symbol_metadata_registry", event_type = "ACTIVE_SYMBOLS_FETCHED", "从API获取到活跃交易品种: symbols_count={}", symbols.len());
+
+        // 2. 批量查询所有品种的上市时间（优化性能）
+        info!(target: "symbol_metadata_registry", event_type = "LISTING_TIMES_QUERYING", "批量查询品种上市时间: symbols_count={}", symbols.len());
+        let symbol_listing_times = self.batch_get_symbol_listing_times(&symbols).await?;
+
+        info!(target: "symbol_metadata_registry", event_type = "LISTING_TIMES_QUERIED", "批量查询品种上市时间完成: valid_symbols_count={}, skipped_symbols_count={}", symbol_listing_times.len(), symbols.len() - symbol_listing_times.len());
+
+        // 3. 按上市时间排序
+        let mut sorted_symbols = symbol_listing_times;
+        sorted_symbols.sort_by_key(|(_, listing_time)| *listing_time);
+
+        // 4. 分配索引
+        let mut symbol_to_index = self.symbol_to_index.write().await;
+        let mut index_to_symbol = self.index_to_symbol.write().await;
+        let mut symbol_info = self.symbol_info.write().await;
+
+        for (index, (symbol, listing_time)) in sorted_symbols.into_iter().enumerate() {
+            let symbol_index = index as u32;
+
+            // 检查是否超过最大支持数量
+            if index >= self.config.max_symbols {
+                warn!(target: "symbol_metadata_registry", event_type = "MAX_SYMBOLS_EXCEEDED", "品种数量超过最大支持数量，跳过品种: max_symbols={}, symbol={}, current_index={}", self.config.max_symbols, symbol, index);
+                break;
+            }
+
+            // 建立映射关系
+            symbol_to_index.insert(symbol.clone(), symbol_index);
+            index_to_symbol.insert(symbol_index, symbol.clone());
+
+            // 创建品种信息
+            let info = SymbolInfo {
+                symbol: symbol.clone(),
+                index: symbol_index,
+                listing_time,
+            };
+            symbol_info.insert(symbol.clone(), info);
+
+            debug!(target: "symbol_metadata_registry", event_type = "SYMBOL_REGISTERED", "注册品种: symbol={}, symbol_index={}, listing_time={}", symbol, symbol_index, listing_time);
+        }
+
+        let registered_count = symbol_to_index.len();
+        tracing::Span::current().record("registered_count", registered_count);
+
+        info!(target: "symbol_metadata_registry", event_type = "SYMBOL_INFO_INITIALIZED", "已注册交易品种: registered_count={}", registered_count);
+        Ok(())
+    }
+
+    /// 批量获取品种上市时间（性能优化）
+    #[instrument(target = "SymbolMetadataRegistry", name="batch_get_listing_times", fields(symbols_count = symbols.len(), valid_count = 0, skipped_count = 0), skip(self, symbols), err)]
+    async fn batch_get_symbol_listing_times(&self, symbols: &[String]) -> Result<Vec<(String, i64)>> {
+        info!(target: "symbol_metadata_registry", event_type = "BATCH_LISTING_TIME_QUERY_START", "开始批量查询品种上市时间: symbols_count={}", symbols.len());
+
+        // 批量查询数据库中所有品种的最早K线时间
+        let batch_results = self.database.batch_get_earliest_kline_timestamps(symbols, "1m")?;
+
+        let mut valid_symbols = Vec::new();
+        let mut skipped_count = 0;
+
+        for (symbol, timestamp_opt) in batch_results {
+            match timestamp_opt {
+                Some(timestamp) => {
+                    valid_symbols.push((symbol.clone(), timestamp));
+                    debug!(target: "symbol_metadata_registry", "品种上市时间: symbol={}, listing_time={}", symbol, timestamp);
+                }
+                None => {
+                    warn!(target: "symbol_metadata_registry", event_type = "SYMBOL_SKIPPED_NO_DATA", "跳过品种，无历史数据: symbol={}", symbol);
+                    skipped_count += 1;
+                }
+            }
+        }
+
+        // 检查是否有足够的有效品种
+        if valid_symbols.is_empty() {
+            let err = AppError::DataError("没有任何品种有历史K线数据，请先下载历史数据".to_string());
+            error!(target: "symbol_metadata_registry", event_type="NO_VALID_SYMBOLS_FOUND", error = %err);
+            return Err(err);
+        }
+
+        if skipped_count > symbols.len() * 3 / 4 {
+            warn!(target: "symbol_metadata_registry", event_type = "HIGH_SKIP_RATE_WARNING", "超过75%的品种没有历史数据，建议补充历史数据: skipped_count={}, total_count={}, skip_percentage={}%", skipped_count, symbols.len(), skipped_count * 100 / symbols.len());
+        }
+
+        tracing::Span::current().record("valid_count", valid_symbols.len());
+        tracing::Span::current().record("skipped_count", skipped_count);
+
+        info!(target: "symbol_metadata_registry", event_type = "BATCH_LISTING_TIME_QUERY_END", "批量查询完成: valid_count={}, skipped_count={}", valid_symbols.len(), skipped_count);
+
+        Ok(valid_symbols)
+    }
+    
+    /// 获取活跃的交易品种列表
+    #[instrument(target = "SymbolMetadataRegistry", name="fetch_active_symbols", fields(symbols_count = 0), skip(self), err)]
+    async fn fetch_active_symbols(&self) -> Result<Vec<String>> {
+        const MAX_RETRIES: usize = 3;
+        const RETRY_DELAY_SECS: u64 = 2;
+        
+        for attempt in 1..=MAX_RETRIES {
+            match self.api_client.get_trading_usdt_perpetual_symbols().await {
+                Ok(symbols) => {
+                    if symbols.is_empty() {
+                        warn!(target: "symbol_metadata_registry", event_type = "EMPTY_SYMBOL_LIST_FROM_API", "API返回空的交易品种列表: attempt={}, max_retries={}", attempt, MAX_RETRIES);
+                    } else {
+                        tracing::Span::current().record("symbols_count", symbols.len());
+                        return Ok(symbols);
+                    }
+                }
+                Err(e) => {
+                    error!(target: "symbol_metadata_registry", event_type = "FETCH_SYMBOLS_API_ERROR", "获取交易品种列表失败: attempt={}, max_retries={}, error={}", attempt, MAX_RETRIES, e);
+                }
+            }
+            
+            if attempt < MAX_RETRIES {
+                tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+            }
+        }
+        
+        Err(AppError::ApiError(format!("获取交易品种列表失败，已重试 {} 次", MAX_RETRIES)))
+    }
+    
+    /// 获取品种的上市时间（首个1分钟K线时间）
+    ///
+    /// 这是关键逻辑，必须确保获取到准确的上市时间以保证索引稳定性
+    #[instrument(target = "SymbolMetadataRegistry", name="get_listing_time", fields(symbol = %symbol, listing_time = 0), skip(self), err)]
+    async fn get_symbol_listing_time(&self, symbol: &str) -> Result<i64> {
+        // 查询数据库中该品种的最早1分钟K线时间
+        match self.database.get_earliest_kline_timestamp(symbol, "1m") {
+            Ok(Some(timestamp)) => {
+                tracing::Span::current().record("listing_time", timestamp);
+                debug!(target: "symbol_metadata_registry", event_type = "LISTING_TIME_FROM_DB", "从数据库获取品种上市时间: symbol={}, listing_time={}", symbol, timestamp);
+                Ok(timestamp)
+            }
+            Ok(None) => {
+                // 数据库中没有数据，这是关键错误，不能使用默认值
+                let err = AppError::DataError(format!("品种 {} 缺少历史K线数据，无法确定上市时间。请先下载该品种的历史数据。", symbol));
+                error!(target: "symbol_metadata_registry", event_type = "LISTING_TIME_NOT_FOUND_IN_DB", "数据库中没有品种的历史K线数据，无法确定上市时间: symbol={}", symbol);
+                Err(err)
+            }
+            Err(e) => {
+                let err = AppError::DataError(format!("查询品种 {} 的上市时间失败: {}。请检查数据库连接和数据完整性。", symbol, e));
+                error!(target: "symbol_metadata_registry", event_type = "LISTING_TIME_DB_QUERY_FAILED", "查询品种上市时间失败: symbol={}, error={}", symbol, e);
+                Err(err)
+            }
+        }
+    }
+    
+    /// 通过品种名获取索引
+    pub async fn get_symbol_index(&self, symbol: &str) -> Option<u32> {
+        self.symbol_to_index.read().await.get(symbol).copied()
+    }
+    
+    /// 通过索引获取品种名
+    pub async fn get_symbol_by_index(&self, index: u32) -> Option<String> {
+        self.index_to_symbol.read().await.get(&index).cloned()
+    }
+    
+    /// 获取所有已注册的品种及其索引
+    pub async fn get_all_symbols(&self) -> Result<Vec<(String, u32)>> {
+        let symbol_to_index = self.symbol_to_index.read().await;
+        Ok(symbol_to_index.iter().map(|(symbol, &index)| (symbol.clone(), index)).collect())
+    }
+    
+    /// 获取品种信息
+    pub async fn get_symbol_info(&self, symbol: &str) -> Option<SymbolInfo> {
+        self.symbol_info.read().await.get(symbol).cloned()
+    }
+    
+    /// 获取周期信息
+    pub async fn get_period_info(&self, interval: &str) -> Option<PeriodInfo> {
+        self.period_info.read().await.get(interval).cloned()
+    }
+    
+    /// 获取周期索引
+    pub async fn get_period_index(&self, interval: &str) -> Option<u32> {
+        self.period_info.read().await.get(interval).map(|info| info.index)
+    }
+    
+    /// 通过索引获取周期字符串
+    pub async fn get_interval_by_index(&self, index: u32) -> Option<String> {
+        let period_info = self.period_info.read().await;
+        period_info.values().find(|info| info.index == index).map(|info| info.interval.clone())
+    }
+    
+    /// 获取总的K线存储槽数量
+    pub fn get_total_kline_slots(&self) -> usize {
+        self.total_kline_slots
+    }
+    
+    /// 获取支持的周期数量
+    pub fn get_periods_per_symbol(&self) -> usize {
+        self.config.supported_intervals.len()
+    }
+    
+    /// 计算扁平化存储索引
+    pub fn calculate_flat_index(&self, symbol_index: u32, period_index: u32) -> usize {
+        (symbol_index as usize) * self.get_periods_per_symbol() + (period_index as usize)
+    }
+    
+    /// 从扁平化索引解析品种和周期索引
+    pub fn parse_flat_index(&self, flat_index: usize) -> (u32, u32) {
+        let periods_per_symbol = self.get_periods_per_symbol();
+        let symbol_index = (flat_index / periods_per_symbol) as u32;
+        let period_index = (flat_index % periods_per_symbol) as u32;
+        (symbol_index, period_index)
+    }
+    
+    /// 获取注册的品种数量
+    pub async fn get_symbol_count(&self) -> usize {
+        self.symbol_to_index.read().await.len()
+    }
+    
+    /// 获取支持的周期列表
+    pub fn get_supported_intervals(&self) -> &[String] {
+        &self.config.supported_intervals
+    }
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+trade_event_router.txt
+
+改造说明:
+
+关键函数: 对所有公共方法都添加了#[instrument]，特别是route_trade_event这个热点路径，保留了其关键参数的记录。
+
+关键事件: 为注册、注销、路由失败等事件添加了event_type。
+
+错误详情: 在路由失败和聚合器处理失败时记录详细错误。
+
+//! 交易事件路由模块
+//! 
+//! 负责将归集交易数据路由到对应的品种聚合器。
+
+use crate::klaggregate::{AggTradeData, SymbolKlineAggregator};
+use crate::klcommon::{Result, AppError};
+use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+use tracing::{debug, warn, error, info, instrument};
+
+/// 交易事件路由器
+pub struct TradeEventRouter {
+    /// 品种到聚合器的映射
+    aggregators: Arc<RwLock<HashMap<String, Arc<SymbolKlineAggregator>>>>,
+    
+    /// 路由统计信息
+    route_count: Arc<RwLock<HashMap<String, u64>>>,
+    
+    /// 错误计数
+    error_count: Arc<RwLock<u64>>,
+}
+
+impl TradeEventRouter {
+    /// 创建新的交易事件路由器
+    #[instrument(target = "TradeEventRouter", name="new_router")]
+    pub fn new() -> Self {
+        info!(target: "trade_event_router", event_type = "ROUTER_CREATED", "创建交易事件路由器");
+        
+        Self {
+            aggregators: Arc::new(RwLock::new(HashMap::new())),
+            route_count: Arc::new(RwLock::new(HashMap::new())),
+            error_count: Arc::new(RwLock::new(0)),
+        }
+    }
+    
+    /// 注册品种聚合器
+    #[instrument(target = "TradeEventRouter", name="register_aggregator", fields(symbol = %symbol), skip(self, aggregator), err)]
+    pub async fn register_aggregator(
+        &self,
+        symbol: String,
+        aggregator: Arc<SymbolKlineAggregator>,
+    ) -> Result<()> {
+        debug!(target: "trade_event_router", event_type = "AGGREGATOR_REGISTERING", "注册品种聚合器: symbol={}", symbol);
+
+        let mut aggregators = self.aggregators.write().await;
+
+        if aggregators.contains_key(&symbol) {
+            warn!(target: "trade_event_router", event_type = "AGGREGATOR_REPLACED", "品种聚合器已存在，将被替换: symbol={}", symbol);
+        }
+
+        aggregators.insert(symbol.clone(), aggregator);
+
+        // 初始化路由计数
+        let mut route_count = self.route_count.write().await;
+        route_count.insert(symbol.clone(), 0);
+
+        debug!(target: "trade_event_router", event_type = "AGGREGATOR_REGISTERED", "品种聚合器注册完成: symbol={}", symbol);
+        Ok(())
+    }
+    
+    /// 取消注册品种聚合器
+    #[instrument(target = "TradeEventRouter", name="unregister_aggregator", fields(symbol = %symbol), skip(self), err)]
+    pub async fn unregister_aggregator(&self, symbol: &str) -> Result<()> {
+        debug!(target: "trade_event_router", event_type = "AGGREGATOR_UNREGISTERING", "取消注册品种聚合器: symbol={}", symbol);
+
+        let mut aggregators = self.aggregators.write().await;
+        let mut route_count = self.route_count.write().await;
+
+        aggregators.remove(symbol);
+        route_count.remove(symbol);
+
+        debug!(target: "trade_event_router", event_type = "AGGREGATOR_UNREGISTERED", "品种聚合器取消注册完成: symbol={}", symbol);
+        Ok(())
+    }
+    
+    /// 路由交易事件
+    #[instrument(target = "TradeEventRouter", name="route_trade", fields(symbol = %trade.symbol, price = %trade.price, quantity = %trade.quantity), skip(self), err)]
+    pub async fn route_trade_event(&self, trade: AggTradeData) -> Result<()> {
+        // 查找对应的聚合器
+        let aggregators = self.aggregators.read().await;
+        
+        if let Some(aggregator) = aggregators.get(&trade.symbol) {
+            // 找到对应的聚合器，处理交易
+            if let Err(e) = aggregator.process_agg_trade(&trade).await {
+                error!(target: "trade_event_router", event_type = "AGGREGATION_FAILED", "处理品种交易失败: symbol={}, error={}", trade.symbol, e);
+
+                // 更新错误计数
+                let mut error_count = self.error_count.write().await;
+                *error_count += 1;
+
+                return Err(e);
+            } else {
+                // 更新路由计数
+                let mut route_count = self.route_count.write().await;
+                *route_count.entry(trade.symbol.clone()).or_insert(0) += 1;
+            }
+        } else {
+            warn!(target: "trade_event_router", event_type = "AGGREGATOR_NOT_FOUND", "未找到品种聚合器: symbol={}", trade.symbol);
+
+            // 更新错误计数
+            let mut error_count = self.error_count.write().await;
+            *error_count += 1;
+
+            return Err(AppError::DataError(format!(
+                "未找到品种 {} 的聚合器",
+                trade.symbol
+            )));
+        }
+        
+        Ok(())
+    }
+    
+    /// 批量路由交易事件
+    #[instrument(target = "TradeEventRouter", name="route_batch", fields(trades_count = trades.len()), skip(self, trades), err)]
+    pub async fn route_trade_events(&self, trades: Vec<AggTradeData>) -> Result<()> {
+        let mut success_count = 0;
+        let mut error_count = 0;
+        
+        for trade in trades {
+            if self.route_trade_event(trade).await.is_err() {
+                error_count += 1;
+            } else {
+                success_count += 1;
+            }
+        }
+
+        if error_count > 0 {
+            warn!(target: "trade_event_router", event_type = "BATCH_ROUTE_COMPLETED_WITH_ERRORS", "批量路由完成，但有错误: success_count={}, error_count={}", success_count, error_count);
+        } else {
+            debug!(target: "trade_event_router", event_type = "BATCH_ROUTE_COMPLETED_SUCCESSFULLY", "批量路由完成: success_count={}", success_count);
+        }
+        
+        Ok(())
+    }
+    
+    /// 获取已注册的品种列表
+    pub async fn get_registered_symbols(&self) -> Vec<String> {
+        let aggregators = self.aggregators.read().await;
+        aggregators.keys().cloned().collect()
+    }
+    
+    /// 获取指定品种的聚合器
+    pub async fn get_aggregator(&self, symbol: &str) -> Option<Arc<SymbolKlineAggregator>> {
+        let aggregators = self.aggregators.read().await;
+        aggregators.get(symbol).cloned()
+    }
+    
+    /// 获取所有聚合器
+    pub async fn get_all_aggregators(&self) -> HashMap<String, Arc<SymbolKlineAggregator>> {
+        let aggregators = self.aggregators.read().await;
+        aggregators.clone()
+    }
+    
+    /// 强制完成所有聚合器的K线
+    #[instrument(target = "TradeEventRouter", name="finalize_all", skip(self), err)]
+    pub async fn finalize_all_aggregators(&self) -> Result<()> {
+        info!(target: "trade_event_router", event_type = "FINALIZE_ALL_AGGREGATORS_STARTING", "强制完成所有聚合器的K线");
+
+        let aggregators = self.aggregators.read().await;
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (symbol, aggregator) in aggregators.iter() {
+            match aggregator.finalize_all_klines().await {
+                Ok(()) => {
+                    success_count += 1;
+                    debug!(target: "trade_event_router", event_type = "AGGREGATOR_FINALIZED_SUCCESS", "品种K线强制完成成功: symbol={}", symbol);
+                }
+                Err(e) => {
+                    error_count += 1;
+                    error!(target: "trade_event_router", event_type = "AGGREGATOR_FINALIZE_FAILED", "品种K线强制完成失败: symbol={}, error={}", symbol, e);
+                }
+            }
+        }
+
+        info!(target: "trade_event_router", event_type = "FINALIZE_ALL_AGGREGATORS_COMPLETED", "强制完成K线操作完成: success_count={}, error_count={}", success_count, error_count);
+        
+        if error_count > 0 {
+            Err(AppError::DataError(format!(
+                "部分聚合器强制完成失败: {} 个失败",
+                error_count
+            )))
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// 获取路由统计信息
+    pub async fn get_statistics(&self) -> RouterStatistics {
+        let aggregators = self.aggregators.read().await;
+        let route_count = self.route_count.read().await;
+        let error_count = self.error_count.read().await;
+        
+        let total_routes: u64 = route_count.values().sum();
+        let registered_symbols = aggregators.len();
+        
+        RouterStatistics {
+            registered_symbols,
+            total_routes,
+            error_count: *error_count,
+            symbol_route_counts: route_count.clone(),
+        }
+    }
+    
+    /// 重置统计信息
+    #[instrument(target = "TradeEventRouter", name="reset_stats", skip(self))]
+    pub async fn reset_statistics(&self) {
+        let mut route_count = self.route_count.write().await;
+        let mut error_count = self.error_count.write().await;
+        
+        for count in route_count.values_mut() {
+            *count = 0;
+        }
+        *error_count = 0;
+        
+        info!(target: "trade_event_router", event_type = "ROUTER_STATS_RESET", "路由统计信息已重置");
+    }
+    
+    /// 检查路由器健康状态
+    pub async fn health_check(&self) -> RouterHealthStatus {
+        let aggregators = self.aggregators.read().await;
+        let error_count = self.error_count.read().await;
+        
+        let registered_count = aggregators.len();
+        let is_healthy = registered_count > 0 && *error_count < 1000; // 错误数少于1000认为健康
+        
+        RouterHealthStatus {
+            is_healthy,
+            registered_aggregators: registered_count,
+            total_errors: *error_count,
+            status_message: if is_healthy {
+                "路由器运行正常".to_string()
+            } else if registered_count == 0 {
+                "没有注册的聚合器".to_string()
+            } else {
+                format!("错误数过多: {}", *error_count)
+            },
+        }
+    }
+}
+
+impl Default for TradeEventRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 路由统计信息
+#[derive(Debug, Clone)]
+pub struct RouterStatistics {
+    /// 已注册的品种数量
+    pub registered_symbols: usize,
+    /// 总路由次数
+    pub total_routes: u64,
+    /// 错误计数
+    pub error_count: u64,
+    /// 每个品种的路由次数
+    pub symbol_route_counts: HashMap<String, u64>,
+}
+
+/// 路由器健康状态
+#[derive(Debug, Clone)]
+pub struct RouterHealthStatus {
+    /// 是否健康
+    pub is_healthy: bool,
+    /// 已注册的聚合器数量
+    pub registered_aggregators: usize,
+    /// 总错误数
+    pub total_errors: u64,
+    /// 状态消息
+    pub status_message: String,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+market_data_ingestor.txt
+
+改造说明:
+
+关键函数: 为new, start, stop添加了#[instrument]。
+
+并发追踪: 为处理交易事件和统计的tokio::spawn添加了instrument，并清晰命名。
+
+关键事件: 为启动、停止、订阅、路由失败等事件添加了event_type。
+
+错误详情: 在路由交易事件失败时记录详细错误。
+
+//! 行情数据接入与解析模块
+//! 
+//! 负责通过WebSocket接收币安归集交易数据，并解析转发给路由器。
+
+use crate::klaggregate::{AggregateConfig, TradeEventRouter};
+use crate::klcommon::{Result, AppError, websocket::*};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tokio::sync::RwLock;
+use tokio::time::{interval, Duration};
+use tracing::{info, debug, warn, error, instrument};
+
+/// 行情数据接入器
+pub struct MarketDataIngestor {
+    /// 配置
+    config: AggregateConfig,
+    
+    /// 交易事件路由器
+    trade_router: Arc<TradeEventRouter>,
+    
+    /// WebSocket客户端
+    websocket_client: Arc<RwLock<Option<Arc<RwLock<AggTradeWebSocketClient>>>>>,
+    
+    /// 运行状态
+    is_running: Arc<AtomicBool>,
+
+    /// 连接计数
+    connection_count: Arc<AtomicUsize>,
+
+    /// 消息统计
+    message_count: Arc<AtomicUsize>,
+
+    /// 错误计数
+    error_count: Arc<AtomicUsize>,
+}
+
+impl MarketDataIngestor {
+    /// 创建新的行情数据接入器
+    #[instrument(target = "MarketDataIngestor", name="new_ingestor", skip_all, err)]
+    pub async fn new(
+        config: AggregateConfig,
+        trade_router: Arc<TradeEventRouter>,
+    ) -> Result<Self> {
+        info!(target: "market_data_ingestor", event_type = "INGESTOR_INITIALIZING", "创建行情数据接入器");
+        
+        Ok(Self {
+            config,
+            trade_router,
+            websocket_client: Arc::new(RwLock::new(None)),
+            is_running: Arc::new(AtomicBool::new(false)),
+            connection_count: Arc::new(AtomicUsize::new(0)),
+            message_count: Arc::new(AtomicUsize::new(0)),
+            error_count: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+    
+    /// 启动数据接入
+    #[instrument(target = "MarketDataIngestor", name="start_ingestor", fields(symbols_count), skip(self), err)]
+    pub async fn start(&self) -> Result<()> {
+        if self.is_running.swap(true, Ordering::Relaxed) {
+            warn!(target: "market_data_ingestor", event_type = "INGESTOR_ALREADY_RUNNING", "行情数据接入器已经在运行");
+            return Ok(());
+        }
+
+        info!(target: "market_data_ingestor", event_type = "INGESTOR_STARTING", "启动行情数据接入器");
+
+        // 获取需要订阅的品种列表
+        let symbols = self.trade_router.get_registered_symbols().await;
+        if symbols.is_empty() {
+            let err = AppError::ConfigError("没有注册的交易品种".to_string());
+            error!(target: "market_data_ingestor", event_type = "NO_SYMBOLS_TO_SUBSCRIBE", error = %err, "启动失败，没有可订阅的品种");
+            return Err(err);
+        }
+
+        tracing::Span::current().record("symbols_count", symbols.len());
+        info!(target: "market_data_ingestor", event_type = "SYMBOLS_SUBSCRIPTION_PREPARING", "准备订阅品种的归集交易数据: symbols_count={}", symbols.len());
+        
+        // 创建WebSocket配置
+        let ws_config = AggTradeConfig {
+            use_proxy: self.config.websocket.use_proxy,
+            proxy_addr: self.config.websocket.proxy_host.clone(),
+            proxy_port: self.config.websocket.proxy_port,
+            symbols,
+        };
+        
+        // 创建交易数据通道
+        let (trade_sender, trade_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        // 启动交易事件处理任务
+        let trade_router = self.trade_router.clone();
+        tokio::spawn(async move {
+            let mut receiver = trade_receiver;
+            while let Some(trade_data) = receiver.recv().await {
+                if let Err(e) = trade_router.route_trade_event(trade_data).await {
+                    error!(target: "market_data_ingestor", event_type = "TRADE_ROUTING_FAILED_IN_CHANNEL", error = %e, "从通道中路由交易事件失败");
+                }
+            }
+            warn!(target = "market_data_ingestor", event_type = "TRADE_RECEIVER_CHANNEL_CLOSED", "交易事件接收通道已关闭，任务退出");
+        }.instrument(tracing::info_span!("trade_event_processor")));
+
+        // 创建WebSocket客户端
+        let client = Arc::new(RwLock::new(AggTradeWebSocketClient::new(
+            ws_config,
+            Arc::new(AggTradeMessageHandler::with_trade_sender(
+                self.message_count.clone(),
+                self.error_count.clone(),
+                trade_sender,
+            )),
+        )));
+        
+        *self.websocket_client.write().await = Some(client.clone());
+        
+        // 启动WebSocket客户端
+        let mut client_guard = client.write().await;
+        client_guard.start().await?;
+        drop(client_guard);
+        
+        // 启动统计输出任务
+        self.start_statistics_task().await;
+        
+        info!(target: "market_data_ingestor", event_type = "INGESTOR_STARTED", "行情数据接入器启动完成");
+        Ok(())
+    }
+
+    /// 停止数据接入
+    #[instrument(target = "MarketDataIngestor", name="stop_ingestor", skip(self), err)]
+    pub async fn stop(&self) -> Result<()> {
+        if !self.is_running.swap(false, Ordering::Relaxed) {
+            info!(target: "market_data_ingestor", event_type = "INGESTOR_ALREADY_STOPPED", "行情数据接入器未在运行，无需停止");
+            return Ok(());
+        }
+
+        info!(target: "market_data_ingestor", event_type = "INGESTOR_STOPPING", "停止行情数据接入器");
+
+        // 停止WebSocket客户端
+        let websocket_client = self.websocket_client.read().await;
+        if let Some(_client) = &*websocket_client {
+            // WebSocket客户端会在连接断开时自动停止
+            debug!(target: "market_data_ingestor", event_type = "WEBSOCKET_CLIENT_AUTO_STOP", "WebSocket客户端将自动停止");
+        }
+
+        info!(target: "market_data_ingestor", event_type = "INGESTOR_STOPPED", "行情数据接入器已停止");
+        Ok(())
+    }
+    
+    /// 启动统计输出任务
+    #[instrument(target = "MarketDataIngestor", name="start_stats_task", skip(self))]
+    async fn start_statistics_task(&self) {
+        let is_running = self.is_running.clone();
+        let message_count = self.message_count.clone();
+        let error_count = self.error_count.clone();
+        let connection_count = self.connection_count.clone();
+        
+        tokio::spawn(async move {
+            let mut interval_timer = interval(Duration::from_secs(30));
+            let mut last_message_count = 0;
+            let mut last_error_count = 0;
+            
+            while is_running.load(Ordering::Relaxed) {
+                interval_timer.tick().await;
+                
+                let current_messages = message_count.load(Ordering::Relaxed);
+                let current_errors = error_count.load(Ordering::Relaxed);
+                let connections = connection_count.load(Ordering::Relaxed);
+
+                let message_rate = current_messages - last_message_count;
+                let error_rate = current_errors - last_error_count;
+
+                info!(
+                    target: "market_data_ingestor",
+                    event_type = "INGESTOR_STATS_REPORT",
+                    connections,
+                    total_messages = current_messages,
+                    message_rate_per_30s = message_rate,
+                    total_errors = current_errors,
+                    error_rate_per_30s = error_rate,
+                    "行情数据统计报告"
+                );
+                
+                last_message_count = current_messages;
+                last_error_count = current_errors;
+            }
+        }.instrument(tracing::info_span!("ingestor_statistics_task")));
+    }
+    
+    /// 获取连接数量
+    pub async fn get_connection_count(&self) -> usize {
+        self.connection_count.load(Ordering::Relaxed)
+    }
+    
+    /// 获取统计信息
+    pub async fn get_statistics(&self) -> IngestorStatistics {
+        IngestorStatistics {
+            is_running: self.is_running.load(Ordering::Relaxed),
+            connection_count: self.connection_count.load(Ordering::Relaxed),
+            message_count: self.message_count.load(Ordering::Relaxed),
+            error_count: self.error_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// 归集交易WebSocket客户端
+struct AggTradeWebSocketClient {
+    _config: AggTradeConfig,
+    _message_handler: Arc<AggTradeMessageHandler>,
+}
+
+impl AggTradeWebSocketClient {
+    fn new(config: AggTradeConfig, message_handler: Arc<AggTradeMessageHandler>) -> Self {
+        Self {
+            _config: config,
+            _message_handler: message_handler,
+        }
+    }
+}
+
+impl WebSocketClient for AggTradeWebSocketClient {
+    #[instrument(target = "AggTradeWebSocketClient", name="start_websocket", skip(self), err)]
+    async fn start(&mut self) -> Result<()> {
+        info!(target: "market_data_ingestor", event_type = "WEBSOCKET_CLIENT_STARTING", "启动归集交易WebSocket客户端");
+
+        // 创建归集交易配置
+        let agg_trade_config = crate::klcommon::websocket::AggTradeConfig {
+            use_proxy: self._config.use_proxy,
+            proxy_addr: self._config.proxy_addr.clone(),
+            proxy_port: self._config.proxy_port,
+            symbols: self._config.symbols.clone(),
+        };
+
+        // 创建数据库连接
+        let db = Arc::new(crate::klcommon::Database::new(&std::path::PathBuf::from("./data/klines.db"))?);
+
+        // 创建归集交易客户端
+        let mut agg_trade_client = crate::klcommon::websocket::AggTradeClient::new(
+            agg_trade_config,
+            db,
+            vec!["1m".to_string()], // 临时使用，实际不需要
+        );
+
+        // 启动WebSocket客户端
+        agg_trade_client.start().await?;
+
+        info!(target: "market_data_ingestor", event_type = "WEBSOCKET_CLIENT_STARTED", "归集交易WebSocket客户端启动完成");
+        Ok(())
+    }
+
+    async fn get_connections(&self) -> Vec<WebSocketConnection> {
+        // 返回连接状态
+        vec![]
+    }
+}
+
+
+
+/// 接入器统计信息
+#[derive(Debug, Clone)]
+pub struct IngestorStatistics {
+    /// 是否运行中
+    pub is_running: bool,
+    /// 连接数量
+    pub connection_count: usize,
+    /// 消息计数
+    pub message_count: usize,
+    /// 错误计数
+    pub error_count: usize,
+}
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Rust
+IGNORE_WHEN_COPYING_END
+无需修改的文件
+
+以下文件主要是定义数据结构、配置、接口或验证规则，不包含需要进行日志埋点改造的活动业务逻辑。因此，它们保持原样。
+
+config.txt
+
+observability.txt
+
+types.txt
+
+validation_rules.txt
+
+总结
+
+我已经按照您的 “四加一”黄金日志范式，对所有相关的Rust代码文件进行了全面的日志埋点改造。
+
+主要改进包括：
+
+全面的#[instrument]覆盖：为所有关键的公共函数和核心私有函数添加了Span，并记录了关键参数。
+
+清晰的并发追踪：为所有独立的tokio::spawn任务（如调度器、统计任务、事件处理器）添加了instrument，确保每个并发流都有唯一的追踪Span。
+
+标准化的关键事件：为所有info!, warn!, error!日志都增加了event_type字段，使用统一的 UPPER_SNAKE_CASE 命名，并保留了中文可读信息。
+
+丰富的上下文数据：在事件和Span中附加上下文信息，如计数器、配置值、性能指标（耗时）和详细的错误信息（error = %e）。
+
+这些修改将产生高度结构化、信息丰富且对AI诊断和人类分析都极其友好的JSON日志流，同时完全没有改变原有的业务逻辑。

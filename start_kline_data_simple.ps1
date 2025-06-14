@@ -51,7 +51,7 @@ Write-Host '🌐 WebLog系统启动中...' -ForegroundColor Green
 cd src\weblog
 `$env:LOG_TRANSPORT='named_pipe'
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '📡 命名管道模式，端口8080' -ForegroundColor Cyan
 cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'
 "@ -PassThru
@@ -66,7 +66,7 @@ cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'
 Write-Host '📊 K线数据服务启动中...' -ForegroundColor Yellow
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '📡 连接到WebLog系统' -ForegroundColor Cyan
 cargo run --bin kline_data_service
 "@ -PassThru

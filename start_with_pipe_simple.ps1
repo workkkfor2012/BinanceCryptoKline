@@ -78,7 +78,7 @@ if (-not (Test-WebLog)) {
     Write-Host "🌐 启动WebLog服务..." -ForegroundColor Yellow
 
     # 启动WebLog系统（直接连接架构）
-    $webLogProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:RUST_LOG='info'; cd src\weblog; cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'" -WindowStyle Hidden -PassThru
+    $webLogProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:RUST_LOG='trace'; cd src\weblog; cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'" -WindowStyle Hidden -PassThru
 
     # 等待WebLog启动
     $maxWait = 15
@@ -124,10 +124,10 @@ Write-Host "📊 启动K线系统..." -ForegroundColor Yellow
 Write-Host "🔧 设置环境变量..." -ForegroundColor Cyan
 $env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
 $env:LOG_TRANSPORT = "named_pipe"
-$env:RUST_LOG = "info"
+$env:RUST_LOG = "trace"
 
 Write-Host "🚀 启动K线聚合服务..." -ForegroundColor Yellow
-$global:klineProcess = Start-Process powershell -ArgumentList "-Command", "`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:LOG_TRANSPORT='named_pipe'; `$env:RUST_LOG='info'; cargo run --bin kline_aggregate_service" -WindowStyle Hidden -PassThru
+$global:klineProcess = Start-Process powershell -ArgumentList "-Command", "`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:LOG_TRANSPORT='named_pipe'; `$env:RUST_LOG='trace'; cargo run --bin kline_aggregate_service" -WindowStyle Hidden -PassThru
 
 Write-Host "✅ 启动完成" -ForegroundColor Green
 Write-Host ""

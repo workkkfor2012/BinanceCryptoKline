@@ -28,3 +28,5 @@ config.local.toml
 /src/weblog/target
 /test_tracing_expand
 /tempfold
+/src/weblog/src/tempfold
+

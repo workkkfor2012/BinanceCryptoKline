@@ -1,6 +1,6 @@
 // WebSocket模块 - 提供通用的WebSocket连接管理功能 (使用 fastwebsockets 实现)
 use crate::klcommon::{AppError, Database, KlineData, Result, PROXY_HOST, PROXY_PORT};
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -34,7 +34,7 @@ pub const BINANCE_WS_URL: &str = "wss://fstream.binance.com/ws";
 
 /// WebSocket连接数量
 /// 所有品种将平均分配到这些连接中
-pub const WEBSOCKET_CONNECTION_COUNT: usize = 5;
+pub const WEBSOCKET_CONNECTION_COUNT: usize = 1;
 
 //=============================================================================
 // WebSocket配置
@@ -243,10 +243,18 @@ impl MessageHandler for AggTradeMessageHandler {
             // 增加消息计数
             self.message_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+            // 添加详细的消息日志
+            debug!(target: "websocket", "连接 {} 收到原始消息: {}", connection_id,
+                if message.len() > 200 {
+                    format!("{}...(长度:{})", &message[..200], message.len())
+                } else {
+                    message.clone()
+                });
+
             // 解析归集交易消息
             match self.parse_agg_trade_message(&message).await {
                 Ok(Some(agg_trade)) => {
-                    debug!(target: "websocket", "连接 {} 收到归集交易: {} {} @ {}",
+                    info!(target: "websocket", "连接 {} 收到归集交易: {} {} @ {}",
                         connection_id, agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
                     // 将归集交易数据发送给TradeEventRouter
@@ -267,21 +275,43 @@ impl MessageHandler for AggTradeMessageHandler {
                         if let Err(e) = sender.send(trade_data) {
                             error!(target: "websocket", "发送归集交易数据失败: {}", e);
                             self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            debug!(target: "websocket", "成功发送归集交易数据到路由器");
                         }
                     } else {
-                        debug!(target: "websocket", "没有配置交易数据发送器，跳过数据路由");
+                        warn!(target: "websocket", "没有配置交易数据发送器，跳过数据路由");
                     }
 
                     Ok(())
                 }
                 Ok(None) => {
                     // 非归集交易消息，可能是订阅确认等
-                    debug!(target: "websocket", "连接 {} 收到非归集交易消息", connection_id);
+                    info!(target: "websocket", "连接 {} 收到非归集交易消息，消息类型检查: {}",
+                        connection_id,
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
+                            if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
+                                format!("事件类型: {}", event_type)
+                            } else if json.get("result").is_some() {
+                                "订阅响应消息".to_string()
+                            } else if json.get("id").is_some() {
+                                "ID响应消息".to_string()
+                            } else {
+                                format!("未知消息格式: {}", json)
+                            }
+                        } else {
+                            "非JSON消息".to_string()
+                        });
                     Ok(())
                 }
                 Err(e) => {
                     self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    error!(target: "websocket", "连接 {} 解析归集交易消息失败: {}", connection_id, e);
+                    error!(target: "websocket", "连接 {} 解析归集交易消息失败: {}, 原始消息: {}",
+                        connection_id, e,
+                        if message.len() > 100 {
+                            format!("{}...", &message[..100])
+                        } else {
+                            message
+                        });
                     Err(e)
                 }
             }
@@ -296,25 +326,44 @@ impl AggTradeMessageHandler {
         let json: serde_json::Value = serde_json::from_str(message)
             .map_err(|e| AppError::ParseError(format!("JSON解析失败: {}", e)))?;
 
+        // 首先检查是否是包装在stream中的消息格式
+        let data_json = if let Some(data) = json.get("data") {
+            // 这是stream格式的消息，提取data部分
+            debug!(target: "websocket", "检测到stream格式消息，提取data部分");
+            data
+        } else {
+            // 这是直接格式的消息
+            debug!(target: "websocket", "检测到直接格式消息");
+            &json
+        };
+
         // 检查是否是归集交易消息
-        if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
+        if let Some(event_type) = data_json.get("e").and_then(|e| e.as_str()) {
             if event_type == "aggTrade" {
+                debug!(target: "websocket", "确认为归集交易消息，开始解析");
+
                 // 解析归集交易数据
                 let agg_trade = BinanceRawAggTrade {
                     event_type: event_type.to_string(),
-                    event_time: json.get("E").and_then(|e| e.as_u64()).unwrap_or(0),
-                    symbol: json.get("s").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                    aggregate_trade_id: json.get("a").and_then(|a| a.as_u64()).unwrap_or(0),
-                    price: json.get("p").and_then(|p| p.as_str()).unwrap_or("0").to_string(),
-                    quantity: json.get("q").and_then(|q| q.as_str()).unwrap_or("0").to_string(),
-                    first_trade_id: json.get("f").and_then(|f| f.as_u64()).unwrap_or(0),
-                    last_trade_id: json.get("l").and_then(|l| l.as_u64()).unwrap_or(0),
-                    trade_time: json.get("T").and_then(|t| t.as_u64()).unwrap_or(0),
-                    is_buyer_maker: json.get("m").and_then(|m| m.as_bool()).unwrap_or(false),
+                    event_time: data_json.get("E").and_then(|e| e.as_u64()).unwrap_or(0),
+                    symbol: data_json.get("s").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    aggregate_trade_id: data_json.get("a").and_then(|a| a.as_u64()).unwrap_or(0),
+                    price: data_json.get("p").and_then(|p| p.as_str()).unwrap_or("0").to_string(),
+                    quantity: data_json.get("q").and_then(|q| q.as_str()).unwrap_or("0").to_string(),
+                    first_trade_id: data_json.get("f").and_then(|f| f.as_u64()).unwrap_or(0),
+                    last_trade_id: data_json.get("l").and_then(|l| l.as_u64()).unwrap_or(0),
+                    trade_time: data_json.get("T").and_then(|t| t.as_u64()).unwrap_or(0),
+                    is_buyer_maker: data_json.get("m").and_then(|m| m.as_bool()).unwrap_or(false),
                 };
 
+                debug!(target: "websocket", "归集交易解析成功: {} {} @ {}",
+                    agg_trade.symbol, agg_trade.quantity, agg_trade.price);
                 return Ok(Some(agg_trade));
+            } else {
+                debug!(target: "websocket", "事件类型不是aggTrade: {}", event_type);
             }
+        } else {
+            debug!(target: "websocket", "消息中没有找到事件类型字段");
         }
 
         // 不是归集交易消息
@@ -500,9 +549,14 @@ impl ConnectionManager {
             // 发送订阅消息
             let subscribe_msg = create_subscribe_message(streams);
             info!(target: "websocket", "发送订阅消息: {}", subscribe_msg);
+            info!(target: "websocket", "订阅的流列表: {:?}", streams);
 
             ws_collector.write_frame(Frame::new(true, OpCode::Text, None, subscribe_msg.into_bytes().into())).await
                 .map_err(|e| AppError::WebSocketError(format!("发送订阅消息失败: {}", e)))?;
+
+            info!(target: "websocket", "订阅消息发送成功，等待服务器响应");
+        } else {
+            info!(target: "websocket", "使用直接连接格式，无需发送额外订阅消息。路径: {}", path);
         }
 
         Ok(ws_collector)
@@ -986,6 +1040,8 @@ impl WebSocketClient for AggTradeClient {
             // 获取所有流
             let streams = self.config.get_streams();
             info!(target: "websocket", "总共 {} 个流需要订阅", streams.len());
+            info!(target: "websocket", "订阅的流详情: {:?}", streams);
+            info!(target: "websocket", "配置的交易对: {:?}", self.config.symbols);
 
             // 使用固定的连接数
             let connection_count = WEBSOCKET_CONNECTION_COUNT;
@@ -998,8 +1054,11 @@ impl WebSocketClient for AggTradeClient {
             // 分配流到连接
             let mut connection_streams = Vec::new();
 
-            for chunk in streams.chunks(streams_per_connection) {
-                connection_streams.push(chunk.to_vec());
+            for (index, chunk) in streams.chunks(streams_per_connection).enumerate() {
+                let chunk_vec = chunk.to_vec();
+                info!(target: "websocket", "连接 {} 将处理 {} 个流: {:?}",
+                    index + 1, chunk_vec.len(), chunk_vec);
+                connection_streams.push(chunk_vec);
             }
 
             // 创建消息处理器

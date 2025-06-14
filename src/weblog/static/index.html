@@ -473,7 +473,7 @@
                 }
 
                 // 保持最近1000条日志
-                if (moduleInfo.logs.length > 1000) {
+                if (moduleInfo.logs.length > 10000000) {
                     moduleInfo.logs.shift();
                 }
 
@@ -739,7 +739,7 @@
                 this.terminals = new Map();
                 this.fitAddons = new Map();
                 this.logBuffers = new Map(); // 日志缓冲区，用于管理每个终端的日志
-                this.maxLines = 1000; // 每个终端最大行数
+                this.maxLines = 100000000; // 每个终端最大行数
 
                 this.terminalTheme = {
                     background: '#000000',
@@ -925,7 +925,7 @@
                     logBuffer.push(formattedLog);
 
                     // 实时日志只保留最近50条
-                    if (logBuffer.length > 50) {
+                    if (logBuffer.length > 50000000) {
                         logBuffer.shift();
                     }
 

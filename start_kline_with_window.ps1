@@ -23,7 +23,7 @@ if (-not (Test-Path "Cargo.toml")) {
 Write-Host "📋 启动配置：" -ForegroundColor Cyan
 Write-Host "  - 日志传输：命名管道" -ForegroundColor White
 Write-Host "  - 管道名称：\\.\pipe\kline_log_pipe" -ForegroundColor White
-Write-Host "  - 日志级别：info" -ForegroundColor White
+Write-Host "  - 日志级别：trace" -ForegroundColor White
 Write-Host "  - 连接目标：WebLog系统" -ForegroundColor White
 Write-Host ""
 
@@ -62,7 +62,7 @@ Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
 `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='info'
+`$env:RUST_LOG='trace'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow

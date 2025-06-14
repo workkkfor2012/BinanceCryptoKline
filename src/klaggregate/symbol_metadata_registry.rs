@@ -38,12 +38,12 @@ pub struct SymbolMetadataRegistry {
 
 impl SymbolMetadataRegistry {
     /// 创建新的品种元数据注册表
-    #[instrument(target = "SymbolMetadataRegistry", fields(total_kline_slots), skip_all, err)]
+    #[instrument(target = "SymbolMetadataRegistry", name="new_registry", fields(total_kline_slots), skip_all, err)]
     pub async fn new(config: AggregateConfig) -> Result<Self> {
         let total_kline_slots = config.get_total_kline_slots();
         tracing::Span::current().record("total_kline_slots", total_kline_slots);
 
-        info!(target: "symbol_metadata_registry", "初始化交易品种元数据注册表: max_symbols={}, supported_intervals_count={}", config.max_symbols, config.supported_intervals.len());
+        info!(target: "symbol_metadata_registry", event_name = "注册表初始化", max_symbols = config.max_symbols, supported_intervals_count = config.supported_intervals.len(), "初始化交易品种元数据注册表");
         
         // 创建API客户端
         let api_client = BinanceApi::new();
@@ -70,43 +70,43 @@ impl SymbolMetadataRegistry {
         // 初始化品种信息
         registry.initialize_symbol_info().await?;
         
-        info!(target: "symbol_metadata_registry", "交易品种元数据注册表初始化完成: total_kline_slots={}", total_kline_slots);
+        info!(target: "symbol_metadata_registry", event_name = "注册表初始化完成", total_kline_slots = total_kline_slots, "交易品种元数据注册表初始化完成");
         Ok(registry)
     }
 
     /// 初始化周期信息
     #[instrument(target = "SymbolMetadataRegistry", fields(intervals_count = self.config.supported_intervals.len()), skip(self), err)]
     async fn initialize_period_info(&self) -> Result<()> {
-        info!(target: "symbol_metadata_registry", "初始化周期信息: intervals_count={}", self.config.supported_intervals.len());
+        info!(target: "symbol_metadata_registry", event_name = "周期信息初始化", intervals_count = self.config.supported_intervals.len(), "初始化周期信息");
 
         let mut period_info = self.period_info.write().await;
 
         for (index, interval) in self.config.supported_intervals.iter().enumerate() {
             let info = PeriodInfo::new(interval.clone(), index as u32);
             period_info.insert(interval.clone(), info);
-            debug!(target: "symbol_metadata_registry", "注册周期: interval={}, index={}", interval, index);
+            debug!(target: "symbol_metadata_registry", event_name = "周期注册", interval = %interval, index = index, "注册周期");
         }
 
-        info!(target: "symbol_metadata_registry", "已注册时间周期: periods_count={}", period_info.len());
+        info!(target: "symbol_metadata_registry", event_name = "周期信息初始化完成", periods_count = period_info.len(), "已注册时间周期");
         Ok(())
     }
     
     /// 初始化品种信息
     #[instrument(target = "SymbolMetadataRegistry", fields(symbols_count = 0, registered_count = 0), skip(self), err)]
     async fn initialize_symbol_info(&self) -> Result<()> {
-        info!(target: "symbol_metadata_registry", "初始化品种信息");
+        info!(target: "symbol_metadata_registry", event_name = "品种信息初始化", "初始化品种信息");
 
         // 1. 获取当前所有活跃的交易品种
         let symbols = self.fetch_active_symbols().await?;
         tracing::Span::current().record("symbols_count", symbols.len());
 
-        info!(target: "symbol_metadata_registry", "从API获取到活跃交易品种: symbols_count={}", symbols.len());
+        info!(target: "symbol_metadata_registry", event_name = "活跃品种获取", symbols_count = symbols.len(), "从API获取到活跃交易品种");
 
         // 2. 批量查询所有品种的上市时间（优化性能）
-        info!(target: "symbol_metadata_registry", "批量查询品种上市时间: symbols_count={}", symbols.len());
+        info!(target: "symbol_metadata_registry", event_name = "上市时间查询开始", symbols_count = symbols.len(), "批量查询品种上市时间");
         let symbol_listing_times = self.batch_get_symbol_listing_times(&symbols).await?;
 
-        info!(target: "symbol_metadata_registry", "批量查询品种上市时间完成: valid_symbols_count={}, skipped_symbols_count={}", symbol_listing_times.len(), symbols.len() - symbol_listing_times.len());
+        info!(target: "symbol_metadata_registry", event_name = "上市时间查询完成", valid_symbols_count = symbol_listing_times.len(), skipped_symbols_count = symbols.len() - symbol_listing_times.len(), "批量查询品种上市时间完成");
 
         // 3. 按上市时间排序
         let mut sorted_symbols = symbol_listing_times;
@@ -122,7 +122,7 @@ impl SymbolMetadataRegistry {
 
             // 检查是否超过最大支持数量
             if index >= self.config.max_symbols {
-                warn!(target: "symbol_metadata_registry", "品种数量超过最大支持数量，跳过品种: max_symbols={}, symbol={}, current_index={}", self.config.max_symbols, symbol, index);
+                warn!(target: "symbol_metadata_registry", event_name = "品种数量超限", max_symbols = self.config.max_symbols, symbol = %symbol, current_index = index, "品种数量超过最大支持数量，跳过品种");
                 break;
             }
 
@@ -138,20 +138,20 @@ impl SymbolMetadataRegistry {
             };
             symbol_info.insert(symbol.clone(), info);
 
-            debug!(target: "symbol_metadata_registry", "注册品种: symbol={}, symbol_index={}, listing_time={}", symbol, symbol_index, listing_time);
+            debug!(target: "symbol_metadata_registry", event_name = "品种注册", symbol = %symbol, symbol_index = symbol_index, listing_time = listing_time, "注册品种");
         }
 
         let registered_count = symbol_to_index.len();
         tracing::Span::current().record("registered_count", registered_count);
 
-        info!(target: "symbol_metadata_registry", "已注册交易品种: registered_count={}", registered_count);
+        info!(target: "symbol_metadata_registry", event_name = "品种信息初始化完成", registered_count = registered_count, "已注册交易品种");
         Ok(())
     }
 
     /// 批量获取品种上市时间（性能优化）
     #[instrument(target = "SymbolMetadataRegistry", fields(symbols_count = symbols.len(), valid_count = 0, skipped_count = 0), skip(self, symbols), err)]
     async fn batch_get_symbol_listing_times(&self, symbols: &[String]) -> Result<Vec<(String, i64)>> {
-        info!(target: "symbol_metadata_registry", "开始批量查询品种上市时间: symbols_count={}", symbols.len());
+        info!(target: "symbol_metadata_registry", event_name = "批量上市时间查询开始", symbols_count = symbols.len(), "开始批量查询品种上市时间");
 
         // 批量查询数据库中所有品种的最早K线时间
         let batch_results = self.database.batch_get_earliest_kline_timestamps(symbols, "1m")?;
@@ -166,7 +166,7 @@ impl SymbolMetadataRegistry {
                     debug!(target: "symbol_metadata_registry", "品种上市时间: symbol={}, listing_time={}", symbol, timestamp);
                 }
                 None => {
-                    warn!(target: "symbol_metadata_registry", "跳过品种，无历史数据: symbol={}", symbol);
+                    warn!(target: "symbol_metadata_registry", event_name = "品种跳过无数据", symbol = %symbol, "跳过品种，无历史数据");
                     skipped_count += 1;
                 }
             }
@@ -174,19 +174,20 @@ impl SymbolMetadataRegistry {
 
         // 检查是否有足够的有效品种
         if valid_symbols.is_empty() {
+            error!(target: "symbol_metadata_registry", event_name = "无有效品种", "没有任何品种有历史K线数据，请先下载历史数据");
             return Err(AppError::DataError(
                 "没有任何品种有历史K线数据，请先下载历史数据".to_string()
             ));
         }
 
         if skipped_count > symbols.len() * 3 / 4 {
-            warn!(target: "symbol_metadata_registry", "超过75%的品种没有历史数据，建议补充历史数据: skipped_count={}, total_count={}, skip_percentage={}%", skipped_count, symbols.len(), skipped_count * 100 / symbols.len());
+            warn!(target: "symbol_metadata_registry", event_name = "高跳过率警告", skipped_count = skipped_count, total_count = symbols.len(), skip_percentage = skipped_count * 100 / symbols.len(), "超过75%的品种没有历史数据，建议补充历史数据");
         }
 
         tracing::Span::current().record("valid_count", valid_symbols.len());
         tracing::Span::current().record("skipped_count", skipped_count);
 
-        info!(target: "symbol_metadata_registry", "批量查询完成: valid_count={}, skipped_count={}", valid_symbols.len(), skipped_count);
+        info!(target: "symbol_metadata_registry", event_name = "批量上市时间查询结束", valid_count = valid_symbols.len(), skipped_count = skipped_count, "批量查询完成");
 
         Ok(valid_symbols)
     }
@@ -201,14 +202,14 @@ impl SymbolMetadataRegistry {
             match self.api_client.get_trading_usdt_perpetual_symbols().await {
                 Ok(symbols) => {
                     if symbols.is_empty() {
-                        warn!(target: "symbol_metadata_registry", "API返回空的交易品种列表: attempt={}, max_retries={}", attempt, MAX_RETRIES);
+                        warn!(target: "symbol_metadata_registry", event_name = "API返回空列表", attempt = attempt, max_retries = MAX_RETRIES, "API返回空的交易品种列表");
                     } else {
                         tracing::Span::current().record("symbols_count", symbols.len());
                         return Ok(symbols);
                     }
                 }
                 Err(e) => {
-                    error!(target: "symbol_metadata_registry", "获取交易品种列表失败: attempt={}, max_retries={}, error={}", attempt, MAX_RETRIES, e);
+                    error!(target: "symbol_metadata_registry", event_name = "获取品种API错误", attempt = attempt, max_retries = MAX_RETRIES, error = %e, "获取交易品种列表失败");
                 }
             }
             
@@ -229,19 +230,19 @@ impl SymbolMetadataRegistry {
         match self.database.get_earliest_kline_timestamp(symbol, "1m") {
             Ok(Some(timestamp)) => {
                 tracing::Span::current().record("listing_time", timestamp);
-                debug!(target: "symbol_metadata_registry", "从数据库获取品种上市时间: symbol={}, listing_time={}", symbol, timestamp);
+                debug!(target: "symbol_metadata_registry", event_name = "数据库上市时间", symbol = %symbol, listing_time = timestamp, "从数据库获取品种上市时间");
                 Ok(timestamp)
             }
             Ok(None) => {
                 // 数据库中没有数据，这是关键错误，不能使用默认值
-                error!(target: "symbol_metadata_registry", "数据库中没有品种的历史K线数据，无法确定上市时间: symbol={}", symbol);
+                error!(target: "symbol_metadata_registry", event_name = "数据库上市时间未找到", symbol = %symbol, "数据库中没有品种的历史K线数据，无法确定上市时间");
                 Err(AppError::DataError(format!(
                     "品种 {} 缺少历史K线数据，无法确定上市时间。请先下载该品种的历史数据。",
                     symbol
                 )))
             }
             Err(e) => {
-                error!(target: "symbol_metadata_registry", "查询品种上市时间失败: symbol={}, error={}", symbol, e);
+                error!(target: "symbol_metadata_registry", event_name = "数据库上市时间查询失败", symbol = %symbol, error = %e, "查询品种上市时间失败");
                 Err(AppError::DataError(format!(
                     "查询品种 {} 的上市时间失败: {}。请检查数据库连接和数据完整性。",
                     symbol, e
