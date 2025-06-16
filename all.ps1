@@ -77,8 +77,15 @@ function Test-WebLog {
 if (-not (Test-WebLog)) {
     Write-Host "🌐 启动WebLog服务..." -ForegroundColor Yellow
 
+    # 导入配置读取函数
+    . "scripts\read_config.ps1"
+
+    # 从配置文件读取日志设置
+    $loggingConfig = Read-LoggingConfig
+
     # 启动WebLog系统（直接连接架构）
-    $webLogProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:RUST_LOG='trace'; cd src\weblog; cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'" -WindowStyle Hidden -PassThru
+    # 注意：不设置RUST_LOG，让weblog.rs中的设置生效
+    $webLogProcess = Start-Process powershell -ArgumentList "-Command", "`$env:LOG_TRANSPORT='named_pipe'; `$env:PIPE_NAME='$($loggingConfig.PipeName)'; cd src\weblog; cargo run --release --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'" -WindowStyle Hidden -PassThru
 
     # 等待WebLog启动
     $maxWait = 15
@@ -117,17 +124,23 @@ if (-not (Test-WebLog)) {
     Write-Host "✅ WebLog服务已在运行" -ForegroundColor Green
 }
 
+# 导入配置读取函数
+. "scripts\read_config.ps1"
+
+# 从配置文件读取日志设置
+$loggingConfig = Read-LoggingConfig
+
 # 启动K线系统
 Write-Host "📊 启动K线系统..." -ForegroundColor Yellow
 
 # 启动K线聚合程序 - 直接使用cargo run启动
 Write-Host "🔧 设置环境变量..." -ForegroundColor Cyan
-$env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
-$env:LOG_TRANSPORT = "named_pipe"
-$env:RUST_LOG = "trace"
+# 强制使用命名管道传输
+$loggingConfig.LogTransport = "named_pipe"
+Set-LoggingEnvironment -LoggingConfig $loggingConfig
 
 Write-Host "🚀 启动K线聚合服务..." -ForegroundColor Yellow
-$global:klineProcess = Start-Process powershell -ArgumentList "-Command", "`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'; `$env:LOG_TRANSPORT='named_pipe'; `$env:RUST_LOG='trace'; cargo run --bin kline_aggregate_service" -WindowStyle Hidden -PassThru
+$global:klineProcess = Start-Process powershell -ArgumentList "-Command", "`$env:PIPE_NAME='$($loggingConfig.PipeName)'; `$env:LOG_TRANSPORT='named_pipe'; `$env:RUST_LOG='$($loggingConfig.LogLevel)'; cargo run --release --bin kline_aggregate_service" -WindowStyle Hidden -PassThru
 
 Write-Host "✅ 启动完成" -ForegroundColor Green
 Write-Host ""

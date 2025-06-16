@@ -60,14 +60,14 @@ Write-Host '  连接目标：WebLog系统' -ForegroundColor White
 Write-Host '  监控地址：http://localhost:8080/modules' -ForegroundColor Yellow
 Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
-`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
+`$env:PIPE_NAME='\\\\.\pipe\kline_log_pipe'
 `$env:LOG_TRANSPORT='named_pipe'
 `$env:RUST_LOG='trace'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow
 Write-Host '=' * 60 -ForegroundColor Yellow
-cargo run --bin kline_aggregate_service
+cargo run --release --bin kline_aggregate_service
 "@
 
 Write-Host "✅ K线合成系统启动命令已发送到独立窗口" -ForegroundColor Green

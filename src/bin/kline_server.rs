@@ -149,6 +149,21 @@ async fn main() -> Result<()> {
 
 
 /// 初始化tracing日志系统
+/// 加载日志配置
+fn load_logging_config() -> Result<String> {
+    use kline_server::klaggregate::config::AggregateConfig;
+
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/aggregate_config.toml".to_string());
+
+    if std::path::Path::new(&config_path).exists() {
+        let config = AggregateConfig::from_file(&config_path)?;
+        Ok(config.logging.log_level)
+    } else {
+        // 配置文件不存在，使用环境变量或默认值
+        Ok(std::env::var("RUST_LOG").unwrap_or_else(|_| "trace".to_string()))
+    }
+}
+
 fn init_logging(verbose: bool) {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
     std::env::set_var("RUST_BACKTRACE", "1");
@@ -159,8 +174,9 @@ fn init_logging(verbose: bool) {
         eprintln!("Failed to create logs directory: {}", e);
     });
 
-    // 设置日志级别
-    let log_level = if verbose { "trace" } else { "trace" };
+    // 从配置文件读取日志级别
+    let log_level = load_logging_config()
+        .unwrap_or_else(|_| if verbose { "trace".to_string() } else { "trace".to_string() });
 
     // 创建文件输出层
     let file_appender = tracing_appender::rolling::daily(log_dir, "kline_server.log");
@@ -186,7 +202,7 @@ fn init_logging(verbose: bool) {
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| {
-                    tracing_subscriber::EnvFilter::new(log_level)
+                    tracing_subscriber::EnvFilter::new(&log_level)
                         .add_directive("hyper=warn".parse().unwrap())
                         .add_directive("reqwest=warn".parse().unwrap())
                 })

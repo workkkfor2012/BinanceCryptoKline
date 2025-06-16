@@ -122,7 +122,7 @@ impl EventSender for ConsoleEventSender {
 
     fn send_performance_event(&self, event: PerformanceEvent) {
         if let Ok(json) = serde_json::to_string(&event) {
-            info!(target: "observability", "性能事件: {}", json);
+            info!(target: "SystemObservability", "性能事件: {}", json);
         }
     }
 }
@@ -131,6 +131,7 @@ impl EventSender for ConsoleEventSender {
 pub struct NamedPipeLogManager {
     pipe_name: String,
     pipe_writer: Arc<tokio::sync::Mutex<Option<tokio::io::BufWriter<tokio::net::windows::named_pipe::NamedPipeClient>>>>,
+    connection_task_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl NamedPipeLogManager {
@@ -139,6 +140,7 @@ impl NamedPipeLogManager {
         Self {
             pipe_name,
             pipe_writer: Arc::new(tokio::sync::Mutex::new(None)),
+            connection_task_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -147,11 +149,11 @@ impl NamedPipeLogManager {
         use tokio::net::windows::named_pipe::ClientOptions;
         use tokio::io::BufWriter;
 
-        info!(target: "observability", "📡 尝试连接到命名管道: {}", self.pipe_name);
+        info!(target: "SystemObservability", "📡 尝试连接到命名管道: {}", self.pipe_name);
 
         // 尝试连接到命名管道服务器（同步操作）
         let client = ClientOptions::new().open(&self.pipe_name)?;
-        info!(target: "observability", "✅ 成功连接到命名管道服务器");
+        info!(target: "SystemObservability", "✅ 成功连接到命名管道服务器");
 
         // 创建缓冲写入器
         let writer = BufWriter::new(client);
@@ -171,7 +173,7 @@ impl NamedPipeLogManager {
             if let Some(ref mut writer) = *pipe_writer_guard {
                 let line_with_newline = format!("{}\n", log_line);
                 if let Err(e) = writer.write_all(line_with_newline.as_bytes()).await {
-                    error!(target: "observability", "发送日志到命名管道失败: {}", e);
+                    error!(target: "SystemObservability", "发送日志到命名管道失败: {}", e);
                     // 连接断开，清除writer
                     *pipe_writer_guard = None;
                 } else {
@@ -184,6 +186,23 @@ impl NamedPipeLogManager {
 
     /// 启动命名管道连接任务
     pub fn start_connection_task(&self) {
+        // 检查是否在Tokio运行时中
+        if tokio::runtime::Handle::try_current().is_err() {
+            // 不在Tokio运行时中，延迟启动
+            return;
+        }
+
+        // 使用原子操作确保只启动一次
+        if self.connection_task_started.compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst
+        ).is_err() {
+            // 已经启动过了
+            return;
+        }
+
         let pipe_name = self.pipe_name.clone();
         let manager = Arc::new(self.clone());
 
@@ -201,13 +220,13 @@ impl NamedPipeLogManager {
                 }
 
                 // 尝试连接
-                info!(target: "observability", "📡 尝试连接到命名管道服务器: {}", pipe_name);
+                info!(target: "SystemObservability", "📡 尝试连接到命名管道服务器: {}", pipe_name);
                 match manager.connect().await {
                     Ok(_) => {
-                        info!(target: "observability", "✅ 命名管道连接成功");
+                        info!(target: "SystemObservability", "✅ 命名管道连接成功");
                     }
                     Err(e) => {
-                        warn!(target: "observability", "❌ 命名管道连接失败: {}, 5秒后重试", e);
+                        warn!(target: "SystemObservability", "❌ 命名管道连接失败: {}, 5秒后重试", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     }
                 }
@@ -221,6 +240,7 @@ impl Clone for NamedPipeLogManager {
         Self {
             pipe_name: self.pipe_name.clone(),
             pipe_writer: self.pipe_writer.clone(),
+            connection_task_started: self.connection_task_started.clone(),
         }
     }
 }
@@ -270,7 +290,7 @@ impl WebSocketLogManager {
 
             // 启动服务器
             let bind_addr = format!("0.0.0.0:{}", web_port);
-            info!(target: "observability", "🌐 WebSocket日志服务器启动: bind_addr={}, web_port={}", bind_addr, web_port);
+            info!(target: "SystemObservability", "🌐 WebSocket日志服务器启动: bind_addr={}, web_port={}", bind_addr, web_port);
 
             let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();
@@ -572,7 +592,7 @@ impl UniversalEventSender {
     /// 创建使用命名管道的事件发送器
     pub fn new_named_pipe(pipe_name: String) -> Self {
         let manager = Arc::new(NamedPipeLogManager::new(pipe_name.clone()));
-        manager.start_connection_task();
+        // 不在这里启动连接任务，延迟到第一次使用时启动
 
         Self {
             transport: LogTransport::NamedPipe(manager)
@@ -584,6 +604,11 @@ impl UniversalEventSender {
         match &self.transport {
             LogTransport::WebSocket(manager) => manager.send_log(log_line),
             LogTransport::NamedPipe(manager) => {
+                // 确保连接任务已启动（如果在Tokio运行时中）
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    manager.start_connection_task();
+                }
+
                 let manager = manager.clone();
                 let log_line = log_line.clone();
                 // 使用 Handle::try_current() 检查是否在Tokio运行时中
@@ -629,7 +654,7 @@ impl EventSender for UniversalEventSender {
             self.send_log(log_line.clone());
 
             // 同时输出到控制台（可配置）
-            info!(target: "observability", "性能事件: {}", json);
+            info!(target: "SystemObservability", "性能事件: {}", json);
         }
     }
 }

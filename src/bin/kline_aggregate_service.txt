@@ -15,7 +15,9 @@ use chrono;
 /// 默认配置文件路径
 const DEFAULT_CONFIG_PATH: &str = "config/aggregate_config.toml";
 
-fn main() -> Result<()> {
+#[tokio::main]
+#[instrument(target = "KlineAggregateService")]
+async fn main() -> Result<()> {
     println!("🚀 [DEBUG] K线聚合服务启动 - 开始执行main函数");
 
     // 处理命令行参数
@@ -36,26 +38,10 @@ fn main() -> Result<()> {
         }
     }
 
-    // 创建Tokio运行时
-    println!("🔧 [DEBUG] 步骤3: 创建Tokio运行时");
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| AppError::ConfigError(format!("创建Tokio运行时失败: {}", e)))?;
-    println!("✅ [DEBUG] Tokio运行时创建成功");
-
-    // 在运行时中执行异步逻辑
-    runtime.block_on(run())
-}
-
-/// 异步主逻辑函数
-#[instrument(target = "KlineAggregateService", name = "kline_aggregate_service_run")]
-async fn run() -> Result<()> {
-
     info!(target = "KlineAggregateService", event_name = "服务启动", "启动K线聚合服务...");
 
     // 加载配置
-    println!("🔧 [DEBUG] 步骤4: 加载配置文件");
+    println!("🔧 [DEBUG] 步骤3: 加载配置文件");
     let config = match load_config().await {
         Ok(config) => {
             println!("✅ [DEBUG] 配置文件加载成功");
@@ -69,7 +55,7 @@ async fn run() -> Result<()> {
     info!(target = "KlineAggregateService", event_name = "配置加载完成", "配置加载完成");
 
     // 创建K线聚合系统
-    println!("🔧 [DEBUG] 步骤5: 创建K线聚合系统");
+    println!("🔧 [DEBUG] 步骤4: 创建K线聚合系统");
     let system = match KlineAggregateSystem::new(config).await {
         Ok(system) => {
             println!("✅ [DEBUG] K线聚合系统创建成功");
@@ -84,7 +70,7 @@ async fn run() -> Result<()> {
     };
 
     // 启动系统
-    println!("🔧 [DEBUG] 步骤6: 启动K线聚合系统");
+    println!("🔧 [DEBUG] 步骤5: 启动K线聚合系统");
     if let Err(e) = system.start().await {
         println!("❌ [DEBUG] K线聚合系统启动失败: {}", e);
         error!(target = "KlineAggregateService", event_name = "系统启动失败", error = %e, "启动K线聚合系统失败");
@@ -95,17 +81,17 @@ async fn run() -> Result<()> {
     info!(target = "KlineAggregateService", event_name = "服务启动完成", "K线聚合服务启动完成");
 
     // 启动状态监控任务
-    println!("🔧 [DEBUG] 步骤7: 启动状态监控任务");
+    println!("🔧 [DEBUG] 步骤6: 启动状态监控任务");
     start_status_monitor(system.clone()).await;
     println!("✅ [DEBUG] 状态监控任务启动完成");
 
     // 启动测试日志任务
-    println!("🔧 [DEBUG] 步骤8: 启动测试日志任务");
+    println!("🔧 [DEBUG] 步骤7: 启动测试日志任务");
     start_test_logging().await;
     println!("✅ [DEBUG] 测试日志任务启动完成");
 
     // 等待关闭信号
-    println!("🔧 [DEBUG] 步骤9: 等待关闭信号");
+    println!("🔧 [DEBUG] 步骤8: 等待关闭信号");
     println!("🎉 [DEBUG] K线聚合服务完全启动成功，开始等待关闭信号...");
     wait_for_shutdown_signal().await;
 
@@ -220,7 +206,7 @@ fn init_observability_system_inner() -> Result<()> {
     };
 
     // 检查tracing订阅器初始化结果并决定是否初始化LogTracer
-    let _tracing_init_success = match init_result {
+    let tracing_init_success = match init_result {
         Ok(_) => {
             // tracing订阅器初始化成功，我们是第一个初始化的
             true

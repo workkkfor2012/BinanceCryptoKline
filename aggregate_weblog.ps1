@@ -1,12 +1,12 @@
-# 一键启动两个系统脚本（带独立命令行窗口）- 前端聚合版本
+# WebLog + K线聚合服务启动脚本（双窗口版本）
 #
-# 功能：按正确顺序启动WebLog（前端聚合版）和K线合成系统
+# 功能：按正确顺序启动WebLog日志系统和K线聚合服务
 # 窗口：每个系统都在独立的PowerShell窗口中运行
 #
 # 使用方法：
-# .\start_both_systems_with_windows.ps1
+# .\weblog_aggregate.ps1
 
-Write-Host "🚀 一键启动K线合成和日志系统（前端聚合版本）" -ForegroundColor Magenta
+Write-Host "🚀 启动WebLog日志系统和K线聚合服务" -ForegroundColor Magenta
 Write-Host "=" * 60 -ForegroundColor Magenta
 
 # 检查当前目录是否正确
@@ -22,13 +22,36 @@ Write-Host ""
 Write-Host "📋 启动计划：" -ForegroundColor Cyan
 Write-Host "  1. 🌐 启动WebLog日志系统（前端聚合版，端口8080）" -ForegroundColor White
 Write-Host "  2. ⏳ 等待5秒让WebLog系统完全启动" -ForegroundColor White
-Write-Host "  3. 📊 启动K线合成系统（连接到WebLog）" -ForegroundColor White
+Write-Host "  3. 📊 启动K线聚合服务（连接到WebLog）" -ForegroundColor White
 Write-Host ""
 Write-Host "🔄 重构说明：" -ForegroundColor Yellow
 Write-Host "  - 后端：只负责缓存和转发原始日志" -ForegroundColor White
 Write-Host "  - 前端：负责模块分类和高频折叠" -ForegroundColor White
 Write-Host "  - 功能：与旧版本完全一致，性能更好" -ForegroundColor White
 Write-Host ""
+
+# 直接从配置文件读取日志设置
+$configContent = Get-Content "config\aggregate_config.toml" -Raw
+$logLevel = if ($configContent -match 'log_level\s*=\s*"(.+?)"') { $matches[1] } else { "info" }
+$logTransport = if ($configContent -match 'log_transport\s*=\s*"(.+?)"') { $matches[1] } else { "named_pipe" }
+$pipeName = if ($configContent -match 'pipe_name\s*=\s*"(.+?)"') {
+    # 确保管道名称格式正确
+    $rawPipeName = $matches[1]
+    if ($rawPipeName -notmatch '^\\\\\.\\pipe\\') {
+        "\\.\pipe\$rawPipeName"
+    } else {
+        $rawPipeName
+    }
+} else {
+    "\\.\pipe\kline_log_pipe"
+}
+
+# 创建配置对象
+$loggingConfig = @{
+    LogLevel = $logLevel
+    LogTransport = $logTransport
+    PipeName = $pipeName
+}
 
 # 第一步：启动WebLog系统
 Write-Host "🌐 第一步：启动WebLog日志系统（前端聚合版）..." -ForegroundColor Green
@@ -39,8 +62,9 @@ Write-Host '=' * 60 -ForegroundColor Green
 Write-Host ''
 Write-Host '📡 配置信息：' -ForegroundColor Cyan
 Write-Host '  版本：前端聚合架构' -ForegroundColor White
-Write-Host '  传输方式：命名管道' -ForegroundColor White
-Write-Host '  管道名称：\\.\pipe\kline_log_pipe' -ForegroundColor White
+Write-Host '  传输方式：$($loggingConfig.LogTransport)' -ForegroundColor White
+Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor White
+Write-Host '  日志级别：$($loggingConfig.LogLevel)' -ForegroundColor White
 Write-Host '  Web端口：8080' -ForegroundColor White
 Write-Host '  访问地址：http://localhost:8080' -ForegroundColor Yellow
 Write-Host ''
@@ -51,14 +75,17 @@ Write-Host '  优势：性能更好，刷新后状态完整恢复' -ForegroundCo
 Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
 cd src\weblog
-`$env:LOG_TRANSPORT='named_pipe'
-`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
-`$env:RUST_LOG='trace'
+`$env:LOG_TRANSPORT='$($loggingConfig.LogTransport)'
+`$env:PIPE_NAME='$($loggingConfig.PipeName)'
+# 注意：不设置RUST_LOG，让weblog.rs中的设置生效
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
+Write-Host '  日志级别：$($loggingConfig.LogLevel)' -ForegroundColor Gray
+Write-Host '  传输方式：$($loggingConfig.LogTransport)' -ForegroundColor Gray
+Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor Gray
 Write-Host ''
 Write-Host '🚀 启动WebLog服务器（前端聚合版）...' -ForegroundColor Green
 Write-Host '=' * 60 -ForegroundColor Green
-cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'
+cargo run --release --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
 "@
 
 Write-Host "✅ WebLog系统启动命令已发送" -ForegroundColor Green
@@ -80,20 +107,24 @@ Write-Host '📊 K线合成系统启动中...' -ForegroundColor Yellow
 Write-Host '=' * 60 -ForegroundColor Yellow
 Write-Host ''
 Write-Host '📡 配置信息：' -ForegroundColor Cyan
-Write-Host '  传输方式：命名管道' -ForegroundColor White
-Write-Host '  管道名称：\\.\pipe\kline_log_pipe' -ForegroundColor White
+Write-Host '  传输方式：$($loggingConfig.LogTransport)' -ForegroundColor White
+Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor White
+Write-Host '  日志级别：$($loggingConfig.LogLevel)' -ForegroundColor White
 Write-Host '  连接目标：WebLog系统' -ForegroundColor White
 Write-Host '  监控地址：http://localhost:8080/modules' -ForegroundColor Yellow
 Write-Host ''
 Write-Host '🔧 设置环境变量...' -ForegroundColor Cyan
-`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
+`$env:PIPE_NAME='$($loggingConfig.PipeName)'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='trace'
+`$env:RUST_LOG='$($loggingConfig.LogLevel)'
 Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
+Write-Host '  日志级别：$($loggingConfig.LogLevel)' -ForegroundColor Gray
+Write-Host '  传输方式：$($loggingConfig.LogTransport)' -ForegroundColor Gray
+Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor Gray
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow
 Write-Host '=' * 60 -ForegroundColor Yellow
-cargo run --bin kline_aggregate_service
+cargo run --release --bin kline_aggregate_service
 "@
 
 Write-Host "✅ K线合成系统启动命令已发送" -ForegroundColor Green

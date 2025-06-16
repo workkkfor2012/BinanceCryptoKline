@@ -1,0 +1,43 @@
+# 统一日志配置文件
+# 所有服务的日志等级都从这里读取
+
+[global]
+# 全局默认日志级别 (trace, debug, info, warn, error)
+default_log_level = "info"
+
+# 日志传输方式 (named_pipe, file, console)
+log_transport = "named_pipe"
+
+# 命名管道名称
+pipe_name = "kline_log_pipe"
+
+[services]
+# WebLog服务日志级别
+weblog = "info"
+
+# K线数据服务日志级别
+kline_data_service = "info"
+
+# K线聚合服务日志级别
+kline_aggregate_service = "info"
+
+# 其他服务日志级别
+kline_server = "info"
+
+[modules]
+# 特定模块的日志级别覆盖
+# 格式: "模块名" = "日志级别"
+
+# 网络相关模块
+hyper = "warn"
+reqwest = "warn"
+tokio_tungstenite = "warn"
+tungstenite = "warn"
+
+# 数据库相关模块
+sqlx = "warn"
+rusqlite = "warn"
+
+# 其他第三方库
+serde = "warn"
+tracing = "info"

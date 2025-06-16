@@ -72,3 +72,13 @@ write_timeout_secs = 30
 
 # 是否启用压缩日志
 enable_compressed_logging = true
+
+[logging]
+# 日志级别 (trace, debug, info, warn, error)
+log_level = "trace"
+
+# 日志传输方式 (named_pipe, file, console)
+log_transport = "named_pipe"
+
+# 命名管道名称
+pipe_name = "kline_log_pipe"

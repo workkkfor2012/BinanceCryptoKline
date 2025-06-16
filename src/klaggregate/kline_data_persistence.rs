@@ -48,7 +48,7 @@ impl KlineDataPersistence {
         buffered_store: Arc<BufferedKlineStore>,
         symbol_registry: Arc<SymbolMetadataRegistry>,
     ) -> Result<Self> {
-        info!(target: "kline_data_persistence", event_name = "持久化器初始化", batch_size = config.persistence.batch_size, "创建K线数据持久化器: batch_size={}", config.persistence.batch_size);
+        info!(target: "KlineDataPersistence", event_name = "持久化器初始化", batch_size = config.persistence.batch_size, "创建K线数据持久化器: batch_size={}", config.persistence.batch_size);
         
         // 创建数据库连接
         let database = Arc::new(Database::new(&config.database.database_path)?);
@@ -73,20 +73,20 @@ impl KlineDataPersistence {
     #[instrument(target = "KlineDataPersistence", name="start_persistence", fields(persistence_interval_ms = self.config.persistence_interval_ms), skip(self), err)]
     pub async fn start(&self) -> Result<()> {
         if self.is_running.load(Ordering::Relaxed) {
-            warn!(target: "kline_data_persistence", event_name = "持久化器已运行", "K线数据持久化器已经在运行");
+            warn!(target: "KlineDataPersistence", event_name = "持久化器已运行", "K线数据持久化器已经在运行");
             return Ok(());
         }
 
-        info!(target: "kline_data_persistence", event_name = "持久化器启动", persistence_interval_ms = self.config.persistence_interval_ms, "启动K线数据持久化器: persistence_interval_ms={}", self.config.persistence_interval_ms);
+        info!(target: "KlineDataPersistence", event_name = "持久化器启动", persistence_interval_ms = self.config.persistence_interval_ms, "启动K线数据持久化器: persistence_interval_ms={}", self.config.persistence_interval_ms);
         self.is_running.store(true, Ordering::Relaxed);
-        
+
         // 启动定时持久化任务
         self.start_persistence_task().await;
-        
+
         // 启动统计输出任务
         self.start_statistics_task().await;
 
-        info!(target: "kline_data_persistence", event_name = "持久化器启动完成", "K线数据持久化器启动完成");
+        info!(target: "KlineDataPersistence", event_name = "持久化器启动完成", "K线数据持久化器启动完成");
         Ok(())
     }
     
@@ -97,7 +97,7 @@ impl KlineDataPersistence {
             return Ok(());
         }
         
-        info!(target: "kline_data_persistence", event_name = "持久化器停止", "停止K线数据持久化器");
+        info!(target: "KlineDataPersistence", event_name = "持久化器停止", "停止K线数据持久化器");
         self.is_running.store(false, Ordering::Relaxed);
 
         // 等待所有持久化任务完成
@@ -105,7 +105,7 @@ impl KlineDataPersistence {
         let _permits = self.semaphore.acquire_many(batch_size).await
             .map_err(|e| AppError::DataError(format!("等待持久化任务完成失败: {}", e)))?;
 
-        info!(target: "kline_data_persistence", event_name = "持久化器停止完成", "K线数据持久化器已停止");
+        info!(target: "KlineDataPersistence", event_name = "持久化器停止完成", "K线数据持久化器已停止");
         Ok(())
     }
     
@@ -132,7 +132,7 @@ impl KlineDataPersistence {
                 let permit = match semaphore.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {
-                        debug!(target: "kline_data_persistence", event_name = "持久化任务跳过", "持久化任务繁忙，跳过本次执行");
+                        debug!(target: "KlineDataPersistence", event_name = "持久化任务跳过", "持久化任务繁忙，跳过本次执行");
                         continue;
                     }
                 };
@@ -163,12 +163,12 @@ impl KlineDataPersistence {
                             let duration = start_time.elapsed();
                             
                             if persisted_count > 0 {
-                                debug!(target: "kline_data_persistence", "持久化完成: persisted_count={}, duration_ms={:.2}", persisted_count, duration.as_secs_f64() * 1000.0);
+                                debug!(target: "KlineDataPersistence", "持久化完成: persisted_count={}, duration_ms={:.2}", persisted_count, duration.as_secs_f64() * 1000.0);
                             }
                         }
                         Err(e) => {
                             error_count.fetch_add(1, Ordering::Relaxed);
-                            error!(target: "kline_data_persistence", event_name = "持久化执行失败", error = %e, "持久化失败");
+                            error!(target: "KlineDataPersistence", event_name = "持久化执行失败", error = %e, "持久化失败");
                         }
                     }
                 }.instrument(tracing::info_span!("single_persistence_job", job_id = count)));
@@ -254,7 +254,7 @@ impl KlineDataPersistence {
             let symbol = match symbol_registry.get_symbol_by_index(kline_data.symbol_index).await {
                 Some(symbol) => symbol,
                 None => {
-                    warn!(target: "kline_data_persistence", event_name = "品种索引未找到", symbol_index = kline_data.symbol_index, "未找到索引对应的品种");
+                    warn!(target: "KlineDataPersistence", event_name = "品种索引未找到", symbol_index = kline_data.symbol_index, "未找到索引对应的品种");
                     continue;
                 }
             };
@@ -262,7 +262,7 @@ impl KlineDataPersistence {
             let interval = match symbol_registry.get_interval_by_index(kline_data.period_index).await {
                 Some(interval) => interval,
                 None => {
-                    warn!(target: "kline_data_persistence", event_name = "周期索引未找到", period_index = kline_data.period_index, "未找到索引对应的周期");
+                    warn!(target: "KlineDataPersistence", event_name = "周期索引未找到", period_index = kline_data.period_index, "未找到索引对应的周期");
                     continue;
                 }
             };
@@ -276,7 +276,7 @@ impl KlineDataPersistence {
                     persisted_count += 1;
                 }
                 Err(e) => {
-                    error!(target: "kline_data_persistence", event_name = "K线持久化失败", symbol = %symbol, interval = %interval, error = %e, "持久化K线失败");
+                    error!(target: "KlineDataPersistence", event_name = "K线持久化失败", symbol = %symbol, interval = %interval, error = %e, "持久化K线失败");
                 }
             }
         }
@@ -353,7 +353,7 @@ impl KlineDataPersistence {
                 
                 if persistence_rate > 0 || error_rate > 0 {
                     info!(
-                        target: "kline_data_persistence",
+                        target: "KlineDataPersistence",
                         event_name = "持久化统计报告",
                         total_persistence = current_persistence,
                         persistence_rate = persistence_rate,

@@ -14,13 +14,22 @@ if (-not (Test-Path "Cargo.toml")) {
     exit 1
 }
 
+# 导入配置读取函数
+. "scripts\read_config.ps1"
+
+# 从配置文件读取日志设置
+$loggingConfig = Read-LoggingConfig
+$weblogConfig = Read-WebLogConfig
+Write-Host "📋 K线服务日志等级: $($loggingConfig.LogLevel)" -ForegroundColor Cyan
+Write-Host "📋 WebLog服务日志等级: $($weblogConfig.LogLevel)" -ForegroundColor Cyan
+
 # 创建必要目录
 @("data", "logs") | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
 }
 
 Write-Host "📡 架构：K线数据服务 → 命名管道 → WebLog系统" -ForegroundColor Cyan
-Write-Host "🌐 访问：http://localhost:8080/modules" -ForegroundColor Yellow
+Write-Host "🌐 访问：http://localhost:8080/" -ForegroundColor Yellow
 Write-Host ""
 
 # 全局进程变量
@@ -50,10 +59,10 @@ try {
 Write-Host '🌐 WebLog系统启动中...' -ForegroundColor Green
 cd src\weblog
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
-`$env:RUST_LOG='trace'
-Write-Host '📡 命名管道模式，端口8080' -ForegroundColor Cyan
-cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'
+`$env:PIPE_NAME='$($loggingConfig.PipeName)'
+`$env:RUST_LOG='$($weblogConfig.LogLevel)'
+Write-Host '📡 命名管道模式，端口8080，管道: $($loggingConfig.PipeName)，WebLog日志等级: $($weblogConfig.LogLevel)' -ForegroundColor Cyan
+cargo run --release --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
 "@ -PassThru
 
     # 等待WebLog启动
@@ -64,11 +73,11 @@ cargo run --bin weblog -- --pipe-name '\\.\pipe\kline_log_pipe'
     $global:klineProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
 `$Host.UI.RawUI.WindowTitle = 'K线数据服务'
 Write-Host '📊 K线数据服务启动中...' -ForegroundColor Yellow
-`$env:PIPE_NAME='\\.\pipe\kline_log_pipe'
+`$env:PIPE_NAME='$($loggingConfig.PipeName)'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='trace'
-Write-Host '📡 连接到WebLog系统' -ForegroundColor Cyan
-cargo run --bin kline_data_service
+`$env:RUST_LOG='$($loggingConfig.LogLevel)'
+Write-Host '📡 连接到WebLog系统，日志等级: $($loggingConfig.LogLevel)' -ForegroundColor Cyan
+cargo run --release --bin kline_data_service
 "@ -PassThru
 
     Write-Host ""

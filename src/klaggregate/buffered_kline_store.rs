@@ -50,7 +50,7 @@ impl BufferedKlineStore {
         let total_slots = symbol_registry.get_total_kline_slots();
         tracing::Span::current().record("total_slots", total_slots);
 
-        info!(target: "buffered_kline_store", event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
+        info!(target: "BufferedKlineStore", event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
         
         // 创建两个相同大小的缓冲区
         let write_buffer = Self::create_buffer(total_slots);
@@ -68,7 +68,7 @@ impl BufferedKlineStore {
             total_slots,
         };
         
-        info!(target: "buffered_kline_store", event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
+        info!(target: "BufferedKlineStore", event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
         Ok(store)
     }
     
@@ -85,11 +85,11 @@ impl BufferedKlineStore {
     #[instrument(target = "BufferedKlineStore", fields(swap_interval_ms = self.swap_interval_ms), skip(self), err)]
     pub async fn start_scheduler(&self) -> Result<()> {
         if self.scheduler_running.load(Ordering::Relaxed) {
-            warn!(target: "buffered_kline_store", event_name = "调度器已运行", "调度器已经在运行");
+            warn!(target: "BufferedKlineStore", event_name = "调度器已运行", "调度器已经在运行");
             return Ok(());
         }
 
-        info!(target: "buffered_kline_store", event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
+        info!(target: "BufferedKlineStore", event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
         self.scheduler_running.store(true, Ordering::Relaxed);
         
         let write_buffer = self.write_buffer.clone();
@@ -128,7 +128,7 @@ impl BufferedKlineStore {
                         let duration_ms = swap_duration.as_secs_f64() * 1000.0;
 
                         info!(
-                            target: "buffered_kline_store",
+                            target: "BufferedKlineStore",
                             event_name = "缓冲区交换完成",
                             is_high_freq = true,
                             swap_count = count,
@@ -138,20 +138,20 @@ impl BufferedKlineStore {
                             "缓冲区交换完成"
                         );
 
-                        debug!(target: "buffered_kline_store", "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
+                        debug!(target: "BufferedKlineStore", "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
 
                         // 通知新快照就绪
                         snapshot_ready_notify.notify_waiters();
                     }
                     _ = stop_signal.notified() => {
-                        info!(target: "buffered_kline_store", event_name = "调度器停止信号", "收到停止信号，调度器退出");
+                        info!(target: "BufferedKlineStore", event_name = "调度器停止信号", "收到停止信号，调度器退出");
                         break;
                     }
                 }
             }
 
             scheduler_running.store(false, Ordering::Relaxed);
-            info!(target: "buffered_kline_store", event_name = "调度器已停止", "双缓冲调度器已停止");
+            info!(target: "BufferedKlineStore", event_name = "调度器已停止", "双缓冲调度器已停止");
         }.instrument(tracing::info_span!("buffer_swap_scheduler")));
         
         Ok(())
@@ -161,11 +161,11 @@ impl BufferedKlineStore {
     #[instrument(target = "BufferedKlineStore", name="stop_scheduler", skip(self), err)]
     pub async fn stop_scheduler(&self) -> Result<()> {
         if !self.scheduler_running.load(Ordering::Relaxed) {
-            info!(target: "buffered_kline_store", event_name = "调度器未运行", "调度器未在运行，无需停止");
+            info!(target: "BufferedKlineStore", event_name = "调度器未运行", "调度器未在运行，无需停止");
             return Ok(());
         }
 
-        info!(target: "buffered_kline_store", event_name = "调度器停止开始", "停止双缓冲调度器");
+        info!(target: "BufferedKlineStore", event_name = "调度器停止开始", "停止双缓冲调度器");
         self.scheduler_running.store(false, Ordering::Relaxed);
         self.stop_signal.notify_waiters();
 
@@ -173,13 +173,13 @@ impl BufferedKlineStore {
         let start_wait = Instant::now();
         while self.scheduler_running.load(Ordering::Relaxed) {
             if start_wait.elapsed() > Duration::from_secs(5) {
-                warn!(target: "buffered_kline_store", event_name = "调度器停止超时", "等待调度器停止超时(5s)");
+                warn!(target: "BufferedKlineStore", event_name = "调度器停止超时", "等待调度器停止超时(5s)");
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        info!(target: "buffered_kline_store", event_name = "调度器停止确认", "双缓冲调度器已停止");
+        info!(target: "BufferedKlineStore", event_name = "调度器停止确认", "双缓冲调度器已停止");
         Ok(())
     }
     

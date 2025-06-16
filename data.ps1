@@ -79,21 +79,23 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "编译检查通过" -ForegroundColor Green
 Write-Host ""
 
+# 导入配置读取函数
+. "scripts\read_config.ps1"
+
+# 从配置文件读取日志设置
+$loggingConfig = Read-LoggingConfig
+
 # 设置环境变量
 if ($useNamedPipe) {
     Write-Host "🔧 设置命名管道环境变量..." -ForegroundColor Cyan
-    $env:LOG_TRANSPORT = "named_pipe"
-    $env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
-    $env:RUST_LOG = "trace"
-    Write-Host "  LOG_TRANSPORT = named_pipe" -ForegroundColor Gray
-    Write-Host "  PIPE_NAME = \\.\pipe\kline_log_pipe" -ForegroundColor Gray
-    Write-Host "  RUST_LOG = trace" -ForegroundColor Gray
+    # 使用配置文件中的设置，但强制使用命名管道传输
+    $loggingConfig.LogTransport = "named_pipe"
+    Set-LoggingEnvironment -LoggingConfig $loggingConfig
 } else {
     Write-Host "🔧 设置文件日志环境变量..." -ForegroundColor Cyan
-    $env:LOG_TRANSPORT = "file"
-    $env:RUST_LOG = "trace"
-    Write-Host "  LOG_TRANSPORT = file" -ForegroundColor Gray
-    Write-Host "  RUST_LOG = trace" -ForegroundColor Gray
+    # 使用配置文件中的设置，但强制使用文件传输
+    $loggingConfig.LogTransport = "file"
+    Set-LoggingEnvironment -LoggingConfig $loggingConfig
 }
 Write-Host ""
 
@@ -108,7 +110,7 @@ Write-Host ""
 
 try {
     # 使用cargo run启动服务
-    cargo run --bin kline_data_service
+    cargo run --release --bin kline_data_service
 }
 catch {
     Write-Host "服务启动失败: $_" -ForegroundColor Red

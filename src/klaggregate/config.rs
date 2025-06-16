@@ -9,25 +9,28 @@ use crate::klcommon::Result;
 pub struct AggregateConfig {
     /// 数据库配置
     pub database: DatabaseConfig,
-    
+
     /// WebSocket配置
     pub websocket: WebSocketConfig,
-    
+
     /// 缓冲区配置
     pub buffer: BufferConfig,
-    
+
     /// 持久化配置
     pub persistence: PersistenceConfig,
-    
+
+    /// 日志配置
+    pub logging: LoggingConfig,
+
     /// 支持的时间周期列表
     pub supported_intervals: Vec<String>,
-    
+
     /// 最大支持的品种数量
     pub max_symbols: usize,
-    
+
     /// 缓冲区切换间隔（毫秒）
     pub buffer_swap_interval_ms: u64,
-    
+
     /// 持久化间隔（毫秒）
     pub persistence_interval_ms: u64,
 }
@@ -94,15 +97,28 @@ pub struct BufferConfig {
 pub struct PersistenceConfig {
     /// 批量写入大小
     pub batch_size: usize,
-    
+
     /// 写入队列大小
     pub queue_size: usize,
-    
+
     /// 写入超时（秒）
     pub write_timeout_secs: u64,
-    
+
     /// 是否启用压缩日志
     pub enable_compressed_logging: bool,
+}
+
+/// 日志配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// 日志级别 (trace, debug, info, warn, error)
+    pub log_level: String,
+
+    /// 日志传输方式 (named_pipe, file, console)
+    pub log_transport: String,
+
+    /// 命名管道名称
+    pub pipe_name: String,
 }
 
 impl Default for AggregateConfig {
@@ -112,6 +128,7 @@ impl Default for AggregateConfig {
             websocket: WebSocketConfig::default(),
             buffer: BufferConfig::default(),
             persistence: PersistenceConfig::default(),
+            logging: LoggingConfig::default(),
             supported_intervals: DEFAULT_INTERVALS.iter().map(|s| s.to_string()).collect(),
             max_symbols: DEFAULT_MAX_SYMBOLS,
             buffer_swap_interval_ms: DEFAULT_BUFFER_SWAP_INTERVAL_MS,
@@ -163,6 +180,16 @@ impl Default for PersistenceConfig {
             queue_size: 5000,
             write_timeout_secs: 30,
             enable_compressed_logging: true,
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            log_level: "trace".to_string(),
+            log_transport: "named_pipe".to_string(),
+            pipe_name: r"\\.\pipe\kline_log_pipe".to_string(),
         }
     }
 }

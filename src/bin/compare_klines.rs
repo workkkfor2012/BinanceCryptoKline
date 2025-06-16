@@ -582,6 +582,21 @@ fn format_timestamp(timestamp_ms: i64) -> String {
     }
 }
 
+/// 加载日志配置
+fn load_logging_config() -> Result<String> {
+    use kline_server::klaggregate::config::AggregateConfig;
+
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/aggregate_config.toml".to_string());
+
+    if std::path::Path::new(&config_path).exists() {
+        let config = AggregateConfig::from_file(&config_path)?;
+        Ok(config.logging.log_level)
+    } else {
+        // 配置文件不存在，使用环境变量或默认值
+        Ok(std::env::var("RUST_LOG").unwrap_or_else(|_| "trace".to_string()))
+    }
+}
+
 /// 初始化tracing日志系统
 fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
@@ -592,6 +607,9 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
     std::fs::create_dir_all(log_dir).unwrap_or_else(|e| {
         eprintln!("Failed to create logs directory: {}", e);
     });
+
+    // 从配置文件读取日志级别
+    let log_level = load_logging_config().unwrap_or_else(|_| "trace".to_string());
 
     // 移除未使用的 layers 变量
 
@@ -633,10 +651,10 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new("trace")
-                            .add_directive("compare_klines=trace".parse().unwrap())
-                            .add_directive("kline_server::klcommon::api=trace".parse().unwrap())
-                            .add_directive("kline_server::klcommon::db=trace".parse().unwrap())
+                        tracing_subscriber::EnvFilter::new(&log_level)
+                            .add_directive(format!("compare_klines={}", log_level).parse().unwrap())
+                            .add_directive(format!("kline_server::klcommon::api={}", log_level).parse().unwrap())
+                            .add_directive(format!("kline_server::klcommon::db={}", log_level).parse().unwrap())
                     })
             )
             .init();
@@ -647,10 +665,10 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new("trace")
-                            .add_directive("compare_klines=trace".parse().unwrap())
-                            .add_directive("kline_server::klcommon::api=trace".parse().unwrap())
-                            .add_directive("kline_server::klcommon::db=trace".parse().unwrap())
+                        tracing_subscriber::EnvFilter::new(&log_level)
+                            .add_directive(format!("compare_klines={}", log_level).parse().unwrap())
+                            .add_directive(format!("kline_server::klcommon::api={}", log_level).parse().unwrap())
+                            .add_directive(format!("kline_server::klcommon::db={}", log_level).parse().unwrap())
                     })
             )
             .init();

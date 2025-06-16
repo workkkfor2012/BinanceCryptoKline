@@ -98,7 +98,7 @@ impl BinanceApi {
         let proxy_url = get_proxy_url();
         let client = match reqwest::Proxy::all(&proxy_url) {
             Ok(proxy) => {
-                debug!(target: "api", "使用代理创建HTTP客户端: {}", proxy_url);
+                //debug!(target: "api", "使用代理创建HTTP客户端: {}", proxy_url);
                 client_builder
                     .proxy(proxy)
                     .build()

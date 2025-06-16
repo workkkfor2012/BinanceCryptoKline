@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn, error};
 use weblog::{WebLogConfig, AppState, create_app, LogTransport};
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(name = "weblog")]
@@ -22,9 +23,7 @@ struct Cli {
     #[arg(long, required = true)]
     pipe_name: String,
 
-    /// 日志级别过滤
-    #[arg(long, default_value = "trace")]
-    log_level: String,
+    // 移除日志级别命令行参数，改为在代码中直接设置
 
     /// 最大保留的日志条目数量
     #[arg(long, default_value = "10000")]
@@ -39,11 +38,10 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    // 初始化日志
+    // 初始化日志 - 从统一配置文件读取日志级别
+    let log_level = load_weblog_log_level();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| cli.log_level.clone())
-        )
+        .with_env_filter(&log_level)
         .init();
 
     info!("🚀 启动WebLog - 命名管道JSON日志显示系统");
@@ -189,11 +187,34 @@ async fn process_named_pipe_logs(
 async fn create_named_pipe_server(pipe_name: &str) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, std::io::Error> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    let server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(pipe_name)?;
+    // 尝试不同的管道名称格式
+    let pipe_formats = vec![
+        pipe_name.to_string(),
+        format!(r"\\.\pipe\{}", pipe_name.trim_start_matches(r"\\.\pipe\").trim_start_matches(r"\\\\.\\pipe\\")),
+        format!(r"\\.\pipe\kline_log_pipe"),
+    ];
 
-    Ok(server)
+    for (i, format_name) in pipe_formats.iter().enumerate() {
+        info!("尝试管道格式 {}: {}", i + 1, format_name);
+
+        match ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(format_name) {
+            Ok(server) => {
+                info!("✅ 成功创建命名管道: {}", format_name);
+                return Ok(server);
+            }
+            Err(e) => {
+                warn!("❌ 管道格式 {} 失败: {} - 错误: {}", i + 1, format_name, e);
+            }
+        }
+    }
+
+    // 如果所有格式都失败，返回最后一个错误
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("所有管道名称格式都失败: {}", pipe_name)
+    ))
 }
 
 /// 非Windows平台的占位实现
@@ -223,4 +244,56 @@ async fn process_log_line(state: &Arc<AppState>, line: &str) {
         // 不是有效的JSON格式tracing日志，记录错误
         error!("无法解析JSON格式日志: {}", line);
     }
+}
+
+
+
+/// WebLog配置结构
+#[derive(Deserialize)]
+struct WebLogLoggingConfig {
+    weblog: WebLogServiceConfig,
+}
+
+#[derive(Deserialize)]
+struct WebLogServiceConfig {
+    log_level: String,
+}
+
+/// 读取WebLog日志级别配置 - 从WebLog自己的配置文件读取
+fn load_weblog_log_level() -> String {
+    // 首先检查环境变量，这样可以被外部脚本覆盖
+    if let Ok(env_log_level) = std::env::var("RUST_LOG") {
+        eprintln!("从环境变量读取日志级别: {}", env_log_level);
+        return env_log_level;
+    }
+
+    // 获取当前可执行文件的目录
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+    // 尝试多个可能的配置文件路径
+    let possible_paths = vec![
+        std::path::PathBuf::from("config/logging_config.toml"),  // 相对于当前工作目录
+        exe_dir.join("config/logging_config.toml"),  // 相对于可执行文件目录
+        exe_dir.join("../config/logging_config.toml"),  // 上级目录的config
+        exe_dir.join("../../config/logging_config.toml"),  // 再上级目录的config
+    ];
+
+    for config_path in possible_paths {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            match toml::from_str::<WebLogLoggingConfig>(&content) {
+                Ok(config) => {
+                    eprintln!("从配置文件读取日志级别: {} (路径: {:?})", config.weblog.log_level, config_path);
+                    return config.weblog.log_level;
+                }
+                Err(e) => {
+                    eprintln!("解析配置文件失败: {} (路径: {:?})", e, config_path);
+                }
+            }
+        }
+    }
+
+    // 所有路径都失败，使用默认值
+    eprintln!("未找到有效的配置文件，使用默认日志级别 info");
+    "info".to_string()
 }

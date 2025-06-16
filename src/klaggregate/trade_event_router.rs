@@ -25,7 +25,7 @@ impl TradeEventRouter {
     /// 创建新的交易事件路由器
     #[instrument(target = "TradeEventRouter")]
     pub fn new() -> Self {
-        info!(target: "trade_event_router", event_name = "路由器创建", "创建交易事件路由器");
+        info!(target: "TradeEventRouter", event_name = "路由器创建", "创建交易事件路由器");
         
         Self {
             aggregators: Arc::new(RwLock::new(HashMap::new())),
@@ -41,12 +41,12 @@ impl TradeEventRouter {
         symbol: String,
         aggregator: Arc<SymbolKlineAggregator>,
     ) -> Result<()> {
-        debug!(target: "trade_event_router", event_name = "聚合器注册开始", symbol = %symbol, "注册品种聚合器: symbol={}", symbol);
+        debug!(target: "TradeEventRouter", event_name = "聚合器注册开始", symbol = %symbol, "注册品种聚合器: symbol={}", symbol);
 
         let mut aggregators = self.aggregators.write().await;
 
         if aggregators.contains_key(&symbol) {
-            warn!(target: "trade_event_router", event_name = "聚合器替换", symbol = %symbol, "品种聚合器已存在，将被替换: symbol={}", symbol);
+            warn!(target: "TradeEventRouter", event_name = "聚合器替换", symbol = %symbol, "品种聚合器已存在，将被替换: symbol={}", symbol);
         }
 
         aggregators.insert(symbol.clone(), aggregator);
@@ -55,14 +55,14 @@ impl TradeEventRouter {
         let mut route_count = self.route_count.write().await;
         route_count.insert(symbol.clone(), 0);
 
-        debug!(target: "trade_event_router", event_name = "聚合器注册完成", symbol = %symbol, "品种聚合器注册完成: symbol={}", symbol);
+        debug!(target: "TradeEventRouter", event_name = "聚合器注册完成", symbol = %symbol, "品种聚合器注册完成: symbol={}", symbol);
         Ok(())
     }
     
     /// 取消注册品种聚合器
     #[instrument(target = "TradeEventRouter", fields(symbol = %symbol), skip(self), err)]
     pub async fn unregister_aggregator(&self, symbol: &str) -> Result<()> {
-        debug!(target: "trade_event_router", "取消注册品种聚合器: symbol={}", symbol);
+        debug!(target: "TradeEventRouter", "取消注册品种聚合器: symbol={}", symbol);
 
         let mut aggregators = self.aggregators.write().await;
         let mut route_count = self.route_count.write().await;
@@ -70,7 +70,7 @@ impl TradeEventRouter {
         aggregators.remove(symbol);
         route_count.remove(symbol);
 
-        debug!(target: "trade_event_router", "品种聚合器取消注册完成: symbol={}", symbol);
+        debug!(target: "TradeEventRouter", "品种聚合器取消注册完成: symbol={}", symbol);
         Ok(())
     }
     
@@ -89,7 +89,7 @@ impl TradeEventRouter {
                     *route_count.entry(trade.symbol.clone()).or_insert(0) += 1;
                 }
                 Err(e) => {
-                    error!(target: "trade_event_router", event_name = "聚合失败", symbol = %trade.symbol, error = %e, "处理品种交易失败");
+                    error!(target: "TradeEventRouter", event_name = "聚合失败", symbol = %trade.symbol, error = %e, "处理品种交易失败");
 
                     // 更新错误计数
                     let mut error_count = self.error_count.write().await;
@@ -99,7 +99,7 @@ impl TradeEventRouter {
                 }
             }
         } else {
-            warn!(target: "trade_event_router", event_name = "聚合器未找到", symbol = %trade.symbol, "未找到品种聚合器");
+            warn!(target: "TradeEventRouter", event_name = "聚合器未找到", symbol = %trade.symbol, "未找到品种聚合器");
 
             // 更新错误计数
             let mut error_count = self.error_count.write().await;
@@ -125,15 +125,15 @@ impl TradeEventRouter {
                 Ok(()) => success_count += 1,
                 Err(e) => {
                     error_count += 1;
-                    error!(target: "trade_event_router", "路由交易事件失败: {}", e);
+                    error!(target: "TradeEventRouter", "路由交易事件失败: {}", e);
                 }
             }
         }
 
         if error_count > 0 {
-            warn!(target: "trade_event_router", "批量路由完成，有错误: success_count={}, error_count={}", success_count, error_count);
+            warn!(target: "TradeEventRouter", "批量路由完成，有错误: success_count={}, error_count={}", success_count, error_count);
         } else {
-            debug!(target: "trade_event_router", "批量路由完成: success_count={}", success_count);
+            debug!(target: "TradeEventRouter", "批量路由完成: success_count={}", success_count);
         }
         
         Ok(())
@@ -160,7 +160,7 @@ impl TradeEventRouter {
     /// 强制完成所有聚合器的K线
     #[instrument(target = "TradeEventRouter", skip(self), err)]
     pub async fn finalize_all_aggregators(&self) -> Result<()> {
-        info!(target: "trade_event_router", event_name = "强制完成所有聚合器开始", "强制完成所有聚合器的K线");
+        info!(target: "TradeEventRouter", event_name = "强制完成所有聚合器开始", "强制完成所有聚合器的K线");
 
         let aggregators = self.aggregators.read().await;
         let mut success_count = 0;
@@ -170,16 +170,16 @@ impl TradeEventRouter {
             match aggregator.finalize_all_klines().await {
                 Ok(()) => {
                     success_count += 1;
-                    debug!(target: "trade_event_router", event_name = "聚合器强制完成成功", symbol = %symbol, "品种K线强制完成成功");
+                    debug!(target: "TradeEventRouter", event_name = "聚合器强制完成成功", symbol = %symbol, "品种K线强制完成成功");
                 }
                 Err(e) => {
                     error_count += 1;
-                    error!(target: "trade_event_router", event_name = "聚合器强制完成失败", symbol = %symbol, error = %e, "品种K线强制完成失败");
+                    error!(target: "TradeEventRouter", event_name = "聚合器强制完成失败", symbol = %symbol, error = %e, "品种K线强制完成失败");
                 }
             }
         }
 
-        info!(target: "trade_event_router", event_name = "强制完成所有聚合器完成", success_count = success_count, error_count = error_count, "强制完成K线操作完成");
+        info!(target: "TradeEventRouter", event_name = "强制完成所有聚合器完成", success_count = success_count, error_count = error_count, "强制完成K线操作完成");
         
         if error_count > 0 {
             Err(AppError::DataError(format!(
@@ -218,7 +218,7 @@ impl TradeEventRouter {
         }
         *error_count = 0;
         
-        info!(target: "trade_event_router", event_name = "路由统计重置", "路由统计信息已重置");
+        info!(target: "TradeEventRouter", event_name = "路由统计重置", "路由统计信息已重置");
     }
     
     /// 检查路由器健康状态

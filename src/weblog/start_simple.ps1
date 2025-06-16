@@ -45,7 +45,7 @@ if ($needsCompile) {
 # 设置环境变量
 $env:LOG_TRANSPORT = "named_pipe"
 $env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
-$env:RUST_LOG = "trace"
+# 注意：不设置RUST_LOG，让weblog.rs中的设置生效
 
 Write-Host "🚀 启动WebLog服务器 (端口: 8080)" -ForegroundColor Cyan
 Write-Host "🌐 访问: http://localhost:8080" -ForegroundColor Green
