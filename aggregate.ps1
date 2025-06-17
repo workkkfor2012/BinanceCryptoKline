@@ -67,7 +67,7 @@ Write-Host '✅ 环境变量设置完成' -ForegroundColor Green
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow
 Write-Host '=' * 60 -ForegroundColor Yellow
-cargo run --release --bin kline_aggregate_service
+cargo run --bin kline_aggregate_service
 "@
 
 Write-Host "✅ K线合成系统启动命令已发送到独立窗口" -ForegroundColor Green

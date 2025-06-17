@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tracing::{Event, Id, Subscriber, info, warn, error};
+use tracing::{Event, Id, Subscriber, info, warn, error, debug};
 use tracing_subscriber::{layer::Context, Layer};
 use tokio::sync::broadcast;
 use axum::{
@@ -162,7 +162,33 @@ impl NamedPipeLogManager {
         let mut pipe_writer = self.pipe_writer.lock().await;
         *pipe_writer = Some(writer);
 
+        // 发送会话开始标记
+        self.send_session_start_marker().await;
+
         Ok(())
+    }
+
+    /// 发送会话开始标记
+    async fn send_session_start_marker(&self) {
+        let session_start_marker = serde_json::json!({
+            "timestamp": chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
+                .format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+            "level": "INFO",
+            "target": "SystemObservability",
+            "message": "SESSION_START",
+            "fields": {
+                "session_start": true,
+                "session_id": format!("session_{}", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis())
+            }
+        });
+
+        if let Ok(marker_json) = serde_json::to_string(&session_start_marker) {
+            self.send_log(marker_json).await;
+            info!(target: "SystemObservability", "🆕 已发送会话开始标记");
+        }
     }
 
     /// 发送日志到命名管道

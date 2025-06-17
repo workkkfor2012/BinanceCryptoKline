@@ -3,6 +3,7 @@
 //! 实现高性能的双缓冲K线数据存储，支持无锁并发读写操作。
 
 use crate::klaggregate::{SymbolMetadataRegistry, KlineData, AtomicKlineData};
+use crate::klaggregate::log_targets::BUFFERED_KLINE_STORE;
 use crate::klcommon::{Result, AppError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,7 +43,7 @@ pub struct BufferedKlineStore {
 
 impl BufferedKlineStore {
     /// 创建新的双缓冲存储
-    #[instrument(target = "BufferedKlineStore", name="new_store", fields(total_slots), skip_all, err)]
+    #[instrument(target = BUFFERED_KLINE_STORE, name="new_store", fields(total_slots), skip_all, err)]
     pub async fn new(
         symbol_registry: Arc<SymbolMetadataRegistry>,
         swap_interval_ms: u64,
@@ -50,12 +51,12 @@ impl BufferedKlineStore {
         let total_slots = symbol_registry.get_total_kline_slots();
         tracing::Span::current().record("total_slots", total_slots);
 
-        info!(target: "BufferedKlineStore", event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
-        
+        info!(target: BUFFERED_KLINE_STORE, event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
+
         // 创建两个相同大小的缓冲区
         let write_buffer = Self::create_buffer(total_slots);
         let read_buffer = Self::create_buffer(total_slots);
-        
+
         let store = Self {
             symbol_registry,
             write_buffer: Arc::new(RwLock::new(write_buffer)),
@@ -67,8 +68,8 @@ impl BufferedKlineStore {
             snapshot_ready_notify: Arc::new(Notify::new()),
             total_slots,
         };
-        
-        info!(target: "BufferedKlineStore", event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
+
+        info!(target: BUFFERED_KLINE_STORE, event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
         Ok(store)
     }
     
@@ -82,14 +83,14 @@ impl BufferedKlineStore {
     }
     
     /// 启动调度器
-    #[instrument(target = "BufferedKlineStore", fields(swap_interval_ms = self.swap_interval_ms), skip(self), err)]
+    #[instrument(target = BUFFERED_KLINE_STORE, fields(swap_interval_ms = self.swap_interval_ms), skip(self), err)]
     pub async fn start_scheduler(&self) -> Result<()> {
         if self.scheduler_running.load(Ordering::Relaxed) {
-            warn!(target: "BufferedKlineStore", event_name = "调度器已运行", "调度器已经在运行");
+            warn!(target: BUFFERED_KLINE_STORE, event_name = "调度器已运行", "调度器已经在运行");
             return Ok(());
         }
 
-        info!(target: "BufferedKlineStore", event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
+        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
         self.scheduler_running.store(true, Ordering::Relaxed);
         
         let write_buffer = self.write_buffer.clone();
@@ -138,34 +139,34 @@ impl BufferedKlineStore {
                             "缓冲区交换完成"
                         );
 
-                        debug!(target: "BufferedKlineStore", "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
+                        debug!(target: BUFFERED_KLINE_STORE, "缓冲区切换详情: swap_count={}, duration_ms={:.2}", count, duration_ms);
 
                         // 通知新快照就绪
                         snapshot_ready_notify.notify_waiters();
                     }
                     _ = stop_signal.notified() => {
-                        info!(target: "BufferedKlineStore", event_name = "调度器停止信号", "收到停止信号，调度器退出");
+                        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止信号", "收到停止信号，调度器退出");
                         break;
                     }
                 }
             }
 
             scheduler_running.store(false, Ordering::Relaxed);
-            info!(target: "BufferedKlineStore", event_name = "调度器已停止", "双缓冲调度器已停止");
+            info!(target: BUFFERED_KLINE_STORE, event_name = "调度器已停止", "双缓冲调度器已停止");
         }.instrument(tracing::info_span!("buffer_swap_scheduler")));
         
         Ok(())
     }
     
     /// 停止调度器
-    #[instrument(target = "BufferedKlineStore", name="stop_scheduler", skip(self), err)]
+    #[instrument(target = BUFFERED_KLINE_STORE, name="stop_scheduler", skip(self), err)]
     pub async fn stop_scheduler(&self) -> Result<()> {
         if !self.scheduler_running.load(Ordering::Relaxed) {
-            info!(target: "BufferedKlineStore", event_name = "调度器未运行", "调度器未在运行，无需停止");
+            info!(target: BUFFERED_KLINE_STORE, event_name = "调度器未运行", "调度器未在运行，无需停止");
             return Ok(());
         }
 
-        info!(target: "BufferedKlineStore", event_name = "调度器停止开始", "停止双缓冲调度器");
+        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止开始", "停止双缓冲调度器");
         self.scheduler_running.store(false, Ordering::Relaxed);
         self.stop_signal.notify_waiters();
 
@@ -173,18 +174,18 @@ impl BufferedKlineStore {
         let start_wait = Instant::now();
         while self.scheduler_running.load(Ordering::Relaxed) {
             if start_wait.elapsed() > Duration::from_secs(5) {
-                warn!(target: "BufferedKlineStore", event_name = "调度器停止超时", "等待调度器停止超时(5s)");
+                warn!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止超时", "等待调度器停止超时(5s)");
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        info!(target: "BufferedKlineStore", event_name = "调度器停止确认", "双缓冲调度器已停止");
+        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止确认", "双缓冲调度器已停止");
         Ok(())
     }
     
     /// 写入K线数据
-    #[instrument(target = "BufferedKlineStore", name="write_kline", fields(symbol_index, period_index, flat_index), skip(self, kline_data), err)]
+    #[instrument(target = BUFFERED_KLINE_STORE, name="write_kline", fields(symbol_index, period_index, flat_index), skip(self, kline_data), err)]
     pub async fn write_kline_data(
         &self,
         symbol_index: u32,
@@ -202,18 +203,18 @@ impl BufferedKlineStore {
                 self.total_slots
             )));
         }
-        
+
         // 获取写缓冲区的读锁（允许并发写入）
         let write_buffer = self.write_buffer.read().await;
-        
+
         // 原子地更新数据
         write_buffer[flat_index].load_from(kline_data);
-        
+
         Ok(())
     }
-    
+
     /// 读取K线数据
-    #[instrument(target = "BufferedKlineStore", name="read_kline", fields(symbol_index, period_index, flat_index), skip(self), err)]
+    #[instrument(target = BUFFERED_KLINE_STORE, name="read_kline", fields(symbol_index, period_index, flat_index), skip(self), err)]
     pub async fn read_kline_data(
         &self,
         symbol_index: u32,

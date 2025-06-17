@@ -56,7 +56,7 @@ $job = Start-Job -ScriptBlock {
     Set-Location $using:PWD
     
     # 运行程序
-    cargo run --release --bin kline_aggregate_service
+    cargo run --bin kline_aggregate_service
 } -ArgumentList @{
     RUST_LOG = $env:RUST_LOG
     LOG_TRANSPORT = $env:LOG_TRANSPORT

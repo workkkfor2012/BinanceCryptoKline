@@ -30,3 +30,4 @@ config.local.toml
 /tempfold
 /src/weblog/src/tempfold
 
+/logs

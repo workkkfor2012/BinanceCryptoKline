@@ -48,8 +48,8 @@ fn init_simple_logging() {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
     // 确保日志目录存在
-    std::fs::create_dir_all("logs").unwrap_or_else(|e| {
-        eprintln!("Failed to create logs directory: {}", e);
+    std::fs::create_dir_all("logs").unwrap_or_else(|_| {
+        // 日志目录创建失败，忽略错误
     });
 
     // 获取日志配置

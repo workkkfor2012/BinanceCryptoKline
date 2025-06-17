@@ -75,7 +75,7 @@ enable_compressed_logging = true
 
 [logging]
 # 日志级别 (trace, debug, info, warn, error)
-log_level = "trace"
+log_level = "info"
 
 # 日志传输方式 (named_pipe, file, console)
 log_transport = "named_pipe"

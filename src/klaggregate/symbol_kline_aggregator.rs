@@ -3,6 +3,7 @@
 //! 负责单个交易品种的实时K线聚合，支持多个时间周期的同时聚合。
 
 use crate::klaggregate::{AggTradeData, KlineData, BufferedKlineStore, PeriodInfo};
+use crate::klaggregate::log_targets::SYMBOL_KLINE_AGGREGATOR;
 use crate::klcommon::{Result, AppError, api::get_aligned_time, ServerTimeSyncManager};
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -85,7 +86,7 @@ impl KlineAggregationState {
 
 impl SymbolKlineAggregator {
     /// 创建新的品种K线聚合器
-    #[instrument(target = "SymbolKlineAggregator", name="new_aggregator", fields(symbol = %symbol, symbol_index), skip_all, err)]
+    #[instrument(target = SYMBOL_KLINE_AGGREGATOR, name="new_aggregator", fields(symbol = %symbol, symbol_index), skip_all, err)]
     pub async fn new(
         symbol: String,
         symbol_index: u32,
@@ -93,7 +94,7 @@ impl SymbolKlineAggregator {
         buffered_store: Arc<BufferedKlineStore>,
         time_sync_manager: Arc<ServerTimeSyncManager>,
     ) -> Result<Self> {
-        info!(target: "SymbolKlineAggregator", event_name = "聚合器初始化开始", symbol = %symbol, symbol_index = symbol_index, "创建品种K线聚合器: symbol={}, symbol_index={}", symbol, symbol_index);
+        info!(target: SYMBOL_KLINE_AGGREGATOR, event_name = "聚合器初始化开始", symbol = %symbol, symbol_index = symbol_index, "创建品种K线聚合器: symbol={}, symbol_index={}", symbol, symbol_index);
         
         // 创建周期信息
         let mut period_infos = Vec::new();

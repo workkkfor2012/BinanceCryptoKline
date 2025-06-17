@@ -41,4 +41,4 @@ Write-Host "=" * 50 -ForegroundColor Green
 Write-Host ""
 
 # 启动服务
-cargo run --release --bin kline_aggregate_service
+cargo run --bin kline_aggregate_service

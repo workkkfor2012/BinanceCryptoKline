@@ -3,6 +3,7 @@
 //! 负责管理所有交易品种的元数据，包括品种索引分配、上市时间查询等功能。
 
 use crate::klaggregate::{AggregateConfig, SymbolInfo, PeriodInfo};
+use crate::klaggregate::log_targets::SYMBOL_METADATA_REGISTRY;
 use crate::klcommon::{Result, AppError, BinanceApi, Database};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,12 +39,12 @@ pub struct SymbolMetadataRegistry {
 
 impl SymbolMetadataRegistry {
     /// 创建新的品种元数据注册表
-    #[instrument(target = "SymbolMetadataRegistry", name="new_registry", fields(total_kline_slots), skip_all, err)]
+    #[instrument(target = SYMBOL_METADATA_REGISTRY, name="new_registry", fields(total_kline_slots), skip_all, err)]
     pub async fn new(config: AggregateConfig) -> Result<Self> {
         let total_kline_slots = config.get_total_kline_slots();
         tracing::Span::current().record("total_kline_slots", total_kline_slots);
 
-        info!(target: "SymbolMetadataRegistry", event_name = "注册表初始化", max_symbols = config.max_symbols, supported_intervals_count = config.supported_intervals.len(), "初始化交易品种元数据注册表");
+        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "注册表初始化", max_symbols = config.max_symbols, supported_intervals_count = config.supported_intervals.len(), "初始化交易品种元数据注册表");
         
         // 创建API客户端
         let api_client = BinanceApi::new();
@@ -70,24 +71,24 @@ impl SymbolMetadataRegistry {
         // 初始化品种信息
         registry.initialize_symbol_info().await?;
         
-        info!(target: "SymbolMetadataRegistry", event_name = "注册表初始化完成", total_kline_slots = total_kline_slots, "交易品种元数据注册表初始化完成");
+        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "注册表初始化完成", total_kline_slots = total_kline_slots, "交易品种元数据注册表初始化完成");
         Ok(registry)
     }
 
     /// 初始化周期信息
-    #[instrument(target = "SymbolMetadataRegistry", fields(intervals_count = self.config.supported_intervals.len()), skip(self), err)]
+    #[instrument(target = SYMBOL_METADATA_REGISTRY, fields(intervals_count = self.config.supported_intervals.len()), skip(self), err)]
     async fn initialize_period_info(&self) -> Result<()> {
-        info!(target: "SymbolMetadataRegistry", event_name = "周期信息初始化", intervals_count = self.config.supported_intervals.len(), "初始化周期信息");
+        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "周期信息初始化", intervals_count = self.config.supported_intervals.len(), "初始化周期信息");
 
         let mut period_info = self.period_info.write().await;
 
         for (index, interval) in self.config.supported_intervals.iter().enumerate() {
             let info = PeriodInfo::new(interval.clone(), index as u32);
             period_info.insert(interval.clone(), info);
-            debug!(target: "SymbolMetadataRegistry", event_name = "周期注册", interval = %interval, index = index, "注册周期");
+            debug!(target: SYMBOL_METADATA_REGISTRY, event_name = "周期注册", interval = %interval, index = index, "注册周期");
         }
 
-        info!(target: "SymbolMetadataRegistry", event_name = "周期信息初始化完成", periods_count = period_info.len(), "已注册时间周期");
+        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "周期信息初始化完成", periods_count = period_info.len(), "已注册时间周期");
         Ok(())
     }
     

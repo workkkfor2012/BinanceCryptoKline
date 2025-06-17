@@ -235,6 +235,14 @@ async fn process_log_line(state: &Arc<AppState>, line: &str) {
     // 尝试解析JSON格式的tracing日志
     if let Some(log_entry) = parse_tracing_log_line(line) {
         if validate_log_entry(&log_entry) {
+            // 检查是否是会话开始标记
+            if is_session_start_marker(&log_entry) {
+                info!("🆕 检测到会话开始标记，开始新会话");
+                let new_session_id = state.start_new_session();
+                info!("✅ 新会话已开始: {}", new_session_id);
+                return; // 不处理会话开始标记本身
+            }
+
             // 使用AppState的统一处理方法：缓存 + 广播
             state.process_log_entry(log_entry);
         } else {
@@ -244,6 +252,23 @@ async fn process_log_line(state: &Arc<AppState>, line: &str) {
         // 不是有效的JSON格式tracing日志，记录错误
         error!("无法解析JSON格式日志: {}", line);
     }
+}
+
+/// 检查是否是会话开始标记
+fn is_session_start_marker(log_entry: &weblog::LogEntry) -> bool {
+    // 检查消息是否为 SESSION_START
+    if log_entry.message == "SESSION_START" {
+        return true;
+    }
+
+    // 检查fields中是否有session_start标记
+    if let Some(session_start) = log_entry.fields.get("session_start") {
+        if let Some(is_start) = session_start.as_bool() {
+            return is_start;
+        }
+    }
+
+    false
 }
 
 

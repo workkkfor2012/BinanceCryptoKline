@@ -604,8 +604,8 @@ fn init_tracing_logging(output_file: &Option<String>) -> Result<()> {
 
     // 确保日志目录存在
     let log_dir = "logs";
-    std::fs::create_dir_all(log_dir).unwrap_or_else(|e| {
-        eprintln!("Failed to create logs directory: {}", e);
+    std::fs::create_dir_all(log_dir).unwrap_or_else(|_| {
+        // 日志目录创建失败，忽略错误
     });
 
     // 从配置文件读取日志级别

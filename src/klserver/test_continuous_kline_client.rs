@@ -487,14 +487,7 @@ impl ContinuousKlineClient {
                                                     // Update counter
                                                     total_updates.fetch_add(1, Ordering::Relaxed);
 
-                                                    // Print kline update directly to console
-                                                    println!("Connection {} Kline update: {} {} Close: {} Vol: {}",
-                                                        connection_id,
-                                                        kline_resp.symbol,
-                                                        kline_resp.kline.interval,
-                                                        kline_resp.kline.close,
-                                                        kline_resp.kline.volume
-                                                    );
+                                                    // K线更新处理（已移除控制台输出）
 
                                                     // Update counter
                                                     total_updates.fetch_add(1, Ordering::Relaxed);

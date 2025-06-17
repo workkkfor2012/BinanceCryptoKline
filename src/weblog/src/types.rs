@@ -38,6 +38,8 @@ pub enum WebSocketMessage {
     LogEntry { data: LogEntry },
     /// 历史日志发送完成信令
     HistoryComplete,
+    /// 新会话开始信令 - 告知前端清空缓存并重新初始化
+    SessionStart { session_id: String },
 }
 
 /// 应用状态 - 极简版本
@@ -49,6 +51,8 @@ pub struct AppState {
     pub recent_logs: std::sync::Arc<std::sync::Mutex<VecDeque<LogEntry>>>,
     /// 实时日志广播发送器
     pub log_sender: tokio::sync::broadcast::Sender<LogEntry>,
+    /// 当前会话ID
+    pub session_id: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
 impl AppState {
@@ -60,9 +64,20 @@ impl AppState {
             start_time: SystemTime::now(),
             recent_logs: std::sync::Arc::new(std::sync::Mutex::new(VecDeque::new())),
             log_sender,
+            session_id: std::sync::Arc::new(std::sync::Mutex::new(Self::generate_session_id())),
         };
 
         (state, log_receiver)
+    }
+
+    /// 生成新的会话ID
+    fn generate_session_id() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("session_{}", timestamp)
     }
 
     /// 获取运行时长（秒）
@@ -90,6 +105,29 @@ impl AppState {
     /// 获取历史日志的克隆（用于新连接的初始数据传输）
     pub fn get_history_logs(&self) -> VecDeque<LogEntry> {
         self.recent_logs.lock().unwrap().clone()
+    }
+
+    /// 开始新会话 - 清空历史日志并生成新的会话ID
+    pub fn start_new_session(&self) -> String {
+        // 清空历史日志
+        {
+            let mut logs = self.recent_logs.lock().unwrap();
+            logs.clear();
+        }
+
+        // 生成新的会话ID
+        let new_session_id = Self::generate_session_id();
+        {
+            let mut session_id = self.session_id.lock().unwrap();
+            *session_id = new_session_id.clone();
+        }
+
+        new_session_id
+    }
+
+    /// 获取当前会话ID
+    pub fn get_session_id(&self) -> String {
+        self.session_id.lock().unwrap().clone()
     }
 }
 

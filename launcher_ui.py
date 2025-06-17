@@ -69,27 +69,17 @@ class KlineSystemLauncher:
                     "name": "控制台输出调试",
                     "description": "带控制台输出的K线聚合服务",
                     "category": "debug"
-                },
-                "test_debug_kline.ps1": {
-                    "name": "调试输出测试",
-                    "description": "测试带调试输出的K线聚合服务",
-                    "category": "debug"
-                },
-                "test_weblog_simple.ps1": {
-                    "name": "WebLog简单测试",
-                    "description": "测试WebLog命名管道启动",
-                    "category": "debug"
                 }
             },
             "工具脚本": {
-                "pipe_server.ps1": {
-                    "name": "命名管道服务器",
-                    "description": "创建命名管道日志服务器",
+                "rs-txt.ps1": {
+                    "name": "Rust代码文本提取",
+                    "description": "提取Rust源代码到文本文件",
                     "category": "tool"
                 },
-                "weblog_aggregate_fixed.ps1": {
-                    "name": "WebLog+聚合修复版",
-                    "description": "修复版的WebLog和K线聚合启动脚本",
+                "启动器.ps1": {
+                    "name": "系统启动器",
+                    "description": "PowerShell版本的系统启动器",
                     "category": "tool"
                 }
             }

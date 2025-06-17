@@ -40,6 +40,14 @@ async fn websocket_handler(
 async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
 
+    // === 阶段0：发送会话开始信令 ===
+    let session_id = state.get_session_id();
+    if send_session_start(&mut sender, session_id.clone()).await.is_err() {
+        tracing::warn!("发送会话开始信令失败");
+        return;
+    }
+    tracing::info!("已发送会话开始信令: {}", session_id);
+
     // === 阶段1：发送历史日志 ===
     tracing::info!("开始发送历史日志");
 
@@ -131,6 +139,24 @@ async fn send_history_complete(
         }
         Err(e) => {
             tracing::error!("序列化历史完成信令失败: {}", e);
+            Err(axum::Error::new("序列化失败"))
+        }
+    }
+}
+
+/// 发送会话开始信令
+async fn send_session_start(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    session_id: String,
+) -> Result<(), axum::Error> {
+    let message = WebSocketMessage::SessionStart { session_id };
+
+    match serde_json::to_string(&message) {
+        Ok(json) => {
+            sender.send(Message::Text(json)).await.map_err(|_| axum::Error::new("发送失败"))
+        }
+        Err(e) => {
+            tracing::error!("序列化会话开始信令失败: {}", e);
             Err(axum::Error::new("序列化失败"))
         }
     }

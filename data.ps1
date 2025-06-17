@@ -110,7 +110,7 @@ Write-Host ""
 
 try {
     # 使用cargo run启动服务
-    cargo run --release --bin kline_data_service
+    cargo run --bin kline_data_service
 }
 catch {
     Write-Host "服务启动失败: $_" -ForegroundColor Red

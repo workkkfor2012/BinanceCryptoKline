@@ -62,7 +62,7 @@ cd src\weblog
 `$env:PIPE_NAME='$($loggingConfig.PipeName)'
 `$env:RUST_LOG='$($weblogConfig.LogLevel)'
 Write-Host '📡 命名管道模式，端口8080，管道: $($loggingConfig.PipeName)，WebLog日志等级: $($weblogConfig.LogLevel)' -ForegroundColor Cyan
-cargo run --release --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
+cargo run --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
 "@ -PassThru
 
     # 等待WebLog启动
@@ -77,7 +77,7 @@ Write-Host '📊 K线数据服务启动中...' -ForegroundColor Yellow
 `$env:LOG_TRANSPORT='named_pipe'
 `$env:RUST_LOG='$($loggingConfig.LogLevel)'
 Write-Host '📡 连接到WebLog系统，日志等级: $($loggingConfig.LogLevel)' -ForegroundColor Cyan
-cargo run --release --bin kline_data_service
+cargo run --bin kline_data_service
 "@ -PassThru
 
     Write-Host ""

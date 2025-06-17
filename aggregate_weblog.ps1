@@ -85,7 +85,7 @@ Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor Gray
 Write-Host ''
 Write-Host '🚀 启动WebLog服务器（前端聚合版）...' -ForegroundColor Green
 Write-Host '=' * 60 -ForegroundColor Green
-cargo run --release --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
+cargo run --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
 "@
 
 Write-Host "✅ WebLog系统启动命令已发送" -ForegroundColor Green
@@ -124,7 +124,7 @@ Write-Host '  管道名称：$($loggingConfig.PipeName)' -ForegroundColor Gray
 Write-Host ''
 Write-Host '🚀 启动K线聚合服务...' -ForegroundColor Yellow
 Write-Host '=' * 60 -ForegroundColor Yellow
-cargo run --release --bin kline_aggregate_service
+cargo run --bin kline_aggregate_service
 "@
 
 Write-Host "✅ K线合成系统启动命令已发送" -ForegroundColor Green

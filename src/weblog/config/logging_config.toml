@@ -3,4 +3,4 @@
 
 [weblog]
 # WebLog服务日志级别 (trace, debug, info, warn, error)
-log_level = "trace"
+log_level = "info"
