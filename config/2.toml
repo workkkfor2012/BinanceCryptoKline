@@ -1,0 +1,84 @@
+# K线聚合系统配置文件
+
+# 支持的时间周期列表
+supported_intervals = ["1m", "5m", "30m", "1h", "4h", "1d", "1w"]
+
+# 最大支持的品种数量
+max_symbols = 10000
+
+# 缓冲区切换间隔（毫秒）
+buffer_swap_interval_ms = 1000
+
+# 持久化间隔（毫秒）
+persistence_interval_ms = 5000
+
+[database]
+# 数据库文件路径
+database_path = "data/klines.db"
+
+# 连接池大小
+pool_size = 10
+
+# 连接超时（秒）
+connection_timeout_secs = 30
+
+# 是否启用WAL模式
+enable_wal = true
+
+[websocket]
+# 是否使用代理
+use_proxy = true
+
+# 代理地址
+proxy_host = "127.0.0.1"
+
+# 代理端口
+proxy_port = 1080
+
+# WebSocket URL
+websocket_url = "wss://fstream.binance.com/ws"
+
+# 连接超时（秒）
+connection_timeout_secs = 30
+
+# 重连间隔（秒）
+reconnect_interval_secs = 1
+
+# 最大重连次数（5分钟 × 60秒 ÷ 1秒 = 300次）
+max_reconnect_attempts = 300
+
+# 心跳间隔（秒）
+heartbeat_interval_secs = 30
+
+[buffer]
+# 初始缓冲区大小
+initial_capacity = 70000
+
+# 是否启用内存预分配
+enable_preallocation = true
+
+# 内存对齐大小
+alignment_size = 64
+
+[persistence]
+# 批量写入大小
+batch_size = 1000
+
+# 写入队列大小
+queue_size = 5000
+
+# 写入超时（秒）
+write_timeout_secs = 30
+
+# 是否启用压缩日志
+enable_compressed_logging = true
+
+[logging]
+# 日志级别 (trace, debug, info, warn, error)
+log_level = "info"
+
+# 日志传输方式 (named_pipe, file, console)
+log_transport = "named_pipe"
+
+# 命名管道名称
+pipe_name = "kline_log_pipe"

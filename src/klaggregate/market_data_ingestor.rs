@@ -73,7 +73,7 @@ impl MarketDataIngestor {
         }
 
         tracing::Span::current().record("symbols_count", symbols.len());
-        info!(target: "MarketDataIngestor", event_name = "品种订阅准备", symbols_count = symbols.len(), "准备订阅品种的归集交易数据: symbols_count={}", symbols.len());
+        info!(target: "MarketDataIngestor", event_name = "品种订阅准备", symbols_count = symbols.len(), "准备订阅品种的归集交易数据 (品种数: {})", symbols.len());
         
         // 创建WebSocket配置
         let ws_config = AggTradeConfig {

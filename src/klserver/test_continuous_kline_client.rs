@@ -34,10 +34,10 @@ const BINANCE_WS_URL: &str = "wss://fstream.binance.com/ws";
 const MAX_STREAMS_PER_CONNECTION: usize = 2; // 5 connections * 2 symbols * 1 interval = 10 streams total, 2 streams per connection
 
 // Reconnect delay (seconds)
-const RECONNECT_DELAY: u64 = 5;
+const RECONNECT_DELAY: u64 = 1;
 
-// Maximum reconnect attempts
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+// Maximum reconnect attempts (5分钟 × 60秒 ÷ 1秒 = 300次)
+const MAX_RECONNECT_ATTEMPTS: u32 = 300;
 
 // Heartbeat interval (seconds)
 const HEARTBEAT_INTERVAL: u64 = 30;
@@ -297,7 +297,7 @@ impl ContinuousKlineClient {
                             return Err(AppError::WebSocketError(format!("Connection {} reached maximum reconnect attempts", i + 1)));
                         }
 
-                        let delay = RECONNECT_DELAY * reconnect_attempts as u64;
+                        let delay = RECONNECT_DELAY; // 固定1秒间隔，不使用指数退避
                         info!("Will reconnect in {} seconds...", delay);
                         sleep(Duration::from_secs(delay)).await;
                     }

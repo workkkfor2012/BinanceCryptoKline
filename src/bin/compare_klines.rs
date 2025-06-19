@@ -586,14 +586,14 @@ fn format_timestamp(timestamp_ms: i64) -> String {
 fn load_logging_config() -> Result<String> {
     use kline_server::klaggregate::config::AggregateConfig;
 
-    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/aggregate_config.toml".to_string());
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/BinanceKlineConfig.toml".to_string());
 
     if std::path::Path::new(&config_path).exists() {
         let config = AggregateConfig::from_file(&config_path)?;
         Ok(config.logging.log_level)
     } else {
-        // 配置文件不存在，使用环境变量或默认值
-        Ok(std::env::var("RUST_LOG").unwrap_or_else(|_| "trace".to_string()))
+        // 配置文件不存在，返回错误
+        Err(anyhow::anyhow!("配置文件不存在: {}，无法加载日志配置", config_path).into())
     }
 }
 

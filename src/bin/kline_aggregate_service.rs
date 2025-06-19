@@ -8,15 +8,15 @@ use kline_server::klcommon::{Result, AppError};
 use std::path::Path;
 use tokio::signal;
 use tokio::time::{Duration};
-use tracing::{instrument, info, error, warn, debug, Instrument};
+use tracing::{instrument, info, error, warn, debug, trace, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 use chrono;
 
 /// 默认配置文件路径
-const DEFAULT_CONFIG_PATH: &str = "config/aggregate_config.toml";
+const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
 
 /// 日志目标常量
-const LOG_TARGET: &str = "KlineAggregateServiceAAAA";
+const LOG_TARGET: &str = "KlineAggregateService";
 
 /// K线数据倾倒开关 - 设置为 true 启用2分钟的高频K线数据记录
 const ENABLE_KLINE_DUMP: bool = true;
@@ -43,32 +43,33 @@ fn main() -> Result<()> {
 /// 异步主逻辑函数
 #[instrument(target = LOG_TARGET, name = "kline_aggregate_service_run")]
 async fn run() -> Result<()> {
-
-    info!(target = LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
+    trace!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
+    debug!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
+    info!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
 
     // 加载配置
     let config = load_config().await?;
-    info!(target = LOG_TARGET, event_name = "配置加载完成123", "配置加载完成456");
+    info!(target: LOG_TARGET, event_name = "配置加载完成123", "配置加载完成456");
 
     // 创建K线聚合系统
     let system = match KlineAggregateSystem::new(config).await {
         Ok(system) => {
-            info!(target = LOG_TARGET, event_name = "系统创建成功", "K线聚合系统创建成功");
+            info!(target: LOG_TARGET, event_name = "系统创建成功", "K线聚合系统创建成功");
             system
         }
         Err(e) => {
-            error!(target = LOG_TARGET, event_name = "系统创建失败", error = %e, "创建K线聚合系统失败");
+            error!(target: LOG_TARGET, event_name = "系统创建失败", error = %e, "创建K线聚合系统失败");
             return Err(e);
         }
     };
 
     // 启动系统
     if let Err(e) = system.start().await {
-        error!(target = LOG_TARGET, event_name = "系统启动失败", error = %e, "启动K线聚合系统失败");
+        error!(target: LOG_TARGET, event_name = "系统启动失败", error = %e, "启动K线聚合系统失败");
         return Err(e);
     }
 
-    info!(target = LOG_TARGET, event_name = "服务启动完成", "K线聚合服务启动完成");
+    info!(target: LOG_TARGET, event_name = "服务启动完成", "K线聚合服务启动完成");
 
     // 启动状态监控任务
     start_status_monitor(system.clone()).await;
@@ -85,11 +86,11 @@ async fn run() -> Result<()> {
     wait_for_shutdown_signal().await;
 
     // 优雅关闭
-    info!(target = LOG_TARGET, event_name = "收到关闭信号", "收到关闭信号，开始优雅关闭...");
+    info!(target: LOG_TARGET, event_name = "收到关闭信号", "收到关闭信号，开始优雅关闭...");
     if let Err(e) = system.stop().await {
-        error!(target = LOG_TARGET, event_name = "系统停止失败", error = %e, "关闭K线聚合系统失败");
+        error!(target: LOG_TARGET, event_name = "系统停止失败", error = %e, "关闭K线聚合系统失败");
     } else {
-        info!(target = LOG_TARGET, event_name = "服务优雅关闭", "K线聚合服务已优雅关闭");
+        info!(target: LOG_TARGET, event_name = "服务优雅关闭", "K线聚合服务已优雅关闭");
     }
 
     Ok(())
@@ -113,7 +114,7 @@ fn init_observability_system() -> Result<()> {
                     *result = Some(true);
                 }
             }
-            Err(e) => {
+            Err(_e) => {
                 if let Ok(mut result) = INIT_RESULT.lock() {
                     *result = Some(false);
                 }
@@ -142,17 +143,8 @@ fn init_observability_system() -> Result<()> {
 
 /// 内部初始化函数，只会被调用一次
 fn init_observability_system_inner() -> Result<()> {
-    // 从配置文件读取日志设置，如果失败则使用环境变量或默认值
-    let (log_level, log_transport, pipe_name) = match load_logging_config() {
-        Ok((level, transport, pipe)) => (level, transport, pipe),
-        Err(_) => {
-            // 配置文件读取失败，使用环境变量或默认值
-            let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "trace".to_string());
-            let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "named_pipe".to_string());
-            let pipe_name = std::env::var("PIPE_NAME").unwrap_or_else(|_| r"\\.\pipe\kline_log_pipe".to_string());
-            (log_level, log_transport, pipe_name)
-        }
-    };
+    // 从配置文件读取日志设置，配置文件必须存在
+    let (log_level, log_transport, pipe_name) = load_logging_config()?;
 
     let log_forwarding_layer = match log_transport.as_str() {
         "named_pipe" => {
@@ -199,7 +191,7 @@ fn init_observability_system_inner() -> Result<()> {
             // tracing订阅器初始化成功，我们是第一个初始化的
             true
         }
-        Err(e) => {
+        Err(_e) => {
             // 如果已经初始化过，这是正常情况，不需要报错
             false
         }
@@ -210,17 +202,17 @@ fn init_observability_system_inner() -> Result<()> {
     match tracing_log::LogTracer::init_with_filter(log::LevelFilter::Warn) {
         Ok(_) => {
             // 初始化成功，设置了warn级别过滤
-            tracing::debug!(target = LOG_TARGET, event_name = "log桥接器初始化成功", "log桥接器初始化成功，第三方库日志过滤级别: warn");
+            tracing::debug!(target: LOG_TARGET, event_name = "log桥接器初始化成功", "log桥接器初始化成功，第三方库日志过滤级别: warn");
         }
         Err(e) => {
             // 如果失败，尝试不带过滤器的初始化
             match tracing_log::LogTracer::init() {
                 Ok(_) => {
-                    tracing::debug!(target = LOG_TARGET, event_name = "log桥接器初始化成功", "log桥接器初始化成功（无过滤器）");
+                    tracing::debug!(target: LOG_TARGET, event_name = "log桥接器初始化成功", "log桥接器初始化成功（无过滤器）");
                 }
                 Err(e2) => {
                     // 两种方式都失败，可能已经有其他logger
-                    tracing::warn!(target = LOG_TARGET, event_name = "log桥接器初始化失败",
+                    tracing::warn!(target: LOG_TARGET, event_name = "log桥接器初始化失败",
                         error1 = %e, error2 = %e2,
                         "log桥接器初始化失败，可能已有其他logger。第三方库日志可能无法被过滤");
                 }
@@ -231,31 +223,31 @@ fn init_observability_system_inner() -> Result<()> {
     // 等待一小段时间确保tracing系统完全初始化
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    tracing::info!(target = LOG_TARGET, event_name = "可观察性系统初始化完成", log_level = %log_level, "🔍 可观察性系统初始化完成，级别: {}", log_level);
-    tracing::info!(target = LOG_TARGET, event_name = "规格验证层状态", "📊 规格验证层已禁用，减少日志输出");
-    tracing::info!(target = LOG_TARGET, event_name = "日志传输配置", transport = %log_transport, "📡 日志传输方式: {}", log_transport);
+    tracing::info!(target: LOG_TARGET, event_name = "可观察性系统初始化完成", log_level = %log_level, "🔍 可观察性系统初始化完成，级别: {}", log_level);
+    tracing::info!(target: LOG_TARGET, event_name = "规格验证层状态", "📊 规格验证层已禁用，减少日志输出");
+    tracing::info!(target: LOG_TARGET, event_name = "日志传输配置", transport = %log_transport, "📡 日志传输方式: {}", log_transport);
 
     // 显示传输配置信息
     match log_transport.as_str() {
         "named_pipe" => {
-            tracing::info!(target = LOG_TARGET, event_name = "日志传输详情", transport_type = "named_pipe", pipe_name = %pipe_name, "📡 使用命名管道传输日志: {}", pipe_name);
+            tracing::info!(target: LOG_TARGET, event_name = "日志传输详情", transport_type = "named_pipe", pipe_name = %pipe_name, "📡 使用命名管道传输日志: {}", pipe_name);
         }
         "websocket" => {
             let web_port = std::env::var("WEB_PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse::<u16>()
                 .unwrap_or(3000);
-            tracing::info!(target = LOG_TARGET, event_name = "日志传输详情", transport_type = "websocket", web_port = web_port, "🌐 使用WebSocket传输日志，端口: {}", web_port);
+            tracing::info!(target: LOG_TARGET, event_name = "日志传输详情", transport_type = "websocket", web_port = web_port, "🌐 使用WebSocket传输日志，端口: {}", web_port);
         }
         _ => {
-            tracing::warn!(target = LOG_TARGET, event_name = "未知传输方式", configured_transport = %log_transport, "⚠️ 未知传输方式 '{}', 使用默认命名管道", log_transport);
+            tracing::warn!(target: LOG_TARGET, event_name = "未知传输方式", configured_transport = %log_transport, "⚠️ 未知传输方式 '{}', 使用默认命名管道", log_transport);
         }
     }
 
     // 发送测试日志确保传输工作
-    tracing::info!(target = LOG_TARGET, event_name = "可观测性测试日志", test_id = 1, "🧪 测试日志1: 可观察性系统测试");
-    tracing::warn!(target = LOG_TARGET, event_name = "可观测性测试日志", test_id = 2, "🧪 测试日志2: 警告级别测试");
-    tracing::error!(target = LOG_TARGET, event_name = "可观测性测试日志", test_id = 3, "🧪 测试日志3: 错误级别测试");
+    tracing::info!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 1, "🧪 测试日志1: 可观察性系统测试");
+    tracing::warn!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 2, "🧪 测试日志2: 警告级别测试");
+    tracing::error!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 3, "🧪 测试日志3: 错误级别测试");
 
     Ok(())
 }
@@ -280,7 +272,7 @@ fn load_logging_config() -> Result<(String, String, String)> {
             pipe_name,
         ))
     } else {
-        Err(AppError::ConfigError("配置文件不存在".to_string()))
+        Err(AppError::ConfigError(format!("配置文件不存在: {}，无法加载日志配置", config_path)))
     }
 }
 
@@ -290,30 +282,11 @@ async fn load_config() -> Result<AggregateConfig> {
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
 
     if Path::new(&config_path).exists() {
-        info!(target = LOG_TARGET, event_name = "从文件加载配置", path = %config_path, "从文件加载配置: {}", config_path);
+        info!(target: LOG_TARGET, event_name = "从文件加载配置", path = %config_path, "从文件加载配置: {}", config_path);
         AggregateConfig::from_file(&config_path)
     } else {
-        warn!(target = LOG_TARGET, event_name = "配置文件不存在", path = %config_path, "配置文件不存在: {}，使用默认配置", config_path);
-
-        // 创建默认配置
-        let config = AggregateConfig::default();
-
-        // 尝试创建配置目录
-        if let Some(parent) = Path::new(&config_path).parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| AppError::IoError(e))?;
-            }
-        }
-
-        // 保存默认配置到文件
-        if let Err(e) = config.save_to_file(&config_path) {
-            warn!(target = LOG_TARGET, event_name = "默认配置保存失败", path = %config_path, error = %e, "保存默认配置失败");
-        } else {
-            info!(target = LOG_TARGET, event_name = "默认配置已保存", path = %config_path, "默认配置已保存到: {}", config_path);
-        }
-        
-        Ok(config)
+        error!(target: LOG_TARGET, event_name = "配置文件不存在", path = %config_path, "配置文件不存在: {}，无法启动服务", config_path);
+        return Err(AppError::ConfigError(format!("配置文件不存在: {}，请确保配置文件存在", config_path)));
     }
 }
 
@@ -328,7 +301,7 @@ async fn start_status_monitor(system: KlineAggregateSystem) {
 
                 let status = system.get_status().await;
                 info!(
-                    target = LOG_TARGET,
+                    target: LOG_TARGET,
                     event_name = "系统状态报告",
                     total_symbols = status.total_symbols,
                     active_connections = status.active_connections,
@@ -353,7 +326,7 @@ async fn start_test_logging() {
                 counter += 1;
 
                 info!(
-                    target = LOG_TARGET,
+                    target: LOG_TARGET,
                     event_name = "定期测试日志",
                     counter = counter,
                     timestamp = %chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
@@ -362,7 +335,7 @@ async fn start_test_logging() {
                 );
 
                 if counter % 3 == 0 {
-                    warn!(target = LOG_TARGET, event_name = "定期测试警告", counter = counter, "🧪 警告测试日志 #{}: 这是一个测试警告", counter);
+                    warn!(target: LOG_TARGET, event_name = "定期测试警告", counter = counter, "🧪 警告测试日志 #{}: 这是一个测试警告", counter);
                 }
             }
         }.instrument(tracing::info_span!("periodic_test_log_task"))
@@ -390,10 +363,10 @@ async fn wait_for_shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            info!(target = LOG_TARGET, event_name = "信号接收", signal = "Ctrl+C", "收到Ctrl+C信号");
+            info!(target: LOG_TARGET, event_name = "信号接收", signal = "Ctrl+C", "收到Ctrl+C信号");
         },
         _ = terminate => {
-            info!(target = LOG_TARGET, event_name = "信号接收", signal = "SIGTERM", "收到SIGTERM信号");
+            info!(target: LOG_TARGET, event_name = "信号接收", signal = "SIGTERM", "收到SIGTERM信号");
         },
     }
 }

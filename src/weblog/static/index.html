@@ -277,6 +277,31 @@
             box-shadow: 0 2px 6px rgba(68, 255, 68, 0.4);
         }
 
+        /* 内联切换按钮样式 - 适应标题栏 */
+        .inline-toggle-button {
+            background-color: #0066ff;
+            color: #ffffff;
+            border: 1px solid #3388ff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .inline-toggle-button:hover {
+            background-color: #3388ff;
+            transform: scale(1.05);
+        }
+
+        .inline-toggle-button.active {
+            background-color: #44ff44;
+            color: #000000;
+            border-color: #66ff66;
+        }
+
         .module-names-section {
             flex: 1;
             min-width: 300px;
@@ -459,7 +484,6 @@
 
             <div class="header-buttons">
                 <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
-                <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
             </div>
         </div>
     </div>
@@ -467,12 +491,11 @@
     <div class="main-content">
         <!-- 左侧静态模块区域 -->
         <div class="static-modules-area">
-            <div class="static-modules-title">📊 静态模块区域 - 日志监控</div>
             <div class="static-modules-content">
                 <!-- 实时原始日志模块 (默认隐藏) -->
                 <div class="module static-module" id="realtime-logs-module" style="display: none;">
                     <div class="module-header">
-                        <div class="module-title">原始日志 | 日志数: <span id="realtime-log-count">0</span> | 最后更新: <span id="last-log-time">--:--:--</span></div>
+                        <div class="module-title">原始日志 | 日志数: <span id="realtime-log-count">0</span> | 最后更新: <span id="last-log-time">--:--:--</span> | <button class="inline-toggle-button" id="toggle-collapsed-logs" title="显示/隐藏高频折叠日志">📊 显示高频折叠日志</button></div>
                         <div class="module-status status-waiting" id="realtime-logs-status">等待日志</div>
                     </div>
                     <!-- 搜索控制面板 -->
@@ -498,7 +521,7 @@
                 <!-- 原始日志高频折叠模块 -->
                 <div class="module static-module" id="raw-logs-module">
                     <div class="module-header">
-                        <div class="module-title">原始日志折叠 | 总数: <span id="total-log-count">--</span> | 折叠后: <span id="displayed-log-count">--</span> | 时间: <span id="collapse-timestamp">--:--:--</span></div>
+                        <div class="module-title">原始日志折叠 | 总数: <span id="total-log-count">--</span> | 折叠后: <span id="displayed-log-count">--</span> | 时间: <span id="collapse-timestamp">--:--:--</span> | <button class="inline-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button></div>
                         <div class="module-status status-waiting" id="raw-logs-status">等待日志</div>
                     </div>
                     <!-- 搜索控制面板 -->
@@ -1521,8 +1544,8 @@
             constructor() {
                 this.ws = null;
                 this.reconnectAttempts = 0;
-                this.maxReconnectAttempts = 5;
-                this.reconnectDelay = 1000;
+                this.maxReconnectAttempts = 300; // 5分钟 × 60秒 ÷ 1秒 = 300次
+                this.reconnectDelay = 1000; // 1秒间隔
                 this.isConnected = false;
             }
 
@@ -1605,7 +1628,7 @@
             handleConnectionError() {
                 if (this.reconnectAttempts < this.maxReconnectAttempts) {
                     this.reconnectAttempts++;
-                    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                    const delay = this.reconnectDelay; // 固定1秒间隔，不使用指数退避
 
                     console.log(`🔄 ${delay}ms后尝试重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
                     this.updateConnectionStatus(`重连中... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
@@ -1701,6 +1724,37 @@
             }, 10);
         }
 
+        function toggleCollapsedLogs() {
+            const realtimeModule = document.getElementById('realtime-logs-module');
+            const rawLogsModule = document.getElementById('raw-logs-module');
+            const button = document.getElementById('toggle-collapsed-logs');
+
+            // 从原始日志切换到原始日志折叠
+            realtimeModule.style.display = 'none';
+            rawLogsModule.style.display = 'flex';
+
+            // 更新按钮状态
+            button.classList.add('active');
+
+            // 同时更新另一个按钮的状态
+            const otherButton = document.getElementById('toggle-realtime-logs');
+            if (otherButton) {
+                otherButton.classList.remove('active');
+                otherButton.textContent = '📊 显示实时原始日志';
+            }
+
+            // 重新适配终端尺寸
+            setTimeout(() => {
+                try {
+                    if (rawLogsModule.style.display !== 'none') {
+                        terminalManager.fitAddons.get('raw-logs')?.fit();
+                    }
+                } catch(e) {
+                    console.error("Error fitting terminal:", e);
+                }
+            }, 10);
+        }
+
         // 页面初始化
         window.addEventListener('load', function() {
             // ================== 插件加载状态诊断 ==================
@@ -1746,6 +1800,7 @@
             // 绑定事件
             document.getElementById('header-copy-modules').addEventListener('click', copyAllModules);
             document.getElementById('toggle-realtime-logs').addEventListener('click', toggleRealtimeLogs);
+            document.getElementById('toggle-collapsed-logs').addEventListener('click', toggleCollapsedLogs);
 
             // 连接WebSocket
             wsManager.connect();

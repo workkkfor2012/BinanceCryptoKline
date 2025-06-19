@@ -1,42 +1,33 @@
-# K线数据服务简化启动脚本
-# 快速启动K线数据服务和WebLog系统
+# K线数据服务 + WebLog系统启动脚本
+. "scripts\read_unified_config.ps1"
 
-# 设置UTF-8编码
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "🚀 启动K线数据服务 + WebLog系统" -ForegroundColor Green
-Write-Host "=" * 50 -ForegroundColor Green
-
-# 检查目录
 if (-not (Test-Path "Cargo.toml")) {
-    Write-Host "❌ 错误：请在项目根目录运行此脚本" -ForegroundColor Red
+    Write-Host "❌ 请在项目根目录运行" -ForegroundColor Red
     exit 1
 }
 
-# 导入配置读取函数
-. "scripts\read_config.ps1"
+$config = Read-UnifiedConfig
+$klineLogLevel = $config.Logging.default_log_level
+$weblogLogLevel = $config.Logging.Services.weblog
+$pipeName = $config.Logging.pipe_name
+if (-not $pipeName.StartsWith("\\.\pipe\")) {
+    $pipeName = "\\.\pipe\$pipeName"
+}
 
-# 从配置文件读取日志设置
-$loggingConfig = Read-LoggingConfig
-$weblogConfig = Read-WebLogConfig
-Write-Host "📋 K线服务日志等级: $($loggingConfig.LogLevel)" -ForegroundColor Cyan
-Write-Host "📋 WebLog服务日志等级: $($weblogConfig.LogLevel)" -ForegroundColor Cyan
+$buildMode = Get-BuildMode
+Write-Host "🚀 启动K线+WebLog系统 ($buildMode)" -ForegroundColor Green
 
 # 创建必要目录
 @("data", "logs") | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
 }
 
-Write-Host "📡 架构：K线数据服务 → 命名管道 → WebLog系统" -ForegroundColor Cyan
-Write-Host "🌐 访问：http://localhost:8080/" -ForegroundColor Yellow
-Write-Host ""
-
-# 全局进程变量
 $global:weblogProcess = $null
 $global:klineProcess = $null
 
-# 清理函数
 function Cleanup {
     Write-Host "🛑 停止服务..." -ForegroundColor Yellow
     if ($global:klineProcess -and !$global:klineProcess.HasExited) {
@@ -48,51 +39,38 @@ function Cleanup {
     Write-Host "✅ 服务已停止" -ForegroundColor Green
 }
 
-# 注册退出处理
 Register-EngineEvent PowerShell.Exiting -Action { Cleanup }
 
 try {
     # 启动WebLog系统
-    Write-Host "🌐 启动WebLog系统..." -ForegroundColor Green
+    $weblogCargoCmd = Get-CargoCommand -BinaryName 'weblog'
     $global:weblogProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
-`$Host.UI.RawUI.WindowTitle = 'WebLog日志系统'
-Write-Host '🌐 WebLog系统启动中...' -ForegroundColor Green
+`$Host.UI.RawUI.WindowTitle = 'WebLog系统'
 cd src\weblog
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:PIPE_NAME='$($loggingConfig.PipeName)'
-`$env:RUST_LOG='$($weblogConfig.LogLevel)'
-Write-Host '📡 命名管道模式，端口8080，管道: $($loggingConfig.PipeName)，WebLog日志等级: $($weblogConfig.LogLevel)' -ForegroundColor Cyan
-cargo run --bin weblog -- --pipe-name '$($loggingConfig.PipeName)'
+`$env:PIPE_NAME='$pipeName'
+`$env:RUST_LOG='$weblogLogLevel'
+$weblogCargoCmd -- --pipe-name '$pipeName'
 "@ -PassThru
 
-    # 等待WebLog启动
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 3
 
     # 启动K线数据服务
-    Write-Host "📊 启动K线数据服务..." -ForegroundColor Green
+    $klineCargoCmd = Get-CargoCommand -BinaryName 'kline_data_service'
     $global:klineProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
 `$Host.UI.RawUI.WindowTitle = 'K线数据服务'
-Write-Host '📊 K线数据服务启动中...' -ForegroundColor Yellow
-`$env:PIPE_NAME='$($loggingConfig.PipeName)'
+`$env:PIPE_NAME='$pipeName'
 `$env:LOG_TRANSPORT='named_pipe'
-`$env:RUST_LOG='$($loggingConfig.LogLevel)'
-Write-Host '📡 连接到WebLog系统，日志等级: $($loggingConfig.LogLevel)' -ForegroundColor Cyan
-cargo run --bin kline_data_service
+`$env:RUST_LOG='$klineLogLevel'
+$klineCargoCmd
 "@ -PassThru
 
-    Write-Host ""
-    Write-Host "✅ 系统启动完成" -ForegroundColor Green
-    Write-Host "📋 WebLog: PID $($global:weblogProcess.Id)" -ForegroundColor White
-    Write-Host "📋 K线服务: PID $($global:klineProcess.Id)" -ForegroundColor White
-    Write-Host "🌐 访问: http://localhost:8080/modules" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "💡 按 Ctrl+C 停止所有服务" -ForegroundColor Gray
+    Write-Host "✅ 系统启动完成 - http://localhost:8080" -ForegroundColor Green
 
     # 监控进程
     while ($true) {
         Start-Sleep -Seconds 5
         if ($global:weblogProcess.HasExited -or $global:klineProcess.HasExited) {
-            Write-Host "⚠️ 有服务退出，停止所有服务" -ForegroundColor Yellow
             break
         }
     }

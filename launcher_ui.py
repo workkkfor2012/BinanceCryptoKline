@@ -24,6 +24,7 @@ class KlineSystemLauncher:
         
         # 配置文件路径
         self.config_file = "launcher_config.json"
+        self.kline_config_file = "config/BinanceKlineConfig.toml"
         
         # 脚本配置
         self.scripts = {
@@ -100,19 +101,41 @@ class KlineSystemLauncher:
     def load_config(self):
         """加载配置文件"""
         try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    self.release_mode = config.get('release_mode', True)
-            else:
-                self.release_mode = True
+            # 从统一配置文件读取编译模式
+            self.release_mode = self.read_build_mode_from_config()
         except Exception as e:
-            self.release_mode = True
+            self.release_mode = False  # 默认为debug模式
             print(f"加载配置失败: {e}")
+
+    def read_build_mode_from_config(self):
+        """从BinanceKlineConfig.toml读取编译模式"""
+        try:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # 查找 [build] 部分的 mode 配置
+                    in_build_section = False
+                    for line in content.split('\n'):
+                        line = line.strip()
+                        if line == '[build]':
+                            in_build_section = True
+                        elif line.startswith('[') and line != '[build]':
+                            in_build_section = False
+                        elif in_build_section and line.startswith('mode'):
+                            # 提取模式值
+                            value = line.split('=')[1].strip().strip('"\'')
+                            return value.lower() == "release"
+            return False  # 默认为debug模式
+        except Exception:
+            return False
     
     def save_config(self):
         """保存配置文件"""
         try:
+            # 保存到统一配置文件
+            self.save_build_mode_to_config()
+
+            # 同时保存到launcher配置文件（保持兼容性）
             config = {
                 'release_mode': self.release_mode,
                 'last_updated': datetime.now().isoformat()
@@ -121,6 +144,39 @@ class KlineSystemLauncher:
                 json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存配置失败: {e}")
+
+    def save_build_mode_to_config(self):
+        """保存编译模式到BinanceKlineConfig.toml"""
+        try:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # 替换[build]部分的mode配置
+                lines = content.split('\n')
+                in_build_section = False
+                mode_value = "release" if self.release_mode else "debug"
+
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if stripped == '[build]':
+                        in_build_section = True
+                    elif stripped.startswith('[') and stripped != '[build]':
+                        in_build_section = False
+                    elif in_build_section and stripped.startswith('mode'):
+                        lines[i] = f'mode = "{mode_value}"'
+                        break
+
+                # 写回文件
+                with open(self.kline_config_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(lines))
+
+                self.log(f"✅ 编译模式已保存到配置文件: {mode_value}")
+            else:
+                self.log(f"⚠️ 配置文件不存在: {self.kline_config_file}")
+
+        except Exception as e:
+            raise Exception(f"保存编译模式失败: {e}")
     
     def create_ui(self):
         """创建用户界面"""
@@ -314,11 +370,7 @@ class KlineSystemLauncher:
         self.save_config()
         mode_text = "Release" if self.release_mode else "Debug"
         self.log(f"编译模式已切换为: {mode_text}")
-
-        # 询问是否立即更新所有脚本
-        if messagebox.askyesno("更新脚本",
-                              f"编译模式已切换为{mode_text}模式\n是否立即更新所有脚本文件？"):
-            self.update_all_scripts()
+        self.log("✅ 编译模式已保存到统一配置文件，脚本将自动使用新模式")
 
     def log(self, message):
         """添加日志消息"""
@@ -462,79 +514,15 @@ class KlineSystemLauncher:
             messagebox.showerror("查看失败", f"无法查看脚本: {e}")
 
     def update_all_scripts(self):
-        """更新所有脚本的编译模式"""
-        self.log("🔄 开始更新所有脚本...")
-
-        updated_count = 0
-        failed_count = 0
-
-        # 遍历所有脚本文件
-        all_scripts = []
-        for category_scripts in self.scripts.values():
-            all_scripts.extend(category_scripts.keys())
-
-        for script_file in all_scripts:
-            try:
-                if self.update_script_compile_mode(script_file):
-                    updated_count += 1
-                else:
-                    failed_count += 1
-            except Exception as e:
-                self.log(f"❌ 更新脚本失败 {script_file}: {e}")
-                failed_count += 1
-
-        self.log(f"✅ 脚本更新完成: 成功 {updated_count}, 失败 {failed_count}")
-
-        if failed_count > 0:
-            messagebox.showwarning("更新完成",
-                                 f"脚本更新完成\n成功: {updated_count}\n失败: {failed_count}")
-        else:
-            messagebox.showinfo("更新完成", f"所有脚本更新成功 ({updated_count} 个)")
+        """更新配置文件（不再需要更新脚本）"""
+        self.log("ℹ️ 使用统一配置文件，无需更新脚本")
+        self.log("✅ 脚本将自动从配置文件读取编译模式")
+        messagebox.showinfo("配置更新", "编译模式已保存到统一配置文件\n脚本将自动使用新的编译模式")
 
     def update_script_compile_mode(self, script_file):
-        """更新单个脚本的编译模式"""
-        if not os.path.exists(script_file):
-            self.log(f"⚠️ 脚本文件不存在: {script_file}")
-            return False
-
-        try:
-            # 读取脚本内容
-            with open(script_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            original_content = content
-
-            # 根据模式更新cargo命令
-            if self.release_mode:
-                # 替换为release模式
-                content = re.sub(r'cargo\s+run\s+--bin\s+(\w+)',
-                                r'cargo run --release --bin \1', content)
-                content = re.sub(r'cargo\s+build\s+--bin\s+(\w+)',
-                                r'cargo build --release --bin \1', content)
-                content = re.sub(r'cargo\s+run\s+--release\s+--release\s+--bin',
-                                r'cargo run --release --bin', content)  # 避免重复
-            else:
-                # 替换为debug模式（移除--release）
-                content = re.sub(r'cargo\s+run\s+--release\s+--bin\s+(\w+)',
-                                r'cargo run --bin \1', content)
-                content = re.sub(r'cargo\s+build\s+--release\s+--bin\s+(\w+)',
-                                r'cargo build --bin \1', content)
-
-            # 如果内容有变化，写回文件
-            if content != original_content:
-                with open(script_file, 'w', encoding='utf-8') as f:
-                    f.write(content)
-
-                mode_text = "Release" if self.release_mode else "Debug"
-                self.log(f"✅ 已更新 {script_file} 为 {mode_text} 模式")
-                return True
-            else:
-                self.log(f"ℹ️ {script_file} 无需更新")
-                return True
-
-        except Exception as e:
-            self.log(f"❌ 更新脚本失败 {script_file}: {e}")
-            return False
+        """已废弃：不再需要更新脚本，使用统一配置文件"""
+        self.log(f"ℹ️ 跳过脚本更新: {script_file} (使用统一配置文件)")
+        return True
 
     def stop_all_processes(self):
         """停止所有运行中的进程"""
@@ -602,16 +590,20 @@ class KlineSystemLauncher:
             self.log(f"⚠️ 加载日志等级配置失败: {e}")
 
     def read_kline_log_level(self):
-        """读取K线服务的日志等级"""
-        config_path = "config/aggregate_config.toml"
+        """读取K线服务的日志等级（使用默认日志级别）"""
         try:
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    # 简单的TOML解析，查找log_level
+                    # 查找 [logging] 部分的 default_log_level
+                    in_logging_section = False
                     for line in content.split('\n'):
-                        if line.strip().startswith('log_level'):
-                            # 提取等号后面的值，去掉引号
+                        line = line.strip()
+                        if line == '[logging]':
+                            in_logging_section = True
+                        elif line.startswith('[') and line != '[logging]':
+                            in_logging_section = False
+                        elif in_logging_section and line.startswith('default_log_level'):
                             value = line.split('=')[1].strip().strip('"\'')
                             return value
             return "info"  # 默认值
@@ -620,20 +612,19 @@ class KlineSystemLauncher:
 
     def read_weblog_log_level(self):
         """读取WebLog服务的日志等级"""
-        config_path = "src/weblog/config/logging_config.toml"
         try:
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    # 查找[weblog]部分的log_level
-                    in_weblog_section = False
+                    # 查找 [logging.services] 部分的 weblog
+                    in_services_section = False
                     for line in content.split('\n'):
                         line = line.strip()
-                        if line == '[weblog]':
-                            in_weblog_section = True
-                        elif line.startswith('[') and line != '[weblog]':
-                            in_weblog_section = False
-                        elif in_weblog_section and line.startswith('log_level'):
+                        if line == '[logging.services]':
+                            in_services_section = True
+                        elif line.startswith('[') and line != '[logging.services]':
+                            in_services_section = False
+                        elif in_services_section and line.startswith('weblog'):
                             value = line.split('=')[1].strip().strip('"\'')
                             return value
             return "info"  # 默认值
@@ -660,99 +651,63 @@ class KlineSystemLauncher:
             messagebox.showerror("设置失败", f"更新日志等级失败: {e}")
 
     def update_kline_log_level(self, level):
-        """更新K线服务的日志等级"""
-        config_path = "config/aggregate_config.toml"
+        """更新K线服务的日志等级（更新默认日志级别）"""
         try:
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
 
-                # 替换log_level行
+                # 替换[logging]部分的default_log_level
                 lines = content.split('\n')
+                in_logging_section = False
                 for i, line in enumerate(lines):
-                    if line.strip().startswith('log_level'):
-                        lines[i] = f'log_level = "{level}"'
+                    stripped = line.strip()
+                    if stripped == '[logging]':
+                        in_logging_section = True
+                    elif stripped.startswith('[') and stripped != '[logging]':
+                        in_logging_section = False
+                    elif in_logging_section and stripped.startswith('default_log_level'):
+                        lines[i] = f'default_log_level = "{level}"'
                         break
 
                 # 写回文件
-                with open(config_path, 'w', encoding='utf-8') as f:
+                with open(self.kline_config_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(lines))
 
                 self.log(f"✅ K线服务日志等级已更新为: {level}")
             else:
-                self.log(f"⚠️ 配置文件不存在: {config_path}")
+                self.log(f"⚠️ 配置文件不存在: {self.kline_config_file}")
 
         except Exception as e:
             raise Exception(f"更新K线服务日志等级失败: {e}")
 
     def update_weblog_log_level(self, level):
         """更新WebLog服务的日志等级"""
-        config_path = "src/weblog/config/logging_config.toml"
         try:
-            # 确保目录存在
-            os.makedirs(os.path.dirname(config_path), exist_ok=True)
-
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
 
-                # 替换[weblog]部分的log_level
+                # 替换[logging.services]部分的weblog
                 lines = content.split('\n')
-                in_weblog_section = False
+                in_services_section = False
                 for i, line in enumerate(lines):
                     stripped = line.strip()
-                    if stripped == '[weblog]':
-                        in_weblog_section = True
-                    elif stripped.startswith('[') and stripped != '[weblog]':
-                        in_weblog_section = False
-                    elif in_weblog_section and stripped.startswith('log_level'):
-                        lines[i] = f'log_level = "{level}"'
+                    if stripped == '[logging.services]':
+                        in_services_section = True
+                    elif stripped.startswith('[') and stripped != '[logging.services]':
+                        in_services_section = False
+                    elif in_services_section and stripped.startswith('weblog'):
+                        lines[i] = f'weblog = "{level}"'
                         break
 
                 # 写回文件
-                with open(config_path, 'w', encoding='utf-8') as f:
+                with open(self.kline_config_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(lines))
+
+                self.log(f"✅ WebLog服务日志等级已更新为: {level}")
             else:
-                # 创建新的配置文件
-                config_content = f"""# WebLog独立日志配置文件
-# 保持WebLog程序的独立性
-
-[weblog]
-# WebLog服务日志级别 (trace, debug, info, warn, error)
-log_level = "{level}"
-
-# Web服务端口
-web_port = 8080
-
-# 最大日志条目数
-max_log_entries = 10000
-
-[transport]
-# 日志传输方式 (named_pipe, file, console)
-log_transport = "named_pipe"
-
-# 命名管道名称
-pipe_name = "kline_log_pipe"
-
-[modules]
-# 特定模块的日志级别覆盖
-# 网络相关模块
-hyper = "warn"
-reqwest = "warn"
-tokio_tungstenite = "warn"
-tungstenite = "warn"
-
-# 数据库相关模块
-sqlx = "warn"
-
-# 其他第三方库
-serde = "warn"
-tracing = "info"
-"""
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    f.write(config_content)
-
-            self.log(f"✅ WebLog服务日志等级已更新为: {level}")
+                self.log(f"⚠️ 配置文件不存在: {self.kline_config_file}")
 
         except Exception as e:
             raise Exception(f"更新WebLog服务日志等级失败: {e}")

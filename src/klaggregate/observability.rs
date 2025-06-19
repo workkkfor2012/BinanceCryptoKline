@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tracing::{Event, Id, Subscriber, info, warn, error, debug};
+use tracing::{Event, Id, Subscriber, info, warn, error};
 use tracing_subscriber::{layer::Context, Layer};
 use tokio::sync::broadcast;
 use axum::{

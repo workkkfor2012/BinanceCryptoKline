@@ -41,7 +41,7 @@ impl TradeEventRouter {
         symbol: String,
         aggregator: Arc<SymbolKlineAggregator>,
     ) -> Result<()> {
-        debug!(target: "TradeEventRouter", event_name = "聚合器注册开始", symbol = %symbol, "注册品种聚合器: symbol={}", symbol);
+        info!(target: "TradeEventRouter", event_name = "聚合器注册开始", symbol = %symbol, "注册品种聚合器: symbol={}", symbol);
 
         let mut aggregators = self.aggregators.write().await;
 
@@ -55,7 +55,7 @@ impl TradeEventRouter {
         let mut route_count = self.route_count.write().await;
         route_count.insert(symbol.clone(), 0);
 
-        debug!(target: "TradeEventRouter", event_name = "聚合器注册完成", symbol = %symbol, "品种聚合器注册完成: symbol={}", symbol);
+        info!(target: "TradeEventRouter", event_name = "聚合器注册完成", symbol = %symbol, "品种聚合器注册完成: symbol={}", symbol);
         Ok(())
     }
     
@@ -133,7 +133,7 @@ impl TradeEventRouter {
         if error_count > 0 {
             warn!(target: "TradeEventRouter", "批量路由完成，有错误: success_count={}, error_count={}", success_count, error_count);
         } else {
-            debug!(target: "TradeEventRouter", "批量路由完成: success_count={}", success_count);
+            info!(target: "TradeEventRouter", "批量路由完成: success_count={}", success_count);
         }
         
         Ok(())

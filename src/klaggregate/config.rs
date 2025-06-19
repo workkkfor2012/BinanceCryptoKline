@@ -121,21 +121,8 @@ pub struct LoggingConfig {
     pub pipe_name: String,
 }
 
-impl Default for AggregateConfig {
-    fn default() -> Self {
-        Self {
-            database: DatabaseConfig::default(),
-            websocket: WebSocketConfig::default(),
-            buffer: BufferConfig::default(),
-            persistence: PersistenceConfig::default(),
-            logging: LoggingConfig::default(),
-            supported_intervals: DEFAULT_INTERVALS.iter().map(|s| s.to_string()).collect(),
-            max_symbols: DEFAULT_MAX_SYMBOLS,
-            buffer_swap_interval_ms: DEFAULT_BUFFER_SWAP_INTERVAL_MS,
-            persistence_interval_ms: DEFAULT_PERSISTENCE_INTERVAL_MS,
-        }
-    }
-}
+// 移除 Default 实现，强制从配置文件读取所有配置
+// impl Default for AggregateConfig 已被移除，配置必须从文件加载
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
@@ -156,8 +143,8 @@ impl Default for WebSocketConfig {
             proxy_port: 1080,
             websocket_url: "wss://fstream.binance.com/ws".to_string(),
             connection_timeout_secs: 30,
-            reconnect_interval_secs: 5,
-            max_reconnect_attempts: 10,
+            reconnect_interval_secs: 1,
+            max_reconnect_attempts: 300, // 5分钟 × 60秒 ÷ 1秒 = 300次
             heartbeat_interval_secs: 30,
         }
     }
@@ -314,9 +301,6 @@ impl AggregateConfig {
             .map(|s| s.as_str())
     }
     
-    /// 创建默认配置文件
-    pub fn create_default_config_file(path: &str) -> Result<()> {
-        let config = Self::default();
-        config.save_to_file(path)
-    }
+    // 移除 create_default_config_file 方法，不再支持创建默认配置文件
+    // 所有配置必须手动在配置文件中指定
 }
