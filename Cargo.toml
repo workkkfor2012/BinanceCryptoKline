@@ -21,12 +21,12 @@ path = "src/bin/kline_data_service.rs"
 
 
 [[bin]]
-name = "compare_klines"
-path = "src/bin/compare_klines.rs"
-
-[[bin]]
 name = "kline_aggregate_service"
 path = "src/bin/kline_aggregate_service.rs"
+
+[[bin]]
+name = "test_cerberus"
+path = "src/bin/test_cerberus.rs"
 
 
 
@@ -140,3 +140,5 @@ scopeguard = "1.2"
 crossbeam-channel = "0.5"
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros"] }
 toml = "0.8"
+dashmap = "5.5"
+uuid = { version = "1.0", features = ["v4"] }

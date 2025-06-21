@@ -3,7 +3,9 @@
 //! 启动完整的K线聚合系统，包括数据接入、聚合、存储和持久化。
 
 use kline_server::klaggregate::{KlineAggregateSystem, AggregateConfig};
-use kline_server::klaggregate::observability::WebSocketLogForwardingLayer;
+use kline_server::klcommon::log::{ModuleLayer, NamedPipeLogManager, TraceVisualizationLayer};
+use std::sync::Arc;
+use kline_server::klaggregate::cerberus::create_default_cerberus_layer;
 use kline_server::klcommon::{Result, AppError};
 use std::path::Path;
 use tokio::signal;
@@ -28,7 +30,7 @@ fn main() -> Result<()> {
     }
 
     // 初始化可观察性系统
-    init_observability_system()?;
+    let cerberus_engine = init_observability_system()?;
 
     // 创建Tokio运行时
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -36,16 +38,35 @@ fn main() -> Result<()> {
         .build()
         .map_err(|e| AppError::ConfigError(format!("创建Tokio运行时失败: {}", e)))?;
 
-    // 在运行时中执行异步逻辑
-    runtime.block_on(run())
+    // 创建应用程序的根Span，代表整个应用生命周期
+    let root_span = tracing::info_span!(
+        "kline_aggregate_app",
+        service = "kline_aggregate_service",
+        version = env!("CARGO_PKG_VERSION")
+    );
+
+    // 在根Span的上下文中运行整个应用
+    runtime.block_on(run_app(cerberus_engine).instrument(root_span))
 }
 
-/// 异步主逻辑函数
-#[instrument(target = LOG_TARGET, name = "kline_aggregate_service_run")]
-async fn run() -> Result<()> {
+/// 应用程序的核心业务逻辑
+#[instrument(name = "run_app", skip_all)]
+async fn run_app(cerberus_engine: Option<kline_server::klaggregate::cerberus::CerberusEngine>) -> Result<()> {
+    // 首先打印当前的日志级别配置
+    let current_log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "未设置".to_string());
+    info!(target: LOG_TARGET, event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
+
     trace!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
     debug!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
     info!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
+
+    // 启动 Cerberus 验证引擎（如果存在）
+    if let Some(engine) = cerberus_engine {
+        tokio::spawn(async move {
+            engine.start().await;
+        }.instrument(tracing::info_span!("cerberus_engine_task")));
+        info!(target: LOG_TARGET, event_name = "Cerberus验证引擎启动", "🐕 Cerberus 验证引擎已启动");
+    }
 
     // 加载配置
     let config = load_config().await?;
@@ -97,40 +118,40 @@ async fn run() -> Result<()> {
 }
 
 /// 初始化可观察性系统
-fn init_observability_system() -> Result<()> {
+fn init_observability_system() -> Result<Option<kline_server::klaggregate::cerberus::CerberusEngine>> {
     use std::sync::{Once, Mutex};
 
     // 使用更安全的方式存储初始化结果
     static OBSERVABILITY_INIT: Once = Once::new();
-    static INIT_RESULT: Mutex<Option<bool>> = Mutex::new(None);
+    static INIT_RESULT: Mutex<Option<Result<kline_server::klaggregate::cerberus::CerberusEngine>>> = Mutex::new(None);
 
     let mut init_success = false;
 
     OBSERVABILITY_INIT.call_once(|| {
         match init_observability_system_inner() {
-            Ok(_) => {
+            Ok(engine) => {
                 init_success = true;
                 if let Ok(mut result) = INIT_RESULT.lock() {
-                    *result = Some(true);
+                    *result = Some(Ok(engine));
                 }
             }
-            Err(_e) => {
+            Err(e) => {
                 if let Ok(mut result) = INIT_RESULT.lock() {
-                    *result = Some(false);
+                    *result = Some(Err(e));
                 }
             }
         }
     });
 
     // 检查初始化结果
-    if let Ok(result) = INIT_RESULT.lock() {
-        match *result {
-            Some(true) => Ok(()),
-            Some(false) => Err(AppError::ConfigError("可观察性系统初始化失败".to_string())),
+    if let Ok(mut result) = INIT_RESULT.lock() {
+        match result.take() {
+            Some(Ok(engine)) => Ok(Some(engine)),
+            Some(Err(e)) => Err(e),
             None => {
                 // 如果是第一次调用且在call_once中成功了
                 if init_success {
-                    Ok(())
+                    Ok(None) // 引擎已经被取走了
                 } else {
                     Err(AppError::ConfigError("可观察性系统初始化状态未知".to_string()))
                 }
@@ -142,44 +163,49 @@ fn init_observability_system() -> Result<()> {
 }
 
 /// 内部初始化函数，只会被调用一次
-fn init_observability_system_inner() -> Result<()> {
+fn init_observability_system_inner() -> Result<kline_server::klaggregate::cerberus::CerberusEngine> {
     // 从配置文件读取日志设置，配置文件必须存在
-    let (log_level, log_transport, pipe_name) = load_logging_config()?;
-
-    let log_forwarding_layer = match log_transport.as_str() {
-        "named_pipe" => {
-            WebSocketLogForwardingLayer::new_named_pipe(pipe_name.clone())
-        }
-        "websocket" => {
-            let web_port = std::env::var("WEB_PORT")
-                .unwrap_or_else(|_| "3000".to_string())
-                .parse::<u16>()
-                .unwrap_or(3000);
-            WebSocketLogForwardingLayer::new_websocket(web_port)
-        }
-        _ => {
-            WebSocketLogForwardingLayer::new_named_pipe(pipe_name.clone())
+    let (log_level, log_transport, pipe_name) = match load_logging_config() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("加载日志配置失败: {}", e);
+            return Err(e);
         }
     };
 
-    // 设置tracing订阅器，遵循WebLog日志规范
+    // 创建共享的日志管理器
+    let log_manager = Arc::new(NamedPipeLogManager::new(pipe_name.clone()));
+    log_manager.start_connection_task();
+
+    // 创建两个独立的日志层，共享同一个管理器
+    let module_layer = ModuleLayer::new(log_manager.clone());
+    let trace_layer = TraceVisualizationLayer::new(log_manager.clone());
+
+    // 创建 Cerberus 验证层
+    let (cerberus_layer, cerberus_engine) = create_default_cerberus_layer();
+
+    // 设置tracing订阅器，使用新的双层架构
     let init_result = match log_transport.as_str() {
         "named_pipe" => {
-            // 命名管道模式：只发送JSON格式到WebLog，不使用控制台输出层
+            // 命名管道模式：使用双层架构，职责分离
             Registry::default()
-                .with(log_forwarding_layer) // 只有JSON格式发送到WebLog
+                .with(cerberus_layer)  // Cerberus 验证层
+                .with(module_layer)    // 模块日志层（顶层日志）
+                .with(trace_layer)     // Trace 可视化层（Span 内日志）
                 .with(create_env_filter(&log_level))
                 .try_init()
         }
         _ => {
-            // 其他模式：保持原有行为
+            // 其他模式：回退到双层架构 + 控制台输出
             Registry::default()
-                .with(log_forwarding_layer)
+                .with(cerberus_layer)  // Cerberus 验证层
+                .with(module_layer)    // 模块日志层
+                .with(trace_layer)     // Trace 可视化层
                 .with(
                     tracing_subscriber::fmt::layer()
                         .with_target(true)
                         .with_level(true)
-                ) // 添加控制台输出层（文本格式）
+                ) // 添加控制台输出层
                 .with(create_env_filter(&log_level))
                 .try_init()
         }
@@ -249,7 +275,7 @@ fn init_observability_system_inner() -> Result<()> {
     tracing::warn!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 2, "🧪 测试日志2: 警告级别测试");
     tracing::error!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 3, "🧪 测试日志3: 错误级别测试");
 
-    Ok(())
+    Ok(cerberus_engine)
 }
 
 /// 加载日志配置

@@ -1,6 +1,6 @@
 // WebSocket模块 - 提供通用的WebSocket连接管理功能 (使用 fastwebsockets 实现)
 use crate::klcommon::{AppError, Database, KlineData, Result, PROXY_HOST, PROXY_PORT};
-use tracing::{info, error, debug, warn};
+use tracing::{info, error, debug, warn, instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -76,10 +76,12 @@ impl Default for ContinuousKlineConfig {
 }
 
 impl WebSocketConfig for ContinuousKlineConfig {
+    #[instrument(target = "ContinuousKlineConfig", skip_all)]
     fn get_proxy_settings(&self) -> (bool, String, u16) {
         (self.use_proxy, self.proxy_addr.clone(), self.proxy_port)
     }
 
+    #[instrument(target = "ContinuousKlineConfig", skip_all)]
     fn get_streams(&self) -> Vec<String> {
         let mut streams = Vec::new();
         for symbol in &self.symbols {
@@ -118,10 +120,12 @@ impl Default for AggTradeConfig {
 }
 
 impl WebSocketConfig for AggTradeConfig {
+    #[instrument(target = "AggTradeConfig", skip_all)]
     fn get_proxy_settings(&self) -> (bool, String, u16) {
         (self.use_proxy, self.proxy_addr.clone(), self.proxy_port)
     }
 
+    #[instrument(target = "AggTradeConfig", skip_all)]
     fn get_streams(&self) -> Vec<String> {
         self.symbols.iter()
             .map(|symbol| format!("{}@aggTrade", symbol.to_lowercase()))
@@ -130,6 +134,7 @@ impl WebSocketConfig for AggTradeConfig {
 }
 
 /// 创建订阅消息
+#[instrument(target = "klcommon::websocket", skip_all)]
 pub fn create_subscribe_message(streams: &[String]) -> String {
     json!({
         "method": "SUBSCRIBE",
@@ -212,6 +217,7 @@ pub struct AggTradeMessageHandler {
 }
 
 impl AggTradeMessageHandler {
+    #[instrument(target = "AggTradeMessageHandler", skip_all)]
     pub fn new(
         message_count: Arc<std::sync::atomic::AtomicUsize>,
         error_count: Arc<std::sync::atomic::AtomicUsize>,
@@ -224,6 +230,7 @@ impl AggTradeMessageHandler {
     }
 
     /// 创建带有交易数据发送器的消息处理器
+    #[instrument(target = "AggTradeMessageHandler", skip_all)]
     pub fn with_trade_sender(
         message_count: Arc<std::sync::atomic::AtomicUsize>,
         error_count: Arc<std::sync::atomic::AtomicUsize>,
@@ -321,6 +328,7 @@ impl MessageHandler for AggTradeMessageHandler {
 
 impl AggTradeMessageHandler {
     /// 解析归集交易消息
+    #[instrument(target = "AggTradeMessageHandler", skip_all, err)]
     async fn parse_agg_trade_message(&self, message: &str) -> Result<Option<BinanceRawAggTrade>> {
         // 解析JSON
         let json: serde_json::Value = serde_json::from_str(message)
@@ -358,6 +366,18 @@ impl AggTradeMessageHandler {
 
                 debug!(target: "MarketDataIngestor", "归集交易解析成功: {} {} @ {}",
                     agg_trade.symbol, agg_trade.quantity, agg_trade.price);
+
+                // 发出 Cerberus 验证事件
+                tracing::info!(
+                    target: "MarketDataIngestor",
+                    event_name = "trade_data_parsed",
+                    symbol = %agg_trade.symbol,
+                    price = agg_trade.price.parse::<f64>().unwrap_or(0.0),
+                    quantity = agg_trade.quantity.parse::<f64>().unwrap_or(0.0),
+                    timestamp_ms = agg_trade.trade_time as i64,
+                    "交易数据解析完成"
+                );
+
                 return Ok(Some(agg_trade));
             } else {
                 debug!(target: "MarketDataIngestor", "事件类型不是aggTrade: {}", event_type);
@@ -372,6 +392,7 @@ impl AggTradeMessageHandler {
 }
 
 /// 处理WebSocket消息
+#[instrument(target = "klcommon::websocket", skip_all)]
 pub async fn process_messages<H: MessageHandler>(
     mut rx: mpsc::Receiver<(usize, String)>,
     handler: Arc<H>,
@@ -445,6 +466,7 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     /// 创建新的连接管理器
+    #[instrument(target = "ConnectionManager", skip_all)]
     pub fn new(use_proxy: bool, proxy_addr: String, proxy_port: u16) -> Self {
         Self {
             use_proxy,
@@ -454,6 +476,7 @@ impl ConnectionManager {
     }
 
     /// 连接到WebSocket服务器
+    #[instrument(target = "ConnectionManager", skip_all, err)]
     pub async fn connect(&self, streams: &[String]) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
         // 设置主机和端口
         let host = "fstream.binance.com";
@@ -563,6 +586,7 @@ impl ConnectionManager {
     }
 
     /// 处理WebSocket消息
+    #[instrument(target = "ConnectionManager", skip_all)]
     pub async fn handle_messages(
         &self,
         connection_id: usize,
@@ -664,6 +688,7 @@ pub struct ContinuousKlineClient {
 
 impl ContinuousKlineClient {
     /// 创建新的连续合约K线客户端
+    #[instrument(target = "ContinuousKlineClient", skip_all)]
     pub fn new(config: ContinuousKlineConfig, db: Arc<Database>) -> Self {
         Self {
             config,
@@ -844,6 +869,7 @@ impl MessageHandler for ContinuousKlineMessageHandler {
 }
 
 /// 解析WebSocket消息
+#[instrument(target = "klcommon::websocket", skip_all, err)]
 fn parse_message(text: &str) -> Result<Option<(String, String, KlineData)>> {
     // 解析JSON
     let json: Value = serde_json::from_str(text)?;
@@ -903,6 +929,7 @@ fn parse_message(text: &str) -> Result<Option<(String, String, KlineData)>> {
 }
 
 /// 处理K线数据
+#[instrument(target = "klcommon::websocket", skip_all)]
 async fn process_kline_data(symbol: &str, interval: &str, kline_data: &KlineData, db: &Arc<Database>) {
     // 输出处理K线数据的详细信息
     info!(target: "MarketDataIngestor", "开始处理K线数据: symbol={}, interval={}, is_closed={}, start_time={}, end_time={}",
@@ -1000,6 +1027,7 @@ pub struct AggTradeClient {
 
 impl AggTradeClient {
     /// 创建新的归集交易客户端
+    #[instrument(target = "AggTradeClient", skip_all)]
     pub fn new(config: AggTradeConfig, db: Arc<Database>, intervals: Vec<String>) -> Self {
         Self {
             config,
@@ -1012,6 +1040,7 @@ impl AggTradeClient {
     }
 
     /// 创建带有外部消息处理器的归集交易客户端
+    #[instrument(target = "AggTradeClient", skip_all)]
     pub fn new_with_handler(
         config: AggTradeConfig,
         db: Arc<Database>,

@@ -1,0 +1,87 @@
+路径可视化前端开发计划
+📋 项目概述
+基于成功传输的 span 数据，开发专门的路径可视化前端页面，用于实时显示函数调用链路、执行耗时和调用关系。
+
+🏗️ 技术架构
+数据流
+Rust #[instrument] → UniversalLogForwardingLayer → WebSocket → 前端可视化
+事件类型
+span_start: 函数调用开始
+span_end: 函数调用结束
+log: 错误日志（可选）
+📁 文件结构计划
+src/weblog/static/
+├── trace_viewer.html          # 路径可视化主页面
+├── js/
+│   ├── trace-viewer.js        # 核心可视化逻辑
+│   ├── trace-parser.js        # Span数据解析器
+│   ├── trace-renderer.js      # 渲染引擎
+│   └── trace-timeline.js      # 时间轴组件
+├── css/
+│   └── trace-viewer.css       # 可视化样式
+└── lib/
+
+🎨 UI 设计方案
+页面布局
+🔧 核心功能模块
+1. 数据解析模块 (trace-parser.js)
+2. 时间轴渲染 (trace-timeline.js)
+3. 调用树渲染 (trace-renderer.js)
+4. 实时数据处理 (trace-viewer.js)
+📊 可视化特性
+时间轴视图
+横向时间轴显示函数执行时间段
+颜色编码表示不同模块
+支持缩放查看细节
+鼠标悬停显示详细信息
+调用树视图
+树形结构显示函数调用关系
+显示每个函数的执行耗时
+支持展开/折叠节点
+高亮最耗时的路径
+统计面板
+总执行时间
+函数调用次数
+最慢的函数
+调用深度统计
+过滤功能
+按模块过滤 (Database, BinanceApi, etc.)
+按耗时阈值过滤
+按时间范围过滤
+搜索特定函数名
+🎯 开发阶段
+Phase 1: 基础框架 (1-2天)
+创建 trace_viewer.html 基础页面
+实现 WebSocket 连接和数据接收
+基础的 span 数据解析
+Phase 2: 核心可视化 (2-3天)
+实现调用树渲染
+实现时间轴视图
+基础的交互功能
+Phase 3: 高级功能 (2-3天)
+过滤和搜索功能
+统计面板
+性能优化
+Phase 4: 优化完善 (1-2天)
+UI/UX 优化
+响应式设计
+错误处理
+🔗 集成点
+后端集成
+修改 observability.rs 中的路由，添加 /trace 页面
+确保 WebSocket 正确传输 span 数据
+现有系统集成
+在主导航中添加 "路径可视化" 链接
+保持与现有日志系统的兼容性
+📈 预期效果
+完成后将能够：
+
+实时查看函数调用链路
+识别性能瓶颈
+理解代码执行流程
+调试复杂的异步调用
+监控系统性能
+🚀 下次会话开始点
+从 trace_viewer.html 基础页面开始
+实现 WebSocket 连接和 span 数据解析
+创建第一个简单的调用树可视化

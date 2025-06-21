@@ -2,6 +2,8 @@
 ///
 /// 集中管理所有代理设置，便于统一修改
 
+use tracing::instrument;
+
 /// 代理服务器地址
 pub const PROXY_HOST: &str = "127.0.0.1";
 
@@ -21,6 +23,7 @@ pub enum ProxyType {
 pub const DEFAULT_PROXY_TYPE: ProxyType = ProxyType::Socks5;
 
 /// 获取完整的代理URL
+#[instrument(target = "klcommon::proxy", skip_all)]
 pub fn get_proxy_url() -> String {
     match DEFAULT_PROXY_TYPE {
         ProxyType::Http => format!("http://{}:{}", PROXY_HOST, PROXY_PORT),
@@ -54,11 +57,13 @@ impl Default for ProxyConfig {
 
 impl ProxyConfig {
     /// 创建新的代理配置
+    #[instrument(target = "ProxyConfig", skip_all)]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// 创建指定类型的代理配置
+    #[instrument(target = "ProxyConfig", skip_all)]
     pub fn with_type(proxy_type: ProxyType) -> Self {
         Self {
             use_proxy: true,
@@ -69,6 +74,7 @@ impl ProxyConfig {
     }
 
     /// 获取完整的代理URL
+    #[instrument(target = "ProxyConfig", skip_all)]
     pub fn get_url(&self) -> String {
         match self.proxy_type {
             ProxyType::Http => format!("http://{}:{}", self.host, self.port),

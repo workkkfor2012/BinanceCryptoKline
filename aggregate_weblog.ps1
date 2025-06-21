@@ -7,15 +7,29 @@ if (-not (Test-Path "Cargo.toml")) {
 }
 
 $config = Read-UnifiedConfig
-$aggregateLogLevel = $config.Logging.default_log_level
-$weblogLogLevel = $config.Logging.Services.weblog
-$pipeName = $config.Logging.pipe_name
-if (-not $pipeName.StartsWith("\\.\pipe\")) {
-    $pipeName = "\\.\pipe\$pipeName"
+
+if (-not $config) {
+    Write-Host "❌ 配置读取失败，使用默认配置" -ForegroundColor Red
+    $aggregateLogLevel = "trace"
+    $weblogLogLevel = "trace"
+    $pipeName = "\\.\pipe\kline_log_pipe"
+} else {
+    $aggregateLogLevel = $config.Logging.log_level
+    $weblogLogLevel = $config.Logging.Services.weblog
+    $pipeName = $config.Logging.pipe_name
+
+    # 确保管道名称格式正确
+    if ($pipeName -and -not $pipeName.StartsWith("\\.\pipe\")) {
+        $pipeName = "\\.\pipe\$pipeName"
+    } elseif (-not $pipeName) {
+        $pipeName = "\\.\pipe\kline_log_pipe"
+    }
 }
+
 $buildMode = Get-BuildMode
 
 Write-Host "🌐 启动WebLog+K线聚合系统 ($buildMode)" -ForegroundColor Green
+Write-Host "配置信息: 聚合日志级别=$aggregateLogLevel, WebLog日志级别=$weblogLogLevel, 管道名称=$pipeName" -ForegroundColor Cyan
 
 # 启动WebLog系统
 $weblogCargoCmd = Get-CargoCommand -BinaryName 'weblog'

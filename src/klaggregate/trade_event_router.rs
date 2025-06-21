@@ -87,9 +87,28 @@ impl TradeEventRouter {
                     // 更新路由计数
                     let mut route_count = self.route_count.write().await;
                     *route_count.entry(trade.symbol.clone()).or_insert(0) += 1;
+
+                    // 发出 Cerberus 路由成功验证事件
+                    info!(target: "TradeEventRouter",
+                        event_name = "route_success",
+                        symbol = %trade.symbol,
+                        price = trade.price,
+                        quantity = trade.quantity,
+                        "交易事件路由成功"
+                    );
                 }
                 Err(e) => {
                     error!(target: "TradeEventRouter", event_name = "聚合失败", symbol = %trade.symbol, error = %e, "处理品种交易失败");
+
+                    // 发出 Cerberus 路由失败验证事件
+                    error!(target: "TradeEventRouter",
+                        event_name = "route_failure",
+                        symbol = %trade.symbol,
+                        error = %e,
+                        price = trade.price,
+                        quantity = trade.quantity,
+                        "交易事件路由失败"
+                    );
 
                     // 更新错误计数
                     let mut error_count = self.error_count.write().await;
@@ -100,6 +119,16 @@ impl TradeEventRouter {
             }
         } else {
             warn!(target: "TradeEventRouter", event_name = "聚合器未找到", symbol = %trade.symbol, "未找到品种聚合器");
+
+            // 发出 Cerberus 路由失败验证事件
+            error!(target: "TradeEventRouter",
+                event_name = "route_failure",
+                symbol = %trade.symbol,
+                error = "aggregator_not_found",
+                price = trade.price,
+                quantity = trade.quantity,
+                "未找到品种聚合器"
+            );
 
             // 更新错误计数
             let mut error_count = self.error_count.write().await;

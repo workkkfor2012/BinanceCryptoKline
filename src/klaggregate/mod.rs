@@ -17,9 +17,9 @@ pub mod market_data_ingestor;
 pub mod trade_event_router;
 pub mod kline_data_persistence;
 pub mod config;
-pub mod observability;
 pub mod validation_rules;
 pub mod log_targets;
+pub mod cerberus;
 
 // 重新导出核心类型
 pub use types::*;

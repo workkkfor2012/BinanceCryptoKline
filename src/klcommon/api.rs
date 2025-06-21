@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// 将时间间隔转换为毫秒数
 /// 例如: "1m" -> 60000, "1h" -> 3600000
+#[instrument(target = "klcommon::api", skip_all)]
 pub fn interval_to_milliseconds(interval: &str) -> i64 {
     let last_char = interval.chars().last().unwrap_or('m');
     let value: i64 = interval[..interval.len() - 1].parse().unwrap_or(1);
@@ -27,6 +28,7 @@ pub fn interval_to_milliseconds(interval: &str) -> i64 {
 /// - 小时K线（1h, 4h）：应该在每小时的00分00秒开始
 /// - 日K线（1d）：应该在UTC 00:00:00开始
 /// - 周K线（1w）：应该在每周一的UTC 00:00:00开始
+#[instrument(target = "klcommon::api", skip_all)]
 pub fn get_aligned_time(timestamp_ms: i64, interval: &str) -> i64 {
     use chrono::{DateTime, Datelike, TimeZone, Utc};
 
@@ -73,6 +75,7 @@ pub struct BinanceApi {
 
 impl BinanceApi {
     /// 创建新的API客户端实例
+    #[instrument(target = "BinanceApi", skip_all)]
     pub fn new() -> Self {
         // 使用fapi.binance.com作为API端点
         let api_url = "https://fapi.binance.com".to_string();
@@ -80,6 +83,7 @@ impl BinanceApi {
     }
 
     /// 创建新的API客户端实例（带自定义URL）
+    #[instrument(target = "BinanceApi", skip_all)]
     pub fn new_with_url(api_url: String) -> Self {
         Self { api_url }
     }
@@ -116,7 +120,7 @@ impl BinanceApi {
     }
 
     /// 获取交易所信息
-    #[instrument(target = "klcommon::api", skip(self))]
+    #[instrument(target = "BinanceApi", skip_all, err)]
     pub async fn get_exchange_info(&self) -> Result<ExchangeInfo> {
         // 使用fapi.binance.com
         let fapi_url = format!("{}/fapi/v1/exchangeInfo", self.api_url);
@@ -196,6 +200,7 @@ impl BinanceApi {
     /// let symbols = api.get_trading_usdt_perpetual_symbols().await?;
     /// println!("获取到 {} 个交易对", symbols.len());
     /// ```
+    #[instrument(target = "BinanceApi", skip_all, err)]
     pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
         // 最大重试次数
         const MAX_RETRIES: usize = 5;
@@ -254,6 +259,7 @@ impl BinanceApi {
     }
 
     /// 下载连续合约K线数据
+    #[instrument(target = "BinanceApi", skip_all, err)]
     pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
         // 构建URL参数
         let mut url_params = format!(
@@ -355,6 +361,7 @@ impl BinanceApi {
     /// # 错误
     ///
     /// 如果API请求失败，返回相应的错误
+    #[instrument(target = "BinanceApi", skip_all, err)]
     pub async fn get_server_time(&self) -> Result<ServerTime> {
         // 构建API URL
         let fapi_url = format!("{}/fapi/v1/time", self.api_url);

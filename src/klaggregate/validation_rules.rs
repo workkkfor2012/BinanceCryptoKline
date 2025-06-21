@@ -2,7 +2,7 @@
 //! 
 //! 定义了各种规格验证规则的具体实现逻辑
 
-use super::observability::{ValidationRule, ValidationContext, ValidationResult, ValidationStatus, validation_rules};
+use crate::klcommon::log::observability::{ValidationRule, ValidationContext, ValidationResult, ValidationStatus, validation_rules};
 use serde_json::json;
 
 /// 创建所有默认验证规则

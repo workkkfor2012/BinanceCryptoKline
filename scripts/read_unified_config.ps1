@@ -34,6 +34,11 @@ function Read-UnifiedConfig {
             Buffer = @{}
             Persistence = @{}
             WebLog = @{}
+            # 顶层配置项
+            supported_intervals = @()
+            max_symbols = 0
+            buffer_swap_interval_ms = 0
+            persistence_interval_ms = 0
         }
         
         # 解析配置文件
@@ -120,8 +125,11 @@ function Read-UnifiedConfig {
                 # 存储到配置对象
                 if ($currentSubSection -ne "") {
                     $config[$currentSection][$currentSubSection][$key] = $value
-                } else {
+                } elseif ($currentSection -ne "") {
                     $config[$currentSection][$key] = $value
+                } else {
+                    # 顶层配置项
+                    $config[$key] = $value
                 }
             }
         }
@@ -197,7 +205,7 @@ function Get-LoggingConfig {
     
     # 返回默认配置
     return @{
-        default_log_level = "info"
+        log_level = "info"
         log_transport = "named_pipe"
         pipe_name = "kline_log_pipe"
         Services = @{
@@ -240,9 +248,8 @@ function Set-LoggingEnvironment {
         $env:RUST_LOG = $loggingConfig.Services.weblog
     } else {
         # 其他服务使用默认日志级别
-        $env:RUST_LOG = $loggingConfig.default_log_level
+        $env:RUST_LOG = $loggingConfig.log_level
     }
 }
 
-# 导出函数
-Export-ModuleMember -Function Read-UnifiedConfig, Get-BuildMode, Get-CargoCommand, Get-LoggingConfig, Set-LoggingEnvironment
+# 脚本模式下不需要导出函数

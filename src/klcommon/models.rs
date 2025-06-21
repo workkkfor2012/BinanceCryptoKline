@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::instrument;
 
 /// 表示币安K线/蜡烛图 - 数据库存储格式
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +96,7 @@ pub struct KlineBarDataInternal {
 
 /// 将内部K线数据转换为标准K线Bar
 impl KlineBarDataInternal {
+    #[instrument(target = "KlineBarDataInternal", skip_all)]
     pub fn to_kline_bar(&self, symbol: &str, period_ms: i64) -> KlineBar {
         KlineBar {
             symbol: symbol.to_string(),
@@ -115,6 +117,7 @@ impl KlineBarDataInternal {
 
 /// 将K线Bar转换为标准Kline (用于数据库存储)
 impl KlineBar {
+    #[instrument(target = "KlineBar", skip_all)]
     pub fn to_kline(&self) -> Kline {
         Kline {
             open_time: self.open_time_ms,
@@ -135,6 +138,7 @@ impl KlineBar {
 
 impl Kline {
     /// 从原始K线数据创建K线对象
+    #[instrument(target = "Kline", skip_all)]
     pub fn from_raw_kline(raw: &[serde_json::Value]) -> Option<Self> {
         if raw.len() < 12 {
             return None;
@@ -157,6 +161,7 @@ impl Kline {
     }
 
     /// 转换为CSV记录
+    #[instrument(target = "Kline", skip_all)]
     pub fn to_csv_record(&self) -> Vec<String> {
         vec![
             self.open_time.to_string(),
@@ -276,6 +281,7 @@ pub struct DownloadResult {
 }
 
 /// i32字段的默认值
+#[instrument(target = "klcommon::models", skip_all)]
 fn default_i32() -> i32 {
     0
 }
@@ -319,6 +325,7 @@ pub struct KlineData {
 
 impl KlineData {
     /// 转换为标准K线格式
+    #[instrument(target = "KlineData", skip_all)]
     pub fn to_kline(&self) -> Kline {
         Kline {
             open_time: self.start_time,

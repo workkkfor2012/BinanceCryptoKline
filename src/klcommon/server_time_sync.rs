@@ -1,5 +1,5 @@
 use crate::klcommon::{BinanceApi, Result};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument, Instrument};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ pub struct ServerTimeSyncManager {
 
 impl ServerTimeSyncManager {
     /// 创建新的服务器时间同步管理器
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn new() -> Self {
         Self {
             api: BinanceApi::new(),
@@ -34,16 +35,19 @@ impl ServerTimeSyncManager {
     }
 
     /// 获取当前的时间差值
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn get_time_diff(&self) -> i64 {
         self.time_diff.load(Ordering::SeqCst)
     }
 
     /// 获取当前的网络延迟
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn get_network_delay(&self) -> i64 {
         self.network_delay.load(Ordering::SeqCst)
     }
 
     /// 获取最后一次同步时间
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn get_last_sync_time(&self) -> i64 {
         self.last_sync_time.load(Ordering::SeqCst)
     }
@@ -51,6 +55,7 @@ impl ServerTimeSyncManager {
     /// 获取校准后的服务器时间
     ///
     /// 基于本地时间和时间差值计算出校准后的服务器时间
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn get_calibrated_server_time(&self) -> i64 {
         let local_time = Utc::now().timestamp_millis();
         let time_diff = self.get_time_diff();
@@ -60,6 +65,7 @@ impl ServerTimeSyncManager {
     /// 检查时间同步是否有效
     ///
     /// 如果最后一次同步时间超过5分钟，认为时间同步可能失效
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn is_time_sync_valid(&self) -> bool {
         let last_sync = self.get_last_sync_time();
         if last_sync == 0 {
@@ -74,6 +80,7 @@ impl ServerTimeSyncManager {
     /// 计算最优请求发送时间
     ///
     /// 基于当前的时间差值和网络延迟，计算下一分钟开始前的最优请求发送时间
+    #[instrument(target = "ServerTimeSyncManager", skip_all)]
     pub fn calculate_optimal_request_time(&self) -> i64 {
         // 获取当前本地时间
         let local_time = Utc::now().timestamp_millis();
@@ -95,6 +102,7 @@ impl ServerTimeSyncManager {
     }
 
     /// 只进行一次服务器时间同步，不启动定时任务
+    #[instrument(target = "ServerTimeSyncManager", skip_all, err)]
     pub async fn sync_time_once(&self) -> Result<(i64, i64)> {
         info!(target: "server_time_sync", "开始与币安服务器进行时间同步");
 
@@ -129,6 +137,7 @@ impl ServerTimeSyncManager {
     }
 
     /// 启动服务器时间同步任务
+    #[instrument(target = "ServerTimeSyncManager", skip_all, err)]
     pub async fn start(&self) -> Result<()> {
         info!(target: "server_time_sync", "启动服务器时间同步管理器");
 
@@ -148,6 +157,7 @@ impl ServerTimeSyncManager {
     }
 
     /// 启动独立的时间同步任务（每分钟的第30秒运行）
+    #[instrument(target = "ServerTimeSyncManager", skip_all, err)]
     async fn start_time_sync_task(&self) -> Result<tokio::task::JoinHandle<()>> {
         let api = self.api.clone();
         let time_diff = self.time_diff.clone();
@@ -206,7 +216,7 @@ impl ServerTimeSyncManager {
                     }
                 }
             }
-        });
+        }.instrument(tracing::info_span!("server_time_sync_task")));
 
         Ok(handle)
     }

@@ -351,6 +351,49 @@
 
         .dynamic-modules-area .module {
             min-height: 400px;
+            transition: all 0.3s ease;
+        }
+
+        /* 模块扩展状态样式 */
+        .dynamic-modules-area.has-expanded-module {
+            display: block; /* 改为块布局以支持单个模块占满 */
+        }
+
+        .dynamic-modules-area .module.expanded {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 1000;
+            background-color: #0a0a0a;
+            border: 2px solid #00ffff;
+            border-radius: 0;
+            margin: 0;
+            min-height: 100vh;
+        }
+
+        .dynamic-modules-area .module.expanded .module-title {
+            color: #ffff00;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .dynamic-modules-area .module.expanded .module-title:hover {
+            color: #ffffff;
+            text-shadow: 0 0 5px #ffff00;
+        }
+
+        /* 普通模块标题样式 */
+        .module-title {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s ease;
+        }
+
+        .module-title:hover {
+            color: #ffffff;
+            text-shadow: 0 0 3px #00ffff;
         }
 
         /* 搜索面板样式 */
@@ -581,6 +624,12 @@
 
             // 处理新的日志条目
             processLogEntry(logEntry) {
+                // 🏷️ 【关键过滤】index.html 只处理模块日志，忽略 trace 日志
+                if (logEntry.log_type === 'trace') {
+                    // trace 类型的日志应该由 trace_viewer.html 处理，这里直接忽略
+                    return;
+                }
+
                 this.allLogs.push(logEntry);
                 this.logCount++;
                 this.lastLogTime = new Date();
@@ -1119,6 +1168,7 @@
                 this.logBuffers = new Map(); // 日志缓冲区，用于管理每个终端的日志
                 this.searchManagers = new Map(); // 搜索管理器
                 this.maxLines = 100000000; // 每个终端最大行数
+                this.expandedModule = null; // 当前扩展的模块名称
 
                 this.terminalTheme = {
                     background: '#000000',
@@ -1276,21 +1326,34 @@
             formatLogEntry(logEntry) {
                 const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
                 const level = logEntry.level.padEnd(5);
-                const target = logEntry.target.padEnd(20);
+                const target = logEntry.target; // target不再需要填充，因为缩进会处理对齐
 
+                // 1. 根据日志级别设置颜色
                 let color = '';
                 switch (logEntry.level.toUpperCase()) {
                     case 'ERROR': color = '\x1b[31m'; break; // 红色
-                    case 'WARN': color = '\x1b[33m'; break;  // 黄色
-                    case 'INFO': color = '\x1b[32m'; break;  // 绿色
+                    case 'WARN':  color = '\x1b[33m'; break; // 黄色
+                    case 'INFO':  color = '\x1b[32m'; break; // 绿色
                     case 'DEBUG': color = '\x1b[36m'; break; // 青色
-                    default: color = '\x1b[37m'; break;      // 白色
+                    default:      color = '\x1b[37m'; break; // 白色
+                }
+                const reset = '\x1b[0m';
+
+                // 2. 【核心增强】检查并根据 span.hierarchy 生成缩进
+                let indent = '';
+                if (logEntry.span && logEntry.span.hierarchy && logEntry.span.hierarchy.length > 1) {
+                    const depth = logEntry.span.hierarchy.length - 1;
+                    // 使用空格和连接符创建视觉上的树状结构
+                    indent = '  '.repeat(depth - 1) + '└─ ';
                 }
 
-                const reset = '\x1b[0m';
-                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
+                // 3. 提取消息内容
+                const message = logEntry.message || JSON.stringify(logEntry.fields);
 
-                return `${color}[${timestamp}] ${level} ${target}${reset} ${aggregatedPrefix}${logEntry.message}`;
+                // 4. 组合成最终的、带缩进的日志行
+                // 格式: [时间] LEVEL   [缩进]TARGET: message
+                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
+                return `${color}[${timestamp}] ${level}${reset} ${indent}\x1b[33m${target.padEnd(25 - indent.length)}\x1b[0m: ${aggregatedPrefix}${message}`;
             }
 
             // 格式化原始日志条目 - 用于实时原始日志，显示完整JSON格式
@@ -1478,7 +1541,7 @@
 
                 moduleDiv.innerHTML = `
                     <div class="module-header">
-                        <div class="module-title">${moduleName} | 总日志: <span id="stats-${moduleName}-total">${moduleInfo.totalLogs}</span></div>
+                        <div class="module-title" id="title-${moduleName}" title="双击切换全屏显示">${moduleName} | 总日志: <span id="stats-${moduleName}-total">${moduleInfo.totalLogs}</span></div>
                         <div class="module-status status-running">运行中</div>
                     </div>
                     <!-- 搜索控制面板 -->
@@ -1509,6 +1572,16 @@
                 searchManager.initializeSearch(moduleName);
                 this.searchManagers.set(moduleName, searchManager);
 
+                // 为模块标题添加双击事件监听器
+                const titleElement = document.getElementById(`title-${moduleName}`);
+                if (titleElement) {
+                    titleElement.addEventListener('dblclick', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.toggleModuleExpansion(moduleName);
+                    });
+                }
+
                 // 更新统计信息
                 this.updateModuleStats(moduleName, moduleInfo);
             }
@@ -1517,6 +1590,86 @@
             updateModuleStats(moduleName, moduleInfo) {
                 const totalEl = document.getElementById(`stats-${moduleName}-total`);
                 if (totalEl) totalEl.textContent = moduleInfo.totalLogs;
+            }
+
+            // 切换模块扩展状态
+            toggleModuleExpansion(moduleName) {
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) {
+                    console.error('找不到模块或容器:', moduleName);
+                    return;
+                }
+
+                if (this.expandedModule === moduleName) {
+                    // 当前模块已扩展，恢复正常大小
+                    this.collapseModule(moduleName);
+                } else {
+                    // 扩展当前模块
+                    this.expandModule(moduleName);
+                }
+            }
+
+            // 扩展模块到全屏
+            expandModule(moduleName) {
+                // 如果有其他模块已扩展，先收起
+                if (this.expandedModule && this.expandedModule !== moduleName) {
+                    this.collapseModule(this.expandedModule);
+                }
+
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) return;
+
+                // 添加扩展样式
+                moduleDiv.classList.add('expanded');
+                dynamicContainer.classList.add('has-expanded-module');
+
+                // 记录当前扩展的模块
+                this.expandedModule = moduleName;
+
+                // 延迟适配终端大小，确保DOM更新完成
+                setTimeout(() => {
+                    const fitAddon = this.fitAddons.get(moduleName);
+                    if (fitAddon) {
+                        try {
+                            fitAddon.fit();
+                            console.log(`📏 模块 ${moduleName} 已扩展并重新适配终端大小`);
+                        } catch (e) {
+                            console.error('适配终端大小失败:', e);
+                        }
+                    }
+                }, 100);
+            }
+
+            // 收起模块到正常大小
+            collapseModule(moduleName) {
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) return;
+
+                // 移除扩展样式
+                moduleDiv.classList.remove('expanded');
+                dynamicContainer.classList.remove('has-expanded-module');
+
+                // 清除扩展状态
+                this.expandedModule = null;
+
+                // 延迟适配终端大小，确保DOM更新完成
+                setTimeout(() => {
+                    const fitAddon = this.fitAddons.get(moduleName);
+                    if (fitAddon) {
+                        try {
+                            fitAddon.fit();
+                            console.log(`📏 模块 ${moduleName} 已收起并重新适配终端大小`);
+                        } catch (e) {
+                            console.error('适配终端大小失败:', e);
+                        }
+                    }
+                }, 100);
             }
 
             // 初始化静态终端
@@ -1533,6 +1686,20 @@
                 const rawLogsSearchManager = new SearchManager();
                 rawLogsSearchManager.initializeSearch('raw-logs');
                 this.searchManagers.set('raw-logs', rawLogsSearchManager);
+
+                // 添加全局键盘事件监听器
+                this.initializeGlobalKeyboardEvents();
+            }
+
+            // 初始化全局键盘事件
+            initializeGlobalKeyboardEvents() {
+                document.addEventListener('keydown', (e) => {
+                    // ESC键退出全屏模式
+                    if (e.key === 'Escape' && this.expandedModule) {
+                        e.preventDefault();
+                        this.collapseModule(this.expandedModule);
+                    }
+                });
             }
         }
 
@@ -1572,6 +1739,14 @@
                     console.log('✅ WebSocket连接成功');
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
+                    this.updateConnectionStatus('已连接, 正在订阅...');
+
+                    // ✨ 发送订阅消息 - 这个页面只关心模块日志
+                    const subscriptionMessage = {
+                        subscribe: 'module'
+                    };
+                    this.ws.send(JSON.stringify(subscriptionMessage));
+                    console.log('📤 已发送订阅请求: module');
                     this.updateConnectionStatus('已连接');
                 };
 
@@ -1814,13 +1989,28 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(() => {
                     console.log('🔄 窗口大小改变，适配所有终端');
-                    terminalManager.fitAddons.forEach(fitAddon => {
-                        try {
-                            fitAddon.fit();
-                        } catch (e) {
-                            // 忽略可能的错误，例如当终端容器被隐藏时
+
+                    // 如果有扩展的模块，优先适配它
+                    if (terminalManager.expandedModule) {
+                        const expandedFitAddon = terminalManager.fitAddons.get(terminalManager.expandedModule);
+                        if (expandedFitAddon) {
+                            try {
+                                expandedFitAddon.fit();
+                                console.log(`📏 优先适配扩展模块: ${terminalManager.expandedModule}`);
+                            } catch (e) {
+                                console.error('适配扩展模块失败:', e);
+                            }
                         }
-                    });
+                    } else {
+                        // 没有扩展模块时，适配所有终端
+                        terminalManager.fitAddons.forEach(fitAddon => {
+                            try {
+                                fitAddon.fit();
+                            } catch (e) {
+                                // 忽略可能的错误，例如当终端容器被隐藏时
+                            }
+                        });
+                    }
                 }, 250); // 250ms延迟
             });
         });

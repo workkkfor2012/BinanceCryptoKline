@@ -1,6 +1,6 @@
 use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, AppError};
 use crate::klcommon::api::get_aligned_time;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn, error, instrument, Instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
@@ -28,13 +28,33 @@ pub struct KlineBackfiller {
     db: Arc<Database>,
     api: BinanceApi,
     intervals: Vec<String>,
+    test_mode: bool,
+    test_symbols: Vec<String>,
 }
 
 impl KlineBackfiller {
     /// 创建新的K线补齐器实例
     pub fn new(db: Arc<Database>, intervals: Vec<String>) -> Self {
         let api = BinanceApi::new();
-        Self { db, api, intervals }
+        Self {
+            db,
+            api,
+            intervals,
+            test_mode: false,
+            test_symbols: vec![],
+        }
+    }
+
+    /// 创建测试模式的K线补齐器实例
+    pub fn new_test_mode(db: Arc<Database>, intervals: Vec<String>, test_symbols: Vec<String>) -> Self {
+        let api = BinanceApi::new();
+        Self {
+            db,
+            api,
+            intervals,
+            test_mode: true,
+            test_symbols,
+        }
     }
 
     /// 更新补齐K线的统计信息并每30秒输出一次摘要日志
@@ -78,18 +98,27 @@ impl KlineBackfiller {
     }
 
     /// 运行一次性补齐流程
+    #[instrument(name = "backfill_run_once", target = "backfill", skip_all)]
     pub async fn run_once(&self) -> Result<()> {
         info!(target: "backfill", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
-        // 1. 获取所有正在交易的U本位永续合约交易对
-        let api = BinanceApi::new();
-        let all_symbols = match api.get_trading_usdt_perpetual_symbols().await {
-            Ok(symbols) => symbols,
-            Err(e) => {
-                // 获取交易对失败是严重错误，直接返回错误并结束程序
-                error!(target: "backfill", "获取交易对信息失败: {}", e);
-                return Err(AppError::ApiError(format!("获取交易对信息失败: {}", e)));
+        // 1. 获取交易对列表
+        let all_symbols = if self.test_mode {
+            info!(target: "backfill", "🔧 测试模式已启用，限制交易对为: {:?}", self.test_symbols);
+            self.test_symbols.clone()
+        } else {
+            info!(target: "backfill", "📡 获取所有正在交易的U本位永续合约交易对...");
+            match self.api.get_trading_usdt_perpetual_symbols().await {
+                Ok(symbols) => {
+                    info!(target: "backfill", "✅ 获取到 {} 个交易对", symbols.len());
+                    symbols
+                },
+                Err(e) => {
+                    // 获取交易对失败是严重错误，直接返回错误并结束程序
+                    error!(target: "backfill", "❌ 获取交易对信息失败: {}", e);
+                    return Err(AppError::ApiError(format!("获取交易对信息失败: {}", e)));
+                }
             }
         };
 
@@ -133,7 +162,12 @@ impl KlineBackfiller {
         let current_time = chrono::Utc::now().timestamp_millis();
 
         // 5.1 为已存在的品种创建补齐任务
+        // 【测试模式】只处理指定的交易对
         for (symbol, intervals) in existing_symbol_intervals {
+            // 只处理我们指定的交易对
+            if !all_symbols.contains(&symbol) {
+                continue;
+            }
             for interval in intervals {
                 // 获取最后一根K线的时间戳
                 if let Some(last_timestamp) = self.db.get_latest_kline_timestamp(&symbol, &interval)? {
@@ -260,7 +294,10 @@ impl KlineBackfiller {
             let failed_tasks_counter_clone = failed_tasks_counter.clone();
             let task_clone = task.clone();
 
-            let handle = tokio::spawn(async move {
+            let symbol = task.symbol.clone();
+            let interval = task.interval.clone();
+            let handle = tokio::spawn(
+                async move {
                 // 获取信号量许可
                 let _permit = semaphore_clone.acquire().await.unwrap();
 
@@ -432,7 +469,12 @@ impl KlineBackfiller {
                         Err(e)
                     }
                 }
-            });
+            }.instrument(tracing::info_span!(
+                "download_kline_task",
+                symbol = %symbol,
+                interval = %interval,
+                target = "backfill"
+            )));
 
             handles.push(handle);
         }
@@ -713,6 +755,8 @@ impl KlineBackfiller {
                 let retry_error_reasons_clone = retry_error_reasons.clone();
                 let task_clone = task.clone();
 
+                let symbol = task.symbol.clone();
+                let interval = task.interval.clone();
                 let handle = tokio::spawn(async move {
                     // 获取信号量许可
                     let _permit = semaphore_clone.acquire().await.unwrap();
@@ -819,7 +863,12 @@ impl KlineBackfiller {
                             Err(e)
                         }
                     }
-                });
+                }.instrument(tracing::info_span!(
+                    "retry_download_task",
+                    symbol = %symbol,
+                    interval = %interval,
+                    target = "backfill"
+                )));
 
                 retry_handles.push(handle);
             }

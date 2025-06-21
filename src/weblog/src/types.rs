@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 
-/// 日志条目 - 保持与旧版本完全兼容
+/// 日志条目 - 支持 log_type 字段用于前端分类处理
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub timestamp: DateTime<Utc>,
@@ -19,15 +19,21 @@ pub struct LogEntry {
     pub line: Option<u32>,
     pub fields: HashMap<String, serde_json::Value>,
     pub span: Option<SpanInfo>,
+    /// 日志类型：用于前端区分处理 ("module" 或 "trace")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_type: Option<String>,
 }
 
-/// Span信息（简化版）- 保持与旧版本完全兼容
+/// Span信息（增强版）- 支持层级结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpanInfo {
     pub name: String,
     pub target: String,
     pub id: Option<String>,
     pub parent_id: Option<String>,
+    /// 调用层级结构（从根到当前的函数名数组）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy: Option<Vec<String>>,
 }
 
 /// WebSocket消息协议 - 极简版本

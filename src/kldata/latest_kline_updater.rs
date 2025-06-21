@@ -1,5 +1,5 @@
 use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, ServerTimeSyncManager};
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error, debug, Instrument};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -166,6 +166,8 @@ impl LatestKlineUpdater {
             let db_clone = self.db.clone();
             let success_count_clone = success_count.clone();
 
+            let symbol = task.symbol.clone();
+            let interval = task.interval.clone();
             let handle = tokio::spawn(async move {
                 // 获取信号量许可
                 let _permit = semaphore_clone.acquire().await.unwrap();
@@ -199,7 +201,12 @@ impl LatestKlineUpdater {
                         Err(e)
                     }
                 }
-            });
+            }.instrument(tracing::info_span!(
+                "update_latest_kline_task",
+                symbol = %symbol,
+                interval = %interval,
+                target = "latest_updater"
+            )));
 
             handles.push(handle);
         }
