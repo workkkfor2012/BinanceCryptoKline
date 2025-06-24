@@ -142,3 +142,4 @@ sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros"] }
 toml = "0.8"
 dashmap = "5.5"
 uuid = { version = "1.0", features = ["v4"] }
+md5 = "0.7"

@@ -68,8 +68,21 @@ impl DbWriteQueueProcessor {
                 // 尝试从队列中获取任务，最多等待100毫秒
                 match self.receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(task) => {
-                        // 简化的数据库写入处理，不创建详细的span以减少日志噪音
-                        let result = self.process_write_task(task.symbol.as_str(), task.interval.as_str(), &task.klines);
+                        // ✨【关键修复】✨ 使用传递过来的 parent_span 来建立正确的追踪上下文
+                        // 为每个被处理的任务创建一个新的 span，并将其设置为 parent_span 的子 span
+                        let db_write_span = tracing::info_span!(
+                            parent: &task.parent_span,  // 明确指定父 span
+                            "db_write_task",
+                            symbol = %task.symbol,
+                            interval = %task.interval,
+                            klines_count = task.klines.len(),
+                            target = "db"
+                        );
+
+                        // 使用 .in_scope() 来包裹实际的工作，确保所有内部调用都在正确的追踪上下文中
+                        let result = db_write_span.in_scope(|| {
+                            self.process_write_task(task.symbol.as_str(), task.interval.as_str(), &task.klines)
+                        });
 
                         // 发送结果
                         if let Err(e) = task.result_sender.send(result) {
@@ -197,6 +210,7 @@ impl DbWriteQueueProcessor {
     }
 
     /// 确保表存在
+    #[instrument(target = "DbWriteQueueProcessor", skip_all, err)]
     fn ensure_symbol_table(&self, conn: &rusqlite::Connection, _symbol: &str, _interval: &str, table_name: &str) -> Result<()> {
         // 创建表
         let create_table_sql = format!(
@@ -355,6 +369,7 @@ impl Database {
     }
 
     /// Save klines to the database using the write queue
+    #[instrument(target = "Database", skip_all, err)]
     pub fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);

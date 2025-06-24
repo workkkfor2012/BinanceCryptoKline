@@ -1,21 +1,58 @@
-//! 轨迹提炼器模块
+//! 轨迹提炼器模块 v2 (内置循环/并发模式识别)
 //!
-//! 负责在内存中构建完整的调用树，并按需生成对大模型友好的文本摘要。
-//! 这个模块与现有的程序员可视化系统并行工作，专注于为AI分析提供简洁的执行路径。
+//! 负责在内存中构建语义化的调用树，能够识别并压缩循环结构，
+//! 并为每个循环内部的不同执行路径分支进行分类和聚合。
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{Id, span, event, Subscriber, Level};
 use tracing_subscriber::{layer::Context, Layer};
-use std::fmt;
+use std::fmt::{self, Write};
 
-// --- 1. 定义核心数据结构 ---
+// --- 1. 核心数据结构 ---
 
-/// 表示调用树中的一个节点 (Node)
+/// ✨ [新增] 循环体内一次迭代的路径原型
+#[derive(Debug, Clone)]
+pub struct LoopIterationArchetype {
+    pub path_hash: String,
+    // 只存储代表性节点的Arc引用，避免数据重复和循环引用
+    pub representative_node: Arc<RwLock<DistilledTraceNode>>,
+    pub count: usize,
+    pub has_error: bool,
+    pub total_duration_ms: f64,
+    pub min_duration_ms: f64,
+    pub max_duration_ms: f64,
+}
+
+impl LoopIterationArchetype {
+    fn avg_duration_ms(&self) -> f64 {
+        if self.count == 0 { 0.0 } else { self.total_duration_ms / self.count as f64 }
+    }
+}
+
+/// ✨ [修改] 节点类型枚举，增加对Loop的支持
+#[derive(Debug, Clone)]
+pub enum NodeType {
+    Call,
+    Loop {
+        iterator_type: String,
+        task_count: usize,
+        concurrency: usize,
+        // 存储循环体内所有不同执行路径的聚合信息
+        iteration_archetypes: HashMap<String, LoopIterationArchetype>,
+    },
+}
+
+impl Default for NodeType {
+    fn default() -> Self { NodeType::Call }
+}
+
+/// ✨ [修改] 调用树节点结构，增加NodeType
 #[derive(Debug)]
 pub struct DistilledTraceNode {
     pub name: String,
+    pub node_type: NodeType, // 新增
     pub fields: HashMap<String, String>,
     pub start_time: Instant,
     pub duration_ms: Option<f64>,
@@ -23,13 +60,26 @@ pub struct DistilledTraceNode {
     pub children: Vec<Arc<RwLock<DistilledTraceNode>>>,
     pub has_error: bool,
     pub error_messages: Vec<String>,
-    is_critical_path: bool, // 内部状态，用于渲染
+    is_critical_path: bool,
 }
 
 impl DistilledTraceNode {
+    // ✨ [修改] new函数，根据span名称和字段自动判断节点类型
     fn new(name: String, fields: HashMap<String, String>) -> Self {
+        let node_type = if name.ends_with("_loop") {
+            NodeType::Loop {
+                iterator_type: fields.get("iterator_type").cloned().unwrap_or_else(|| "item".to_string()),
+                task_count: fields.get("task_count").and_then(|s| s.parse().ok()).unwrap_or(0),
+                concurrency: fields.get("concurrency").and_then(|s| s.parse().ok()).unwrap_or(1),
+                iteration_archetypes: HashMap::new(),
+            }
+        } else {
+            NodeType::Call
+        };
+
         Self {
             name,
+            node_type,
             fields,
             start_time: Instant::now(),
             duration_ms: None,
@@ -243,20 +293,20 @@ where
         }
     }
 
+    // ✨ on_close 是所有魔法发生的地方
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
         let span = if let Some(span) = ctx.span(&id) { span } else { return };
 
-        // 先获取node_arc的克隆，避免生命周期问题
         let node_arc = if let Some(node_arc) = span.extensions().get::<Arc<RwLock<DistilledTraceNode>>>() {
             node_arc.clone()
         } else {
             return;
         };
 
-        // 检查是否为根节点（在使用span之前）
         let is_root = span.parent().is_none();
+        let mut is_loop_node = false;
 
-        // 计算耗时
+        // 计算耗时并检查是否为循环节点
         {
             let mut node = node_arc.write().unwrap();
             let duration = node.start_time.elapsed();
@@ -266,21 +316,88 @@ where
                 .map(|child_arc| child_arc.read().unwrap().duration_ms.unwrap_or(0.0))
                 .sum();
             node.self_time_ms = Some(node.duration_ms.unwrap() - children_duration);
+
+            if matches!(node.node_type, NodeType::Loop {..}) {
+                is_loop_node = true;
+            }
         }
 
-        // 如果是根节点关闭，说明整个Trace已完成，可以进行后处理
-        if is_root {
-            // 计算关键路径
-            Self::calculate_critical_path(&node_arc);
+        // ✨ 如果关闭的是一个循环节点，执行路径原型聚合
+        if is_loop_node {
+            Self::aggregate_loop_iterations(&node_arc);
+        }
 
-            // 定期清理旧trace (测试期间设置为超大值，避免清理)
-            self.store.cleanup_old_traces(999999);
+        if is_root {
+            Self::calculate_critical_path(&node_arc);
+            self.store.cleanup_old_traces(999999); // 保持测试期间不清理
         }
     }
 }
 
 impl TraceDistillerLayer {
-    /// 递归计算并标记关键路径（最耗时的执行路径）
+    /// ✨ [新增] 为单个节点（及其子树）生成唯一的路径指纹
+    fn generate_path_hash(node: &DistilledTraceNode) -> String {
+        let mut structure = String::new();
+        Self::build_structure_string(node, &mut structure);
+        format!("{:x}", md5::compute(structure)) // 使用md5，速度快，碰撞风险在此场景可接受
+    }
+
+    /// ✨ [新增] 递归构建用于哈希的结构字符串
+    fn build_structure_string(node: &DistilledTraceNode, s: &mut String) {
+        write!(s, "({}:{}", node.name, if node.has_error { "E" } else { "S" }).unwrap();
+        // 对子节点按名称和开始时间排序，确保哈希稳定性
+        let mut sorted_children = node.children.clone();
+        sorted_children.sort_by_key(|c| {
+            let reader = c.read().unwrap();
+            (reader.name.clone(), reader.start_time)
+        });
+        for child in sorted_children {
+            Self::build_structure_string(&child.read().unwrap(), s);
+        }
+        write!(s, ")").unwrap();
+    }
+
+    /// ✨ [新增] 聚合循环迭代，将其分类为不同的路径原型
+    fn aggregate_loop_iterations(loop_node_arc: &Arc<RwLock<DistilledTraceNode>>) {
+        let mut loop_node = loop_node_arc.write().unwrap();
+
+        let mut archetypes: HashMap<String, LoopIterationArchetype> = HashMap::new();
+
+        // 遍历所有子节点（即每次循环迭代）
+        for child_arc in &loop_node.children {
+            let child_node = child_arc.read().unwrap();
+            let path_hash = Self::generate_path_hash(&child_node);
+            let duration = child_node.duration_ms.unwrap_or(0.0);
+
+            let archetype = archetypes.entry(path_hash.clone()).or_insert_with(|| {
+                LoopIterationArchetype {
+                    path_hash,
+                    representative_node: child_arc.clone(),
+                    count: 0,
+                    has_error: child_node.has_error,
+                    total_duration_ms: 0.0,
+                    min_duration_ms: f64::MAX,
+                    max_duration_ms: f64::MIN,
+                }
+            });
+
+            // 聚合统计数据
+            archetype.count += 1;
+            archetype.total_duration_ms += duration;
+            archetype.min_duration_ms = archetype.min_duration_ms.min(duration);
+            archetype.max_duration_ms = archetype.max_duration_ms.max(duration);
+        }
+
+        // 将聚合结果存入循环节点
+        if let NodeType::Loop { iteration_archetypes, .. } = &mut loop_node.node_type {
+            *iteration_archetypes = archetypes;
+        }
+
+        // 清理原始子节点以释放内存
+        loop_node.children.clear();
+    }
+
+    /// 计算关键路径的逻辑保持不变
     fn calculate_critical_path(node_arc: &Arc<RwLock<DistilledTraceNode>>) {
         // 找到最耗时的子节点
         let longest_child = {
@@ -373,79 +490,142 @@ pub fn distill_trace_to_text(trace_id: u64, root_node_arc: &Arc<RwLock<Distilled
     summary
 }
 
-/// 递归函数，生成单个节点及其子节点的文本
+/// ✨ [修改] generate_node_text 以支持打印循环原型
 fn generate_node_text(
-    node: &std::sync::RwLockReadGuard<DistilledTraceNode>, 
-    prefix: &str, 
-    is_last: bool, 
+    node: &std::sync::RwLockReadGuard<DistilledTraceNode>,
+    prefix: &str,
+    is_last: bool,
     summary: &mut String
 ) {
-    use std::fmt::Write;
-    
-    let connector = if prefix.is_empty() { 
-        "" 
-    } else if is_last { 
-        "└─ " 
-    } else { 
-        "├─ " 
-    };
-    
-    let critical_marker = if node.is_critical_path { "🔥 " } else { "" };
-    let error_marker = if node.has_error { "❌ " } else { "" };
-    
-    let duration_str = node.duration_ms
-        .map(|d| format!("{:.2}ms", d))
-        .unwrap_or_else(|| "运行中".to_string());
-    
-    let self_time_str = node.self_time_ms
-        .map(|st| format!(" | {:.2}ms", st))
-        .unwrap_or_default();
-    
-    let fields_str = if !node.fields.is_empty() {
-        let content = node.fields.iter()
-            .filter(|(k, _)| k.as_str() != "message") // 过滤掉message字段
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if content.is_empty() { 
-            "".to_string() 
-        } else { 
-            format!(" [{}]", content) 
+    let connector = if prefix.is_empty() { "" } else if is_last { "└─ " } else { "├─ " };
+
+    // 根据节点类型生成不同的输出
+    match &node.node_type {
+        NodeType::Call => {
+            // 普通节点的输出逻辑
+            let critical_marker = if node.is_critical_path { "🔥 " } else { "" };
+            let error_marker = if node.has_error { "❌ " } else { "" };
+
+            let duration_str = node.duration_ms
+                .map(|d| format!("{:.2}ms", d))
+                .unwrap_or_else(|| "运行中".to_string());
+
+            let self_time_str = node.self_time_ms
+                .map(|st| format!(" | {:.2}ms", st))
+                .unwrap_or_default();
+
+            let fields_str = if !node.fields.is_empty() {
+                let content = node.fields.iter()
+                    .filter(|(k, _)| k.as_str() != "message") // 过滤掉message字段
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if content.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" [{}]", content)
+                }
+            } else {
+                "".to_string()
+            };
+
+            writeln!(
+                summary,
+                "{}{}{}{}{} ({}{}){}",
+                prefix, connector, critical_marker, error_marker,
+                node.name, duration_str, self_time_str, fields_str
+            ).unwrap();
+        },
+        NodeType::Loop { iterator_type, task_count, concurrency, iteration_archetypes } => {
+            let total_iterations = if *task_count > 0 { *task_count } else { node.children.len() }; // Fallback if count not provided
+
+            // ✨【关键修复】✨ 直接从聚合的原型中计算成功和失败数
+            let mut aggregated_success = 0;
+            let mut aggregated_errors = 0;
+            for archetype in iteration_archetypes.values() {
+                if archetype.has_error {
+                    aggregated_errors += archetype.count;
+                } else {
+                    aggregated_success += archetype.count;
+                }
+            }
+
+            let duration_str = node.duration_ms
+                .map(|d| format!("{:.2}ms", d))
+                .unwrap_or_else(|| "运行中".to_string());
+
+            writeln!(
+                summary,
+                "{}{}🔥 {} (循环): for {} in ... (共 {} 次, 并发: {}, 成功: {}, 失败: {}) ({})",
+                prefix, connector, node.name, iterator_type, total_iterations, concurrency,
+                aggregated_success, aggregated_errors, duration_str
+            ).unwrap();
+
+            // 排序并打印循环内部的路径原型
+            let mut archetypes_vec: Vec<_> = iteration_archetypes.values().collect();
+            archetypes_vec.sort_by_key(|a| std::cmp::Reverse(a.count)); // 按出现次数降序
+
+            let child_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+
+            if let Some((last_archetype, other_archetypes)) = archetypes_vec.split_last() {
+                 for archetype in other_archetypes {
+                    print_loop_archetype(archetype, total_iterations, &child_prefix, false, summary);
+                 }
+                 print_loop_archetype(last_archetype, total_iterations, &child_prefix, true, summary);
+            }
         }
-    } else { 
-        "".to_string() 
-    };
+    }
+
+    // ✨ 循环节点的原始children已被清空，这里的递归只会对普通节点的子节点生效
+    let child_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+    if let Some((last_child, other_children)) = node.children.split_last() {
+        for child_arc in other_children {
+            generate_node_text(&child_arc.read().unwrap(), &child_prefix, false, summary);
+        }
+        generate_node_text(&last_child.read().unwrap(), &child_prefix, true, summary);
+    }
+}
+
+/// ✨ [新增] 专门用于打印循环内路径原型的函数
+fn print_loop_archetype(
+    archetype: &LoopIterationArchetype,
+    total_loop_count: usize,
+    prefix: &str,
+    is_last: bool,
+    summary: &mut String
+) {
+    let connector = if is_last { "└─ " } else { "├─ " };
+    let percentage = if total_loop_count > 0 {
+        (archetype.count as f64 * 100.0) / total_loop_count as f64
+    } else { 0.0 };
 
     writeln!(
-        summary, 
-        "{}{}{}{}{} ({}{}){}", 
-        prefix, connector, critical_marker, error_marker, 
-        node.name, duration_str, self_time_str, fields_str
+        summary,
+        "{}{}路径原型 (出现 {} 次, {:.2}%)",
+        prefix, connector, archetype.count, percentage
     ).unwrap();
 
-    // 递归处理子节点
-    let child_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
-    if let Some((last_child_arc, other_children_arc)) = node.children.split_last() {
-        for child_arc in other_children_arc {
-            let child_node = child_arc.read().unwrap();
-            generate_node_text(&child_node, &child_prefix, false, summary);
-        }
-        let last_child_node = last_child_arc.read().unwrap();
-        generate_node_text(&last_child_node, &child_prefix, true, summary);
-    }
+    let stats_prefix = format!("{}  {}", prefix, if is_last { "   " } else { "│  " });
+    writeln!(
+        summary,
+        "{}  - 耗时统计: avg {:.2}ms, min {:.2}ms, max {:.2}ms",
+        stats_prefix, archetype.avg_duration_ms(), archetype.min_duration_ms, archetype.max_duration_ms
+    ).unwrap();
+
+    // 打印这个原型的代表性调用树
+    let representative_node = archetype.representative_node.read().unwrap();
+    generate_node_text(&representative_node, &stats_prefix, true, summary);
 }
 
 /// 收集所有错误信息
 fn collect_errors(node: &std::sync::RwLockReadGuard<DistilledTraceNode>, summary: &mut String) {
-    use std::fmt::Write;
-    
     if !node.error_messages.is_empty() {
         writeln!(summary, "函数 {}: ", node.name).unwrap();
         for msg in &node.error_messages {
             writeln!(summary, "  - {}", msg).unwrap();
         }
     }
-    
+
     for child_arc in &node.children {
         let child_node = child_arc.read().unwrap();
         collect_errors(&child_node, summary);
