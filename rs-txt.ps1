@@ -1,6 +1,16 @@
 # Rust文件转换为txt脚本
 $targetFolderName = "tempfold"
-$sourcePath = "src\klaggregate"
+
+# 定义要转换的文件列表
+$sourceFiles = @(
+    "src\bin\kline_data_service.rs",
+    "src\bin\kline_aggregate_service.rs",
+    "src\kldata\backfill.rs",
+    "src\klcommon\log\trace_distiller.rs",
+    "src\klcommon\log\trace_visualization.rs",
+    "src\klcommon\log\observability.rs"
+)
+
 $htmlFilePath = "src\weblog\static\index.html"
 $currentPath = Get-Location
 
@@ -15,20 +25,29 @@ if (Test-Path -Path $targetFolderPath -PathType Container) {
     New-Item -Path $targetFolderPath -ItemType Directory | Out-Null
 }
 
-# 查找并复制.rs文件
-$sourceFiles = Get-ChildItem -Path $sourcePath -Filter "*.rs" -File
+# 复制指定的.rs文件
+$copiedCount = 0
+$notFoundFiles = @()
 
-if ($sourceFiles) {
-    Write-Host "找到 $($sourceFiles.Count) 个.rs文件，开始复制..." -ForegroundColor Green
-    
-    foreach ($file in $sourceFiles) {
-        $newFileName = "$($file.BaseName).txt"
+Write-Host "开始复制指定的.rs文件..." -ForegroundColor Green
+
+foreach ($filePath in $sourceFiles) {
+    if (Test-Path -Path $filePath -PathType Leaf) {
+        $fileName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
+        $newFileName = "$fileName.txt"
         $destinationPath = Join-Path -Path $targetFolderPath -ChildPath $newFileName
-        Copy-Item -Path $file.FullName -Destination $destinationPath
+        Copy-Item -Path $filePath -Destination $destinationPath
+        Write-Host "  ✅ 复制: $filePath -> $newFileName" -ForegroundColor Green
+        $copiedCount++
+    } else {
+        $notFoundFiles += $filePath
+        Write-Host "  ❌ 未找到: $filePath" -ForegroundColor Red
     }
-    Write-Host "✅ .rs文件复制完成" -ForegroundColor Green
-} else {
-    Write-Host "❌ 未找到.rs文件" -ForegroundColor Red
+}
+
+Write-Host "✅ 成功复制 $copiedCount 个.rs文件" -ForegroundColor Green
+if ($notFoundFiles.Count -gt 0) {
+    Write-Host "❌ 未找到 $($notFoundFiles.Count) 个文件" -ForegroundColor Red
 }
 
 # 复制HTML文件

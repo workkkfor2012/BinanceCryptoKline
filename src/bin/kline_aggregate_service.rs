@@ -3,9 +3,13 @@
 //! 启动完整的K线聚合系统，包括数据接入、聚合、存储和持久化。
 
 use kline_server::klaggregate::{KlineAggregateSystem, AggregateConfig};
-use kline_server::klcommon::log::{ModuleLayer, NamedPipeLogManager, TraceVisualizationLayer};
+use kline_server::klcommon::log::{
+    ModuleLayer, NamedPipeLogManager, TraceVisualizationLayer,
+    TraceDistillerStore, TraceDistillerLayer, distill_all_completed_traces_to_text
+};
 use std::sync::Arc;
-use kline_server::klaggregate::cerberus::create_default_cerberus_layer;
+use std::sync::atomic::{AtomicU32, Ordering};
+use kline_server::klcommon::create_default_assert_layer;
 use kline_server::klcommon::{Result, AppError};
 use std::path::Path;
 use tokio::signal;
@@ -23,6 +27,12 @@ const LOG_TARGET: &str = "KlineAggregateService";
 /// K线数据倾倒开关 - 设置为 true 启用2分钟的高频K线数据记录
 const ENABLE_KLINE_DUMP: bool = true;
 
+/// 测试模式开关 - 设置为 true 将只订阅 'btcusdt'，方便调试
+const ENABLE_TEST_MODE: bool = true;
+
+/// 程序运行期间的快照计数器，用于生成有序的文件名
+static SNAPSHOT_COUNTER: AtomicU32 = AtomicU32::new(1);
+
 fn main() -> Result<()> {
     // 处理命令行参数
     if !handle_args() {
@@ -30,7 +40,7 @@ fn main() -> Result<()> {
     }
 
     // 初始化可观察性系统
-    let cerberus_engine = init_observability_system()?;
+    let (assert_engine, distiller_store) = init_observability_system()?;
 
     // 创建Tokio运行时
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -46,26 +56,35 @@ fn main() -> Result<()> {
     );
 
     // 在根Span的上下文中运行整个应用
-    runtime.block_on(run_app(cerberus_engine).instrument(root_span))
+    runtime.block_on(run_app(assert_engine, distiller_store).instrument(root_span))
 }
 
 /// 应用程序的核心业务逻辑
 #[instrument(name = "run_app", skip_all)]
-async fn run_app(cerberus_engine: Option<kline_server::klaggregate::cerberus::CerberusEngine>) -> Result<()> {
+async fn run_app(
+    assert_engine: Option<kline_server::klcommon::AssertEngine>,
+    distiller_store: TraceDistillerStore
+) -> Result<()> {
     // 首先打印当前的日志级别配置
     let current_log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "未设置".to_string());
     info!(target: LOG_TARGET, event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
+
+    // 如果测试模式开启，设置环境变量并打印警告
+    if ENABLE_TEST_MODE {
+        std::env::set_var("KLINE_TEST_MODE", "true");
+        warn!(target: LOG_TARGET, event_name = "运行模式确认", "🚀 服务以【测试模式】启动，将只订阅 'btcusdt'");
+    }
 
     trace!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
     debug!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
     info!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
 
-    // 启动 Cerberus 验证引擎（如果存在）
-    if let Some(engine) = cerberus_engine {
+    // 启动运行时断言验证引擎（如果存在）
+    if let Some(engine) = assert_engine {
         tokio::spawn(async move {
             engine.start().await;
-        }.instrument(tracing::info_span!("cerberus_engine_task")));
-        info!(target: LOG_TARGET, event_name = "Cerberus验证引擎启动", "🐕 Cerberus 验证引擎已启动");
+        }.instrument(tracing::info_span!("assert_engine_task")));
+        info!(target: LOG_TARGET, event_name = "断言验证引擎启动", "🔍 运行时断言验证引擎已启动");
     }
 
     // 加载配置
@@ -98,6 +117,9 @@ async fn run_app(cerberus_engine: Option<kline_server::klaggregate::cerberus::Ce
     // 启动测试日志任务
     start_test_logging().await;
 
+    // 【新增】启动调试期间的定期Trace快照任务
+    start_debug_snapshot_task(distiller_store.clone()).await;
+
     // 启动K线数据倾倒任务（如果启用）
     if ENABLE_KLINE_DUMP {
         start_kline_dump_task(system.clone()).await;
@@ -108,6 +130,10 @@ async fn run_app(cerberus_engine: Option<kline_server::klaggregate::cerberus::Ce
 
     // 优雅关闭
     info!(target: LOG_TARGET, event_name = "收到关闭信号", "收到关闭信号，开始优雅关闭...");
+
+    // 【新增】程序退出时生成最终快照
+    generate_final_snapshot(&distiller_store).await;
+
     if let Err(e) = system.stop().await {
         error!(target: LOG_TARGET, event_name = "系统停止失败", error = %e, "关闭K线聚合系统失败");
     } else {
@@ -118,21 +144,21 @@ async fn run_app(cerberus_engine: Option<kline_server::klaggregate::cerberus::Ce
 }
 
 /// 初始化可观察性系统
-fn init_observability_system() -> Result<Option<kline_server::klaggregate::cerberus::CerberusEngine>> {
+fn init_observability_system() -> Result<(Option<kline_server::klcommon::AssertEngine>, TraceDistillerStore)> {
     use std::sync::{Once, Mutex};
 
     // 使用更安全的方式存储初始化结果
     static OBSERVABILITY_INIT: Once = Once::new();
-    static INIT_RESULT: Mutex<Option<Result<kline_server::klaggregate::cerberus::CerberusEngine>>> = Mutex::new(None);
+    static INIT_RESULT: Mutex<Option<Result<(kline_server::klcommon::AssertEngine, TraceDistillerStore)>>> = Mutex::new(None);
 
     let mut init_success = false;
 
     OBSERVABILITY_INIT.call_once(|| {
         match init_observability_system_inner() {
-            Ok(engine) => {
+            Ok((engine, store)) => {
                 init_success = true;
                 if let Ok(mut result) = INIT_RESULT.lock() {
-                    *result = Some(Ok(engine));
+                    *result = Some(Ok((engine, store)));
                 }
             }
             Err(e) => {
@@ -146,12 +172,13 @@ fn init_observability_system() -> Result<Option<kline_server::klaggregate::cerbe
     // 检查初始化结果
     if let Ok(mut result) = INIT_RESULT.lock() {
         match result.take() {
-            Some(Ok(engine)) => Ok(Some(engine)),
+            Some(Ok((engine, store))) => Ok((Some(engine), store)),
             Some(Err(e)) => Err(e),
             None => {
                 // 如果是第一次调用且在call_once中成功了
                 if init_success {
-                    Ok(None) // 引擎已经被取走了
+                    // 引擎已经被取走了，但我们需要返回一个默认的store
+                    Ok((None, TraceDistillerStore::default()))
                 } else {
                     Err(AppError::ConfigError("可观察性系统初始化状态未知".to_string()))
                 }
@@ -163,7 +190,7 @@ fn init_observability_system() -> Result<Option<kline_server::klaggregate::cerbe
 }
 
 /// 内部初始化函数，只会被调用一次
-fn init_observability_system_inner() -> Result<kline_server::klaggregate::cerberus::CerberusEngine> {
+fn init_observability_system_inner() -> Result<(kline_server::klcommon::AssertEngine, TraceDistillerStore)> {
     // 从配置文件读取日志设置，配置文件必须存在
     let (log_level, log_transport, pipe_name) = match load_logging_config() {
         Ok(config) => config,
@@ -173,34 +200,46 @@ fn init_observability_system_inner() -> Result<kline_server::klaggregate::cerber
         }
     };
 
-    // 创建共享的日志管理器
+    // --- 1. 为程序员的可视化系统设置 Manager ---
     let log_manager = Arc::new(NamedPipeLogManager::new(pipe_name.clone()));
-    log_manager.start_connection_task();
+    // 注意：NamedPipeLogManager::new() 现在会自动启动后台任务
 
-    // 创建两个独立的日志层，共享同一个管理器
+    // --- 2. 为大模型的摘要系统设置 Store ---
+    let distiller_store = TraceDistillerStore::default();
+
+    // --- 3. 创建所有并行的 Layer ---
+
+    // a) 人类可读的扁平化日志层
     let module_layer = ModuleLayer::new(log_manager.clone());
-    let trace_layer = TraceVisualizationLayer::new(log_manager.clone());
 
-    // 创建 Cerberus 验证层
-    let (cerberus_layer, cerberus_engine) = create_default_cerberus_layer();
+    // b) 给前端的实时可视化JSON层
+    let trace_viz_layer = TraceVisualizationLayer::new(log_manager.clone());
 
-    // 设置tracing订阅器，使用新的双层架构
+    // c) 【新增】给后端的内存调用树构建层
+    let distiller_layer = TraceDistillerLayer::new(distiller_store.clone());
+
+    // d) 创建运行时断言验证层
+    let (assert_layer, assert_engine) = create_default_assert_layer();
+
+    // --- 4. 组合所有 Layer ---
     let init_result = match log_transport.as_str() {
         "named_pipe" => {
-            // 命名管道模式：使用双层架构，职责分离
+            // 命名管道模式：使用三层并行架构，职责分离
             Registry::default()
-                .with(cerberus_layer)  // Cerberus 验证层
-                .with(module_layer)    // 模块日志层（顶层日志）
-                .with(trace_layer)     // Trace 可视化层（Span 内日志）
+                .with(assert_layer)      // 运行时断言验证层
+                .with(module_layer)      // 模块日志层（程序员可读）
+                .with(trace_viz_layer)   // Trace 可视化层（程序员交互）
+                .with(distiller_layer)   // Trace 提炼层（大模型分析）
                 .with(create_env_filter(&log_level))
                 .try_init()
         }
         _ => {
-            // 其他模式：回退到双层架构 + 控制台输出
+            // 其他模式：回退到三层架构 + 控制台输出
             Registry::default()
-                .with(cerberus_layer)  // Cerberus 验证层
-                .with(module_layer)    // 模块日志层
-                .with(trace_layer)     // Trace 可视化层
+                .with(assert_layer)      // 运行时断言验证层
+                .with(module_layer)      // 模块日志层
+                .with(trace_viz_layer)   // Trace 可视化层
+                .with(distiller_layer)   // Trace 提炼层
                 .with(
                     tracing_subscriber::fmt::layer()
                         .with_target(true)
@@ -275,7 +314,10 @@ fn init_observability_system_inner() -> Result<kline_server::klaggregate::cerber
     tracing::warn!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 2, "🧪 测试日志2: 警告级别测试");
     tracing::error!(target: LOG_TARGET, event_name = "可观测性测试日志", test_id = 3, "🧪 测试日志3: 错误级别测试");
 
-    Ok(cerberus_engine)
+    // --- 5. 返回assert_engine和distiller_store ---
+    // distiller_store 将被传递给主程序，用于启动定期快照任务
+
+    Ok((assert_engine, distiller_store))
 }
 
 /// 加载日志配置
@@ -366,6 +408,84 @@ async fn start_test_logging() {
             }
         }.instrument(tracing::info_span!("periodic_test_log_task"))
     );
+}
+
+/// 启动调试期间的定期Trace快照任务
+async fn start_debug_snapshot_task(store: TraceDistillerStore) {
+    tokio::spawn(async move {
+        info!(target: LOG_TARGET, "🔬 调试快照任务已启动，将在30秒内每5秒生成一份Trace报告。");
+
+        let snapshot_interval = Duration::from_secs(5);
+        let total_duration = Duration::from_secs(30);
+        let mut interval = tokio::time::interval(snapshot_interval);
+        let start_time = std::time::Instant::now();
+        let log_dir = "logs/debug_snapshots";
+
+        // 确保目录存在
+        if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+            error!(target: LOG_TARGET, "无法创建调试快照目录: {}", e);
+            return;
+        }
+
+        loop {
+            // 等待下一个时间点
+            interval.tick().await;
+
+            // 检查总时长是否已到
+            if start_time.elapsed() > total_duration {
+                info!(target: LOG_TARGET, "🔬 调试快照任务完成。");
+                break;
+            }
+
+            // --- 生成并写入快照 ---
+            generate_snapshot(&store, "trace_snapshot").await;
+        }
+    }.instrument(tracing::info_span!("debug_snapshot_task")));
+}
+
+/// 生成程序退出时的最终快照
+async fn generate_final_snapshot(store: &TraceDistillerStore) {
+    info!(target: LOG_TARGET, "🔬 程序退出，生成最终Trace快照...");
+
+    // 等待一小段时间，确保所有正在进行的span都能完成
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    generate_snapshot(store, "final_snapshot").await;
+
+    info!(target: LOG_TARGET, "✅ 最终快照生成完成");
+}
+
+/// 通用的快照生成函数
+async fn generate_snapshot(store: &TraceDistillerStore, prefix: &str) {
+    let log_dir = "logs/debug_snapshots";
+
+    // 确保目录存在
+    if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+        error!(target: LOG_TARGET, "无法创建调试快照目录: {}", e);
+        return;
+    }
+
+    // 生成并写入快照
+    let report_text = distill_all_completed_traces_to_text(store);
+
+    // 获取下一个序号（程序运行期间递增）
+    let sequence = SNAPSHOT_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("{}/{}_{}_{}.log", log_dir, prefix, sequence, timestamp);
+
+    match tokio::fs::File::create(&filename).await {
+        Ok(mut file) => {
+            use tokio::io::AsyncWriteExt;
+            if file.write_all(report_text.as_bytes()).await.is_err() {
+                error!(target: LOG_TARGET, "写入快照文件 {} 失败", filename);
+            } else {
+                info!(target: LOG_TARGET, "✅ 已生成Trace快照: {}", filename);
+            }
+        },
+        Err(e) => {
+            error!(target: LOG_TARGET, "创建快照文件 {} 失败: {}", filename, e);
+        }
+    }
 }
 
 /// 等待关闭信号

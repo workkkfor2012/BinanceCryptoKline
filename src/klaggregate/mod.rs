@@ -19,7 +19,6 @@ pub mod kline_data_persistence;
 pub mod config;
 pub mod validation_rules;
 pub mod log_targets;
-pub mod cerberus;
 
 // 重新导出核心类型
 pub use types::*;

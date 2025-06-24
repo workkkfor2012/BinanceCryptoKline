@@ -1,8 +1,9 @@
-use crate::klcommon::{BinanceApi, Database, DownloadTask, Result};
+use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, Kline};
 use log::{info, warn, error};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use chrono::TimeZone;
+use tracing::Instrument;
 
 /// K线时间戳检查器
 pub struct TimestampChecker {
@@ -274,6 +275,7 @@ impl TimestampChecker {
                     let api_clone = self.api.clone();
                     let semaphore_clone = semaphore.clone();
                     let symbol = task.symbol.clone();
+                    let symbol_for_span = symbol.clone();
 
                     let handle = tokio::spawn(async move {
                         // 获取信号量许可
@@ -317,13 +319,13 @@ impl TimestampChecker {
                                 Err(e)
                             }
                         }
-                    });
+                    }.instrument(tracing::info_span!("timestamp_check_task", symbol = %symbol_for_span, target = "timestamp_checker")));
 
                     handles.push(handle);
                 }
 
                 // 等待所有任务完成
-                let mut results = Vec::new();
+                let mut results: Vec<(String, Option<Kline>)> = Vec::new();
 
                 for handle in handles {
                     match handle.await {

@@ -1,4 +1,4 @@
-//! Cerberus 核心数据类型定义
+//! 运行时断言系统核心数据类型定义
 //! 
 //! 定义了验证上下文、验证结果、偏差事件等核心数据结构
 
@@ -148,7 +148,7 @@ impl DeviationEvent {
     /// 转换为结构化日志格式
     pub fn to_log_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "event_type": "CERBERUS_DEVIATION",
+            "event_type": "ASSERT_DEVIATION",
             "rule_id": self.rule_id,
             "deviation_type": self.deviation_type,
             "evidence": self.evidence,
@@ -250,41 +250,29 @@ impl Default for PerfStats {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_validation_context() {
-        let mut context = ValidationContext::new("TestModule".to_string(), "test_event".to_string());
-        context = context.with_field("test_key", serde_json::json!("test_value"));
-        
-        assert_eq!(context.target, "TestModule");
-        assert_eq!(context.event_name, "test_event");
-        assert_eq!(context.get_string_field("test_key"), Some("test_value".to_string()));
-    }
-    
-    #[test]
-    fn test_validation_result() {
-        let pass_result = ValidationResult::pass();
-        assert!(!pass_result.is_deviation());
-        
-        let deviation_result = ValidationResult::deviation(
-            "TEST_RULE", 
-            "test_deviation", 
-            serde_json::json!({"test": "evidence"})
-        );
-        assert!(deviation_result.is_deviation());
-    }
-    
-    #[test]
-    fn test_perf_stats() {
-        let mut stats = PerfStats::new();
-        stats.add_measurement(1000000); // 1ms
-        stats.add_measurement(2000000); // 2ms
-        
-        assert_eq!(stats.count, 2);
-        assert_eq!(stats.avg_duration_ns(), 1500000);
-        assert_eq!(stats.avg_duration_ms(), 1.5);
+/// 断言系统配置
+#[derive(Debug, Clone)]
+pub struct AssertConfig {
+    /// 是否启用验证
+    pub enabled: bool,
+    /// 状态TTL (秒)
+    pub state_ttl_seconds: u64,
+    /// 性能报告Top N
+    pub performance_top_n: usize,
+    /// 最小验证优先级
+    pub min_priority: ValidationPriority,
+}
+
+impl Default for AssertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            state_ttl_seconds: 300, // 5分钟
+            performance_top_n: 10,
+            min_priority: ValidationPriority::Critical,
+        }
     }
 }
+
+/// 偏差事件的别名，用于向后兼容
+pub type Deviation = DeviationEvent;

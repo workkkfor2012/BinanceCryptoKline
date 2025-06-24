@@ -274,16 +274,7 @@ impl KlineBackfiller {
             return Ok(());
         }
 
-        // 4. 执行下载任务 - 添加概要span以减少日志噪音
-        let batch_span = tracing::info_span!(
-            "batch_download_klines",
-            target = "backfill",
-            total_tasks = tasks.len(),
-            batch_type = "initial_download"
-        );
-
-        let _batch_guard = batch_span.enter();
-
+        // 4. 执行下载任务
         let semaphore = Arc::new(tokio::sync::Semaphore::new(50)); // 增加到50个并发，充分利用网络带宽，写入操作由DbWriteQueue序列化处理
         let mut handles = Vec::new();
         // 存储失败任务及其失败原因 - 使用更简单的结构
@@ -294,7 +285,7 @@ impl KlineBackfiller {
         // 创建一个计数器来跟踪添加到失败列表的任务数量
         let failed_tasks_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        for (task_index, task) in tasks.into_iter().enumerate() {
+        for task in tasks {
             let api_clone = self.api.clone();
             let semaphore_clone = semaphore.clone();
             let db_clone = self.db.clone();
@@ -481,22 +472,16 @@ impl KlineBackfiller {
                 }
             };
 
-            // 采样记录：只为每10个任务中的第1个创建详细span，减少日志噪音
-            let handle = if task_index % 10 == 0 {
-                // 为采样的任务创建详细span
-                let task_span = tracing::info_span!(
-                    "download_kline_task_sample",
-                    symbol = %symbol,
-                    interval = %interval,
-                    target = "backfill",
-                    task_index = task_index,
-                    sample_note = "1_in_10_sampling"
-                );
-                tokio::spawn(download_future.instrument(task_span))
-            } else {
-                // 其他任务不创建span，直接执行
-                tokio::spawn(download_future)
-            };
+            // 创建span用于instrument
+            let task_span = tracing::info_span!(
+                "download_kline_task",
+                symbol = %symbol,
+                interval = %interval,
+                target = "backfill"
+            );
+
+            // ✨ 关键修复：先instrument绑定上下文，再spawn
+            let handle = tokio::spawn(download_future.instrument(task_span));
 
             handles.push(handle);
         }
@@ -763,22 +748,13 @@ impl KlineBackfiller {
             info!(target: "backfill", "开始重试 {} 个失败的下载任务（共 {} 个失败任务）...",
                   retry_tasks.len(), failed_tasks_with_errors.len());
 
-            // 添加重试批次的概要span
-            let retry_batch_span = tracing::info_span!(
-                "batch_retry_klines",
-                target = "backfill",
-                retry_tasks = retry_tasks.len(),
-                batch_type = "retry_download"
-            );
-            let _retry_guard = retry_batch_span.enter();
-
             let retry_start_time = Instant::now();
             let mut retry_handles = Vec::new();
             let retry_failed_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
             let retry_error_reasons = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
             let retry_semaphore = Arc::new(tokio::sync::Semaphore::new(50)); // 重试使用50个并发，充分利用网络带宽，写入操作由DbWriteQueue序列化处理
 
-            for (retry_index, task) in retry_tasks.into_iter().enumerate() {
+            for task in retry_tasks {
                 let api_clone = self.api.clone();
                 let semaphore_clone = retry_semaphore.clone();
                 let db_clone = self.db.clone();
@@ -898,22 +874,16 @@ impl KlineBackfiller {
                     }
                 };
 
-                // 重试任务也采用采样记录：只为每5个重试任务中的第1个创建详细span
-                let handle = if retry_index % 5 == 0 {
-                    // 为采样的重试任务创建详细span
-                    let retry_task_span = tracing::info_span!(
-                        "retry_download_task_sample",
-                        symbol = %symbol,
-                        interval = %interval,
-                        target = "backfill",
-                        retry_index = retry_index,
-                        sample_note = "1_in_5_retry_sampling"
-                    );
-                    tokio::spawn(retry_future.instrument(retry_task_span))
-                } else {
-                    // 其他重试任务不创建span，直接执行
-                    tokio::spawn(retry_future)
-                };
+                // 创建span用于instrument
+                let retry_task_span = tracing::info_span!(
+                    "retry_download_task",
+                    symbol = %symbol,
+                    interval = %interval,
+                    target = "backfill"
+                );
+
+                // ✨ 关键修复：先instrument绑定上下文，再spawn
+                let handle = tokio::spawn(retry_future.instrument(retry_task_span));
 
                 retry_handles.push(handle);
             }

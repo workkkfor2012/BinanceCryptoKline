@@ -196,9 +196,18 @@ impl SymbolMetadataRegistry {
     /// 获取活跃的交易品种列表
     #[instrument(target = "SymbolMetadataRegistry", fields(symbols_count = 0), skip(self), err)]
     async fn fetch_active_symbols(&self) -> Result<Vec<String>> {
+        // 检查是否启用测试模式
+        if let Ok(test_mode) = std::env::var("KLINE_TEST_MODE") {
+            if test_mode.to_lowercase() == "true" {
+                info!(target: "SymbolMetadataRegistry", event_name = "测试模式激活", "🧪 测试模式已激活，只返回 'btcusdt' 交易对");
+                tracing::Span::current().record("symbols_count", 1);
+                return Ok(vec!["btcusdt".to_string()]);
+            }
+        }
+
         const MAX_RETRIES: usize = 3;
         const RETRY_DELAY_SECS: u64 = 2;
-        
+
         for attempt in 1..=MAX_RETRIES {
             match self.api_client.get_trading_usdt_perpetual_symbols().await {
                 Ok(symbols) => {
@@ -213,12 +222,12 @@ impl SymbolMetadataRegistry {
                     error!(target: "SymbolMetadataRegistry", event_name = "获取品种API错误", attempt = attempt, max_retries = MAX_RETRIES, error = %e, "获取交易品种列表失败 (尝试: {}/{}, 错误: {})", attempt, MAX_RETRIES, e);
                 }
             }
-            
+
             if attempt < MAX_RETRIES {
                 tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
             }
         }
-        
+
         Err(AppError::ApiError(format!("获取交易品种列表失败，已重试 {} 次", MAX_RETRIES)))
     }
     

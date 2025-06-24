@@ -5,7 +5,16 @@ use kline_server::klaggregate::config::AggregateConfig;
 
 use std::sync::Arc;
 use std::path::Path;
+use std::time::Duration;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{info, error, instrument, info_span, Instrument};
+
+// 导入轨迹提炼器组件
+use kline_server::klcommon::log::{
+    TraceDistillerStore,
+    TraceDistillerLayer,
+    distill_all_completed_traces_to_text
+};
 
 /// 默认配置文件路径
 const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
@@ -14,16 +23,19 @@ const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
 // 🔧 测试开关配置
 // ========================================
 /// 是否启用测试模式（限制为只处理 BTCUSDT）
-const TEST_MODE: bool = true;
+const TEST_MODE: bool = false;
 
 /// 测试模式下使用的交易对
 const TEST_SYMBOLS: &[&str] = &["BTCUSDT"];
+
+/// 程序运行期间的快照计数器，用于生成有序的文件名
+static SNAPSHOT_COUNTER: AtomicU32 = AtomicU32::new(1);
 // ========================================
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 初始化简单日志
-    init_simple_logging();
+    // 初始化日志系统并获取TraceDistillerStore
+    let distiller_store = init_logging_with_distiller();
 
     // 创建应用程序的根Span，代表整个应用生命周期
     let root_span = info_span!(
@@ -33,7 +45,12 @@ async fn main() -> Result<()> {
     );
 
     // 在根Span的上下文中运行整个应用
-    run_app().instrument(root_span).await
+    let result = run_app().instrument(root_span).await;
+
+    // 程序退出时生成最终快照
+    generate_final_snapshot(&distiller_store).await;
+
+    result
 }
 
 /// 应用程序的核心业务逻辑
@@ -77,16 +94,34 @@ async fn run_app() -> Result<()> {
         }
     }
 
-    // 检查是否为WebSocket模式，如果是则保持服务运行
+    // 检查是否启用测试循环模式
+    let enable_test_loop = std::env::var("ENABLE_TEST_LOOP")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
+
     let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "file".to_string());
-    if log_transport == "websocket" {
-        info!("WebSocket模式：保持服务运行以提供日志可视化...");
-        info!("访问 http://localhost:3000/trace 查看函数执行路径可视化");
+
+    if enable_test_loop {
+        info!("🧪 测试循环模式已启用：保持服务运行以生成测试trace数据...");
+        if log_transport == "websocket" {
+            info!("访问 http://localhost:3000/trace 查看函数执行路径可视化");
+        }
+        info!("💡 设置 ENABLE_TEST_LOOP=false 可禁用测试循环");
 
         // 运行测试循环，保持在同一个trace上下文中
         run_test_loop().await;
+    } else if log_transport == "websocket" {
+        info!("WebSocket模式：保持服务运行以提供日志可视化...");
+        info!("访问 http://localhost:3000/trace 查看函数执行路径可视化");
+        info!("💡 设置 ENABLE_TEST_LOOP=true 可启用测试循环");
+
+        // 保持服务运行但不执行测试循环
+        tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl+c");
+        info!("收到退出信号");
     } else {
         info!("K线数据补齐服务完成");
+        info!("💡 设置 ENABLE_TEST_LOOP=true 可启用测试循环模式");
     }
 
     Ok(())
@@ -196,8 +231,8 @@ async fn test_transform_data() {
     info!("数据转换完成");
 }
 
-/// 初始化日志系统（同时支持模块日志和trace可视化）
-fn init_simple_logging() {
+/// 初始化日志系统（同时支持模块日志、trace可视化和轨迹提炼）
+fn init_logging_with_distiller() -> TraceDistillerStore {
     use kline_server::klcommon::log::{
         ModuleLayer,
         NamedPipeLogManager,
@@ -223,12 +258,16 @@ fn init_simple_logging() {
         }
     };
 
+    // 创建TraceDistillerStore用于轨迹提炼
+    let distiller_store = TraceDistillerStore::default();
+    let distiller_layer = TraceDistillerLayer::new(distiller_store.clone());
+
     // 根据传输方式初始化日志
     match log_transport.as_str() {
         "named_pipe" => {
-            // 命名管道模式 - 使用新的共享架构
+            // 命名管道模式 - 使用三层架构
             let log_manager = Arc::new(NamedPipeLogManager::new(pipe_name.clone()));
-            log_manager.start_connection_task();
+            // 注意：NamedPipeLogManager::new() 现在会自动启动后台任务
 
             let module_layer = ModuleLayer::new(log_manager.clone());
             let trace_layer = TraceVisualizationLayer::new(log_manager.clone());
@@ -236,40 +275,49 @@ fn init_simple_logging() {
             Registry::default()
                 .with(module_layer)         // 处理顶层模块日志
                 .with(trace_layer)          // 处理 span 日志用于路径可视化
+                .with(distiller_layer)      // 处理轨迹提炼用于调试快照
                 .with(create_env_filter(&log_level))
                 .init();
 
-            info!("🎯 双重日志系统已初始化（命名管道模式 - 共享架构）");
+            info!("🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼）");
             info!("📊 模块日志: 只处理顶层日志，log_type=module");
             info!("🔍 Trace可视化: 只处理Span内日志，log_type=trace");
+            info!("🔬 轨迹提炼: 构建调用树用于调试快照");
             info!("🔗 共享管道: {}", pipe_name);
         }
         "websocket" => {
-            // WebSocket模式已不再支持，回退到文件模式
-            tracing_subscriber::fmt()
-                .with_env_filter(create_env_filter(&log_level))
-                .with_target(true)
-                .with_level(true)
-                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+            // WebSocket模式已不再支持，回退到文件模式 + 轨迹提炼
+            Registry::default()
+                .with(tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_level(true)
+                    .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()))
+                .with(distiller_layer)      // 添加轨迹提炼层
+                .with(create_env_filter(&log_level))
                 .init();
 
-            info!("⚠️  WebSocket模式已不再支持，已回退到文件模式");
+            info!("⚠️  WebSocket模式已不再支持，已回退到文件模式 + 轨迹提炼");
             info!("💡 请使用 LOG_TRANSPORT=named_pipe 启用日志传输");
         }
         _ => {
-            // 文件模式（默认）
-            tracing_subscriber::fmt()
-                .with_env_filter(create_env_filter(&log_level))
-                .with_target(true)
-                .with_level(true)
-                .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+            // 文件模式（默认）+ 轨迹提炼
+            Registry::default()
+                .with(tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_level(true)
+                    .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()))
+                .with(distiller_layer)      // 添加轨迹提炼层
+                .with(create_env_filter(&log_level))
                 .init();
 
-            info!("日志系统已初始化（文件模式）");
+            info!("日志系统已初始化（文件模式 + 轨迹提炼）");
         }
     }
 
     info!("日志级别: {}", log_level);
+
+    // 返回distiller_store供主程序使用
+    distiller_store
 }
 
 /// 创建环境过滤器，始终过滤掉第三方库的调试日志
@@ -305,4 +353,44 @@ fn load_logging_config() -> Result<(String, String, String)> {
     } else {
         Err(AppError::ConfigError(format!("配置文件不存在: {}，回退到环境变量", config_path)))
     }
+}
+
+/// 生成程序退出时的最终快照
+async fn generate_final_snapshot(store: &TraceDistillerStore) {
+    info!("🔬 程序退出，生成最终Trace快照...");
+
+    // 等待一小段时间，确保所有正在进行的span都能完成
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let log_dir = "logs/debug_snapshots";
+
+    // 确保目录存在
+    if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+        error!("无法创建调试快照目录: {}", e);
+        return;
+    }
+
+    // 生成并写入快照
+    let report_text = distill_all_completed_traces_to_text(store);
+
+    // 获取下一个序号（程序运行期间递增）
+    let sequence = SNAPSHOT_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("{}/final_snapshot_{}_{}.log", log_dir, sequence, timestamp);
+
+    match tokio::fs::File::create(&filename).await {
+        Ok(mut file) => {
+            use tokio::io::AsyncWriteExt;
+            if file.write_all(report_text.as_bytes()).await.is_err() {
+                error!("写入快照文件 {} 失败", filename);
+            } else {
+                info!("✅ 已生成最终Trace快照: {}", filename);
+            }
+        },
+        Err(e) => {
+            error!("创建快照文件 {} 失败: {}", filename, e);
+        }
+    }
+
+    info!("✅ 最终快照生成完成");
 }

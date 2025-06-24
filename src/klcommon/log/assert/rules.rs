@@ -1,4 +1,4 @@
-//! Cerberus 验证规则实现
+//! 运行时断言验证规则实现
 //! 
 //! 包含 Phase 1 的所有验证规则的具体实现
 
@@ -300,6 +300,52 @@ impl ValidationRule for BufferSwapIntegrityRule {
     }
 }
 
+/// 4. ROUTING_SUCCESS_RATE (Standard, 有状态)
+/// 监控交易事件路由的成功率
+struct RoutingSuccessRateRule;
+
+impl ValidationRule for RoutingSuccessRateRule {
+    fn id(&self) -> &str {
+        "ROUTING_SUCCESS_RATE"
+    }
+
+    fn description(&self) -> &str {
+        "监控交易事件路由的成功率，确保系统健康"
+    }
+
+    fn priority(&self) -> ValidationPriority {
+        ValidationPriority::Standard
+    }
+
+    fn is_applicable(&self, context: &ValidationContext) -> bool {
+        context.target.contains("TradeEventRouter") &&
+        (context.event_name == "route_success" || context.event_name == "route_failure")
+    }
+
+    fn validate(&self, context: &ValidationContext) -> ValidationResult {
+        // 这是一个有状态规则的简化实现
+        // 在实际实现中，需要通过 StatefulValidationRule trait 来管理状态
+
+        let is_success = context.event_name == "route_success";
+        let symbol = context.get_string_field("symbol").unwrap_or_default();
+
+        if !is_success {
+            let error = context.get_string_field("error").unwrap_or_default();
+            return ValidationResult::deviation(
+                self.id(),
+                "routing_failure",
+                json!({
+                    "symbol": symbol,
+                    "error": error,
+                    "timestamp": context.timestamp
+                })
+            );
+        }
+
+        ValidationResult::pass()
+    }
+}
+
 /// 5. KLINE_OPEN_TIME_ACCURACY (Standard)
 /// 验证K线开盘时间是否正确对齐到周期边界
 struct KlineOpenTimeAccuracyRule;
@@ -544,52 +590,6 @@ impl ValidationRule for SymbolIndexStabilityRule {
             );
         }
 
-        ValidationResult::pass()
-    }
-}
-
-/// 4. ROUTING_SUCCESS_RATE (Standard, 有状态)
-/// 监控交易事件路由的成功率
-struct RoutingSuccessRateRule;
-
-impl ValidationRule for RoutingSuccessRateRule {
-    fn id(&self) -> &str {
-        "ROUTING_SUCCESS_RATE"
-    }
-    
-    fn description(&self) -> &str {
-        "监控交易事件路由的成功率，确保系统健康"
-    }
-    
-    fn priority(&self) -> ValidationPriority {
-        ValidationPriority::Standard
-    }
-    
-    fn is_applicable(&self, context: &ValidationContext) -> bool {
-        context.target.contains("TradeEventRouter") && 
-        (context.event_name == "route_success" || context.event_name == "route_failure")
-    }
-    
-    fn validate(&self, context: &ValidationContext) -> ValidationResult {
-        // 这是一个有状态规则的简化实现
-        // 在实际实现中，需要通过 StatefulValidationRule trait 来管理状态
-        
-        let is_success = context.event_name == "route_success";
-        let symbol = context.get_string_field("symbol").unwrap_or_default();
-        
-        if !is_success {
-            let error = context.get_string_field("error").unwrap_or_default();
-            return ValidationResult::deviation(
-                self.id(),
-                "routing_failure",
-                json!({
-                    "symbol": symbol,
-                    "error": error,
-                    "timestamp": context.timestamp
-                })
-            );
-        }
-        
         ValidationResult::pass()
     }
 }

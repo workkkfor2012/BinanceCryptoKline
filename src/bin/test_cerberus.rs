@@ -1,20 +1,20 @@
-//! Cerberus 验证系统测试程序
-//! 
-//! 用于测试 Cerberus 验证规则是否正常工作
+//! 运行时断言验证系统测试程序
+//!
+//! 用于测试运行时断言验证规则是否正常工作
 
-use kline_server::klaggregate::cerberus::{create_default_cerberus_layer, CerberusConfig};
-use tracing::{info, warn, error};
+use kline_server::klcommon::create_default_assert_layer;
+use tracing::{info, warn, error, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, Registry};
 use tokio::time::{sleep, Duration};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 创建 Cerberus 验证层
-    let (cerberus_layer, cerberus_engine) = create_default_cerberus_layer();
+    // 创建运行时断言验证层
+    let (assert_layer, assert_engine) = create_default_assert_layer();
     
     // 设置 tracing 订阅器
     let subscriber = Registry::default()
-        .with(cerberus_layer)
+        .with(assert_layer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(true)
@@ -23,12 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     tracing::subscriber::set_global_default(subscriber)?;
     
-    // 启动 Cerberus 验证引擎
+    // 启动运行时断言验证引擎
     tokio::spawn(async move {
-        cerberus_engine.start().await;
-    });
-    
-    info!("🐕 Cerberus 验证系统测试开始");
+        assert_engine.start().await;
+    }.instrument(tracing::info_span!("assert_test_engine")));
+
+    info!("🔍 运行时断言验证系统测试开始");
     
     // 等待一下让系统初始化
     sleep(Duration::from_millis(100)).await;
@@ -238,8 +238,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 等待所有验证任务完成
     sleep(Duration::from_millis(500)).await;
     
-    info!("🎯 Cerberus 验证系统测试完成");
-    info!("📊 请检查上面的日志输出，应该能看到多个 CERBERUS_DEVIATION 事件");
+    info!("🎯 运行时断言验证系统测试完成");
+    info!("📊 请检查上面的日志输出，应该能看到多个 ASSERT_DEVIATION 事件");
     
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! 可观察性和规格验证模块
 //!
-//! 提供基于tracing的规格验证层和性能监控功能
+//! 提供基于tracing的规格验证层、性能监控功能和命名管道日志管理
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{Event, Id, Subscriber, info, warn, error, Instrument};
 use tracing_subscriber::{layer::Context, Layer};
+use tokio::sync::mpsc;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 /// 验证结果状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,52 +119,110 @@ impl EventSender for ConsoleEventSender {
     }
 }
 
-/// 命名管道日志管理器
+/// 命名管道日志管理器 - 基于MPSC Channel重构
+/// 负责将日志高效、安全地发送到命名管道。
+#[derive(Clone)]
 pub struct NamedPipeLogManager {
-    pipe_name: String,
-    pipe_writer: Arc<tokio::sync::Mutex<Option<tokio::io::BufWriter<tokio::net::windows::named_pipe::NamedPipeClient>>>>,
-    connection_task_started: Arc<std::sync::atomic::AtomicBool>,
+    log_sender: mpsc::UnboundedSender<String>,
 }
 
 impl NamedPipeLogManager {
-    /// 创建新的命名管道日志管理器
+    /// 创建新的命名管道日志管理器。
+    /// 注意：后台任务将在第一次调用send_log时自动启动。
     pub fn new(pipe_name: String) -> Self {
-        Self {
-            pipe_name,
-            pipe_writer: Arc::new(tokio::sync::Mutex::new(None)),
-            connection_task_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        // 1. 创建一个无界 MPSC channel。
+        // log_sender 可以被安全地克隆并分发给多个生产者（Layer）。
+        // log_receiver 是唯一的，将被移动到消费者任务中。
+        let (log_sender, log_receiver) = mpsc::unbounded_channel();
+
+        // 2. 启动一个独立的后台任务来处理所有I/O操作。
+        // 这个任务是唯一的"消费者"，负责连接管道和写入日志。
+        // 使用try_current来检查是否在tokio运行时中
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(
+                Self::connection_and_write_loop(pipe_name, log_receiver)
+                    .instrument(tracing::info_span!("named_pipe_consumer_task"))
+            );
+        } else {
+            // 如果不在tokio运行时中，创建一个新的运行时来处理
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(
+                    Self::connection_and_write_loop(pipe_name, log_receiver)
+                        .instrument(tracing::info_span!("named_pipe_consumer_task"))
+                );
+            });
+        }
+
+        // 3. 返回一个包含发送端的管理器实例。
+        Self { log_sender }
+    }
+
+    /// 发送日志到队列中（此操作非阻塞且极速）。
+    /// 这个方法会被 ModuleLayer 和 TraceVisualizationLayer 高频调用。
+    pub fn send_log(&self, log_line: String) {
+        // `send` 操作只是将一个指针放入队列，非常快。
+        // 如果接收端已关闭（例如任务崩溃），发送会失败，但我们在此处忽略错误。
+        let _ = self.log_sender.send(log_line);
+    }
+
+    /// 后台任务：管理连接并从channel读取日志进行写入。
+    async fn connection_and_write_loop(
+        pipe_name: String,
+        mut receiver: mpsc::UnboundedReceiver<String>
+    ) {
+        use tokio::net::windows::named_pipe::ClientOptions;
+
+        // 这个无限循环确保了连接的持久性和自动重连。
+        loop {
+            // ---- 连接阶段 ----
+            info!(target: "SystemObservability", "📡 尝试连接到命名管道: {}", &pipe_name);
+            match ClientOptions::new().open(&pipe_name) {
+                Ok(client) => {
+                    info!(target: "SystemObservability", "✅ 成功连接到命名管道服务器");
+                    let mut writer = BufWriter::new(client);
+
+                    // 发送会话开始标记，通知前端一个新的会话开始了。
+                    let session_start_marker = Self::create_session_start_marker();
+                    if writer.write_all(session_start_marker.as_bytes()).await.is_ok() {
+                         let _ = writer.flush().await; // 确保标记被立即发送
+                         info!(target: "SystemObservability", "🆕 已发送会话开始标记");
+                    }
+
+                    // ---- 写入阶段 ----
+                    // 循环从 channel 接收日志并写入管道。
+                    // `receiver.recv()` 在没有日志时会异步地等待。
+                    while let Some(log_line) = receiver.recv().await {
+                        let line_with_newline = format!("{}\n", log_line);
+
+                        // 尝试写入日志。
+                        if writer.write_all(line_with_newline.as_bytes()).await.is_err() {
+                            error!(target: "SystemObservability", "写入命名管道失败，连接可能已断开，准备重连...");
+                            // 跳出内层写入循环，进入外层的重连循环。
+                            break;
+                        }
+
+                        // 每次写入后都刷新，确保日志低延迟地到达前端。
+                        if writer.flush().await.is_err() {
+                             error!(target: "SystemObservability", "刷新命名管道失败，连接可能已断开，准备重连...");
+                             break;
+                        }
+                    }
+                },
+                Err(e) => {
+                    warn!(target: "SystemObservability", "❌ 命名管道连接失败: {}. 5秒后重试", e);
+                }
+            }
+
+            // 如果连接失败或中途写入失败，等待5秒后重试整个循环。
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
     }
 
-    /// 连接到命名管道服务器
-    pub async fn connect(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        use tokio::io::BufWriter;
-
-        info!(target: "SystemObservability", "📡 尝试连接到命名管道: {}", self.pipe_name);
-
-        // 尝试连接到命名管道服务器（同步操作）
-        let client = ClientOptions::new().open(&self.pipe_name)?;
-        info!(target: "SystemObservability", "✅ 成功连接到命名管道服务器");
-
-        // 创建缓冲写入器
-        let writer = BufWriter::new(client);
-
-        // 保存连接
-        let mut pipe_writer = self.pipe_writer.lock().await;
-        *pipe_writer = Some(writer);
-
-        // 发送会话开始标记
-        self.send_session_start_marker().await;
-
-        Ok(())
-    }
-
-    /// 发送会话开始标记
-    async fn send_session_start_marker(&self) {
+    /// 创建会话开始标记的JSON字符串
+    fn create_session_start_marker() -> String {
         let session_start_marker = serde_json::json!({
-            "timestamp": chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
-                .format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+            "timestamp": chrono::Utc::now().to_rfc3339(),
             "level": "INFO",
             "target": "SystemObservability",
             "message": "SESSION_START",
@@ -174,100 +234,8 @@ impl NamedPipeLogManager {
                     .as_millis())
             }
         });
-
-        if let Ok(marker_json) = serde_json::to_string(&session_start_marker) {
-            self.send_log(marker_json).await;
-            info!(target: "SystemObservability", "🆕 已发送会话开始标记");
-        }
-    }
-
-    /// 发送日志到命名管道
-    pub async fn send_log(&self, log_line: String) {
-        use tokio::io::AsyncWriteExt;
-
-        if let Ok(mut pipe_writer_guard) = self.pipe_writer.try_lock() {
-            if let Some(ref mut writer) = *pipe_writer_guard {
-                let line_with_newline = format!("{}\n", log_line);
-                if let Err(e) = writer.write_all(line_with_newline.as_bytes()).await {
-                    error!(target: "SystemObservability", "发送日志到命名管道失败: {}", e);
-                    // 连接断开，清除writer
-                    *pipe_writer_guard = None;
-                } else {
-                    // 立即刷新缓冲区
-                    let _ = writer.flush().await;
-                }
-            }
-        }
-    }
-
-    /// 启动命名管道连接任务
-    pub fn start_connection_task(&self) {
-        // 使用原子操作确保只启动一次
-        if self.connection_task_started.compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst
-        ).is_err() {
-            // 已经启动过了
-            return;
-        }
-
-        let pipe_name = self.pipe_name.clone();
-        let manager = Arc::new(self.clone());
-
-        // 如果在Tokio运行时中，直接spawn
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                Self::connection_loop(manager, pipe_name).await;
-            }.instrument(tracing::info_span!("named_pipe_connection_task")));
-        } else {
-            // 如果不在Tokio运行时中，创建新线程和运行时
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    Self::connection_loop(manager, pipe_name).await;
-                });
-            });
-        }
-    }
-
-    /// 连接循环逻辑
-    async fn connection_loop(manager: Arc<NamedPipeLogManager>, pipe_name: String) {
-        loop {
-            // 检查是否已连接
-            {
-                let pipe_writer = manager.pipe_writer.lock().await;
-                if pipe_writer.is_some() {
-                    // 已连接，等待一段时间再检查
-                    drop(pipe_writer);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-            }
-
-            // 尝试连接
-            info!(target: "SystemObservability", "📡 尝试连接到命名管道服务器: {}", pipe_name);
-            match manager.connect().await {
-                Ok(_) => {
-                    info!(target: "SystemObservability", "✅ 命名管道连接成功");
-                }
-                Err(e) => {
-                    warn!(target: "SystemObservability", "❌ 命名管道连接失败: {}, 5秒后重试", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                }
-            }
-        }
-    }
-}
-
-impl Clone for NamedPipeLogManager {
-    fn clone(&self) -> Self {
-        Self {
-            pipe_name: self.pipe_name.clone(),
-            pipe_writer: self.pipe_writer.clone(),
-            connection_task_started: self.connection_task_started.clone(),
-        }
+        // 在这里直接转换为 String，避免在异步任务中处理 Result
+        serde_json::to_string(&session_start_marker).unwrap_or_default() + "\n"
     }
 }
 
@@ -281,107 +249,9 @@ impl Clone for NamedPipeLogManager {
 
 
 
-/// 模块日志层 - 将所有不在任何 Span 内部的日志事件作为模块级日志进行转发
-pub struct ModuleLayer {
-    manager: Arc<NamedPipeLogManager>,
-}
 
-impl ModuleLayer {
-    /// 创建一个新的模块日志层
-    /// 它需要一个已经创建好的、可共享的 NamedPipeLogManager 实例
-    pub fn new(manager: Arc<NamedPipeLogManager>) -> Self {
-        Self { manager }
-    }
-}
 
-impl<S> Layer<S> for ModuleLayer
-where
-    S: Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
-{
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        // 【关键修改】移除过滤条件，现在处理所有日志事件
-        // 这样 ModuleLayer 就能产生完整的、扁平化的人类可读日志流
 
-        let metadata = event.metadata();
-
-        // 避免处理由 TraceVisualizationLayer 自身产生的日志，防止循环
-        if metadata.target() == "TraceVisualization" {
-            return;
-        }
-
-        let mut fields = serde_json::Map::new();
-        // 使用 trace_visualization 中的 JsonVisitor
-        let mut visitor = super::trace_visualization::JsonVisitor::new(&mut fields);
-        event.record(&mut visitor);
-
-        let message = fields.remove("message")
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(String::new);
-
-        // 【增强】如果事件在 Span 内，添加 span 上下文信息，让模块日志更丰富
-        let span_info = if let Some(span) = ctx.lookup_current() {
-            // 构建 trace_id
-            fn find_root_id<S: for<'a> tracing_subscriber::registry::LookupSpan<'a>>(span: &tracing_subscriber::registry::SpanRef<S>) -> tracing::Id {
-                span.parent().map_or_else(|| span.id(), |p| find_root_id(&p))
-            }
-            let trace_id = format!("trace_{}", find_root_id(&span).into_u64());
-
-            serde_json::json!({
-                "span_name": span.name(),
-                "span_id": format!("span_{}", span.id().into_u64()),
-                "trace_id": trace_id
-            })
-        } else {
-            serde_json::Value::Null
-        };
-
-        let module_log_obj = serde_json::json!({
-            "log_type": "module", // 标识这是给人类看的模块日志
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-            "level": metadata.level().to_string(),
-            "target": metadata.target(),
-            "message": message,
-            "fields": fields,
-            "span": span_info, // 附加 span 上下文信息，便于调试
-        });
-
-        if let Ok(log_line) = serde_json::to_string(&module_log_obj) {
-            let manager = self.manager.clone();
-            // 在异步运行时中发送日志
-            // 【修复】移除 .instrument() 调用，避免产生额外的 span 污染追踪数据
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    manager.send_log(log_line).await;
-                });
-            }
-        }
-    }
-}
-
-/// 命名管道日志转发层 - 向后兼容的包装器
-pub struct NamedPipeLogForwardingLayer {
-    inner: ModuleLayer,
-}
-
-impl NamedPipeLogForwardingLayer {
-    /// 创建命名管道日志转发层（向后兼容）
-    pub fn new(pipe_name: String) -> Self {
-        let manager = Arc::new(NamedPipeLogManager::new(pipe_name));
-        manager.start_connection_task();
-        Self {
-            inner: ModuleLayer::new(manager)
-        }
-    }
-}
-
-impl<S> Layer<S> for NamedPipeLogForwardingLayer
-where
-    S: Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
-{
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        self.inner.on_event(event, ctx)
-    }
-}
 
 
 

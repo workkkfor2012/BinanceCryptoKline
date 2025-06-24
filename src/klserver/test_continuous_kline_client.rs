@@ -518,7 +518,7 @@ impl ContinuousKlineClient {
                 }
 
                 info!("Connection {} message processing ended", connection_id);
-            });
+            }.instrument(tracing::info_span!("kline_connection_processor", connection_id = connection_id)));
 
             handles.push(handle);
         }

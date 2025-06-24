@@ -27,7 +27,6 @@ impl TraceVisualizationLayer {
     /// 创建命名管道trace可视化层（向后兼容）
     pub fn new_named_pipe(pipe_name: String) -> Self {
         let manager = Arc::new(NamedPipeLogManager::new(pipe_name));
-        manager.start_connection_task();
         Self::new(manager)
     }
 }
@@ -132,13 +131,9 @@ where
             }
         });
 
+        // **👇 核心修改 👇**
         if let Ok(log_line) = serde_json::to_string(&span_event) {
-            let manager = self.manager.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    manager.send_log(log_line).await;
-                });
-            }
+            self.manager.send_log(log_line);
         }
     }
 
@@ -175,13 +170,9 @@ where
             }
         });
 
+        // **👇 核心修改 👇**
         if let Ok(log_line) = serde_json::to_string(&span_event) {
-            let manager = self.manager.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    manager.send_log(log_line).await;
-                });
-            }
+            self.manager.send_log(log_line);
         }
     }
 
@@ -217,13 +208,9 @@ where
                 }
             });
 
+            // **👇 核心修改 👇**
             if let Ok(log_line) = serde_json::to_string(&log_event) {
-                let manager = self.manager.clone();
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        manager.send_log(log_line).await;
-                    });
-                }
+                self.manager.send_log(log_line);
             }
         }
     }

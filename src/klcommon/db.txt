@@ -1,6 +1,6 @@
 use crate::klcommon::error::{AppError, Result};
 use crate::klcommon::models::Kline;
-use tracing::{debug, info, error, instrument, Span};
+use tracing::{debug, info, error, instrument};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
@@ -32,7 +32,6 @@ struct WriteTask {
     interval: String,
     klines: Vec<Kline>,
     result_sender: Sender<Result<usize>>,
-    parent_span: Span, // ✨ 新增字段，用于携带 tracing 上下文
 }
 
 
@@ -47,6 +46,7 @@ struct DbWriteQueueProcessor {
 
 impl DbWriteQueueProcessor {
     /// 创建新的写入队列处理器
+    #[instrument(target = "DbWriteQueueProcessor", skip_all)]
     fn new(receiver: Receiver<WriteTask>, pool: DbPool) -> Self {
         Self {
             receiver,
@@ -56,6 +56,7 @@ impl DbWriteQueueProcessor {
     }
 
     /// 启动写入队列处理线程
+    #[instrument(target = "DbWriteQueueProcessor", skip_all)]
     fn start(self) -> Arc<Mutex<bool>> {
         let is_running = self.is_running.clone();
 
@@ -68,8 +69,19 @@ impl DbWriteQueueProcessor {
                 // 尝试从队列中获取任务，最多等待100毫秒
                 match self.receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(task) => {
-                        // 简化的数据库写入处理，不创建详细的span以减少日志噪音
-                        let result = self.process_write_task(task.symbol.as_str(), task.interval.as_str(), &task.klines);
+                        // ✨ 关键修复：在处理任务时创建一个 span 来维护上下文
+                        let task_span = tracing::info_span!(
+                            "db_write_task",
+                            symbol = %task.symbol,
+                            interval = %task.interval,
+                            klines_count = task.klines.len(),
+                            target = "db"
+                        );
+
+                        let result = task_span.in_scope(|| {
+                            // 处理写入任务
+                            self.process_write_task(task.symbol.as_str(), task.interval.as_str(), &task.klines)
+                        });
 
                         // 发送结果
                         if let Err(e) = task.result_sender.send(result) {
@@ -197,6 +209,7 @@ impl DbWriteQueueProcessor {
     }
 
     /// 确保表存在
+    #[instrument(target = "DbWriteQueueProcessor", skip_all, err)]
     fn ensure_symbol_table(&self, conn: &rusqlite::Connection, _symbol: &str, _interval: &str, table_name: &str) -> Result<()> {
         // 创建表
         let create_table_sql = format!(
@@ -230,6 +243,7 @@ pub struct Database {
 
 impl Database {
     /// Create a new database connection with WAL mode and optimized settings
+    #[instrument(target = "Database", skip_all, err)]
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let db_path = db_path.as_ref();
 
@@ -307,6 +321,7 @@ impl Database {
     }
 
     /// Ensure table exists for a specific symbol and interval
+    #[instrument(target = "Database", skip_all, err)]
     pub fn ensure_symbol_table(&self, symbol: &str, interval: &str) -> Result<()> {
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -355,6 +370,7 @@ impl Database {
     }
 
     /// Save klines to the database using the write queue
+    #[instrument(target = "Database", skip_all, err)]
     pub fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);
@@ -370,13 +386,12 @@ impl Database {
         // 创建一个通道，用于接收写入操作的结果
         let (result_sender, result_receiver) = bounded(1);
 
-        // 创建写入任务，并捕获当前的 tracing 上下文
+        // 创建写入任务
         let task = WriteTask {
             symbol: symbol.to_string(),
             interval: interval.to_string(),
             klines: klines_copy,
             result_sender,
-            parent_span: Span::current(), // ✨ 捕获当前的上下文！
         };
 
         // 将任务发送到写入队列
@@ -635,6 +650,7 @@ impl Drop for Database {
 // 继续实现Database的方法
 impl Database {
     /// Insert new kline data (called when is_closed=true)
+    #[instrument(target = "Database", skip_all, err)]
     pub fn insert_kline(&self, symbol: &str, interval: &str, kline: &Kline) -> Result<()> {
         // Ensure table exists
         self.ensure_symbol_table(symbol, interval)?;
@@ -765,6 +781,7 @@ impl Database {
     }
 
     /// Save a single kline (compatible with old version)
+    #[instrument(target = "Database", skip_all, err)]
     pub fn save_kline(&self, symbol: &str, interval: &str, kline: &Kline) -> Result<()> {
         // Ensure table exists
         self.ensure_symbol_table(symbol, interval)?;

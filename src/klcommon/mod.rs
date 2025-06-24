@@ -36,4 +36,7 @@ pub use log::{
     NamedPipeLogForwardingLayer,
     NamedPipeLogManager,
     TraceVisualizationLayer,
+    AssertEngine,
+    AssertLayer,
+    create_default_assert_layer,
 };

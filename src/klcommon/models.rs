@@ -138,7 +138,6 @@ impl KlineBar {
 
 impl Kline {
     /// 从原始K线数据创建K线对象
-    #[instrument(target = "Kline", skip_all)]
     pub fn from_raw_kline(raw: &[serde_json::Value]) -> Option<Self> {
         if raw.len() < 12 {
             return None;
@@ -281,7 +280,7 @@ pub struct DownloadResult {
 }
 
 /// i32字段的默认值
-#[instrument(target = "klcommon::models", skip_all)]
+// #[instrument] 移除：这是serde反序列化的内部细节，被调用数百次产生噪音
 fn default_i32() -> i32 {
     0
 }
@@ -325,7 +324,6 @@ pub struct KlineData {
 
 impl KlineData {
     /// 转换为标准K线格式
-    #[instrument(target = "KlineData", skip_all)]
     pub fn to_kline(&self) -> Kline {
         Kline {
             open_time: self.start_time,

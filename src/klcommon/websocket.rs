@@ -1,6 +1,6 @@
 // WebSocket模块 - 提供通用的WebSocket连接管理功能 (使用 fastwebsockets 实现)
 use crate::klcommon::{AppError, Database, KlineData, Result, PROXY_HOST, PROXY_PORT};
-use tracing::{info, error, debug, warn, instrument};
+use tracing::{info, error, debug, warn, instrument, Instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -76,12 +76,12 @@ impl Default for ContinuousKlineConfig {
 }
 
 impl WebSocketConfig for ContinuousKlineConfig {
-    #[instrument(target = "ContinuousKlineConfig", skip_all)]
+    // #[instrument] 移除：简单的配置读取函数，追踪会产生噪音
     fn get_proxy_settings(&self) -> (bool, String, u16) {
         (self.use_proxy, self.proxy_addr.clone(), self.proxy_port)
     }
 
-    #[instrument(target = "ContinuousKlineConfig", skip_all)]
+    // #[instrument] 移除：简单的流名称构建函数，追踪会产生噪音
     fn get_streams(&self) -> Vec<String> {
         let mut streams = Vec::new();
         for symbol in &self.symbols {
@@ -120,12 +120,12 @@ impl Default for AggTradeConfig {
 }
 
 impl WebSocketConfig for AggTradeConfig {
-    #[instrument(target = "AggTradeConfig", skip_all)]
+    // #[instrument] 移除：简单的配置读取函数，追踪会产生噪音
     fn get_proxy_settings(&self) -> (bool, String, u16) {
         (self.use_proxy, self.proxy_addr.clone(), self.proxy_port)
     }
 
-    #[instrument(target = "AggTradeConfig", skip_all)]
+    // #[instrument] 移除：简单的流名称构建函数，追踪会产生噪音
     fn get_streams(&self) -> Vec<String> {
         self.symbols.iter()
             .map(|symbol| format!("{}@aggTrade", symbol.to_lowercase()))
@@ -367,7 +367,7 @@ impl AggTradeMessageHandler {
                 debug!(target: "MarketDataIngestor", "归集交易解析成功: {} {} @ {}",
                     agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
-                // 发出 Cerberus 验证事件
+                // 发出验证事件
                 tracing::info!(
                     target: "MarketDataIngestor",
                     event_name = "trade_data_parsed",
@@ -466,7 +466,7 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     /// 创建新的连接管理器
-    #[instrument(target = "ConnectionManager", skip_all)]
+    // #[instrument] 移除：简单的构造函数，追踪会产生噪音
     pub fn new(use_proxy: bool, proxy_addr: String, proxy_port: u16) -> Self {
         Self {
             use_proxy,
@@ -754,7 +754,7 @@ impl WebSocketClient for ContinuousKlineClient {
 
         let message_handler = tokio::spawn(async move {
             process_messages(rx, handler, connections_clone).await;
-        });
+        }.instrument(tracing::info_span!("continuous_kline_message_handler")));
 
         // 启动所有连接
         let mut connection_handles = Vec::new();
@@ -814,7 +814,7 @@ impl WebSocketClient for ContinuousKlineClient {
                         error!(target: "MarketDataIngestor", "连接 {} 失败: {}", connection_id, e);
                     }
                 }
-            });
+            }.instrument(tracing::info_span!("continuous_kline_connection", connection_id = connection_id)));
 
             connection_handles.push(handle);
         }
@@ -1124,7 +1124,7 @@ impl WebSocketClient for AggTradeClient {
 
             let message_handler = tokio::spawn(async move {
                 process_messages(rx, handler, connections_clone).await;
-            });
+            }.instrument(tracing::info_span!("websocket_message_handler")));
 
             // 启动所有连接
             let mut connection_handles = Vec::new();
@@ -1184,7 +1184,7 @@ impl WebSocketClient for AggTradeClient {
                             error!(target: "MarketDataIngestor", "连接 {} 失败: {}", connection_id, e);
                         }
                     }
-                });
+                }.instrument(tracing::info_span!("websocket_connection", connection_id = connection_id)));
 
                 connection_handles.push(handle);
             }

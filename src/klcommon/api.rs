@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// 将时间间隔转换为毫秒数
 /// 例如: "1m" -> 60000, "1h" -> 3600000
-#[instrument(target = "klcommon::api", skip_all)]
+// #[instrument] 移除：这是纯工具函数，快速计算，追踪会产生噪音
 pub fn interval_to_milliseconds(interval: &str) -> i64 {
     let last_char = interval.chars().last().unwrap_or('m');
     let value: i64 = interval[..interval.len() - 1].parse().unwrap_or(1);
@@ -28,7 +28,7 @@ pub fn interval_to_milliseconds(interval: &str) -> i64 {
 /// - 小时K线（1h, 4h）：应该在每小时的00分00秒开始
 /// - 日K线（1d）：应该在UTC 00:00:00开始
 /// - 周K线（1w）：应该在每周一的UTC 00:00:00开始
-#[instrument(target = "klcommon::api", skip_all)]
+// #[instrument] 移除：这是纯工具函数，时间对齐计算，追踪会产生噪音
 pub fn get_aligned_time(timestamp_ms: i64, interval: &str) -> i64 {
     use chrono::{DateTime, Datelike, TimeZone, Utc};
 
@@ -89,7 +89,7 @@ impl BinanceApi {
     }
 
     /// 创建一个新的HTTP客户端实例（每次请求都会创建新的连接）
-    #[instrument(target = "klcommon::api", skip(self))]
+    // #[instrument] 移除：HTTP客户端创建是底层资源管理，对业务流程分析是噪音
     fn create_client(&self) -> Result<Client> {
         // 创建带有超时设置的HTTP客户端，禁用连接池
         let client_builder = Client::builder()
@@ -259,7 +259,6 @@ impl BinanceApi {
     }
 
     /// 下载连续合约K线数据
-    #[instrument(target = "BinanceApi", skip_all, err)]
     pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
         // 构建URL参数
         let mut url_params = format!(

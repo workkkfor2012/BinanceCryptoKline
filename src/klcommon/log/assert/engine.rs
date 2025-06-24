@@ -1,15 +1,15 @@
-//! Cerberus 验证引擎核心实现
+//! 运行时断言引擎核心实现
 //! 
-//! 包含 CerberusEngine (后台验证引擎) 和 CerberusLayer (tracing 集成层)
+//! 包含 AssertEngine (后台验证引擎) 和 AssertLayer (tracing 集成层)
 
-use super::types::{ValidationContext, ValidationResult, ValidationRule, PerfStats};
-use super::{CerberusConfig, get_all_rules};
+use super::types::{ValidationContext, ValidationResult, ValidationRule, PerfStats, AssertConfig};
+use super::rules::get_all_rules;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn, trace, Event, Id, Subscriber};
+use tracing::{debug, info, warn, trace, Event, Id, Subscriber};
 use tracing_subscriber::{layer::Context, Layer};
 
 /// 获取验证规则的中文描述
@@ -77,7 +77,7 @@ impl ShortTermStateManager {
                 // 移除过期状态
                 for key in to_remove {
                     states.remove(&key);
-                    debug!(target: "CerberusStateManager", "清理过期状态: key={}", key);
+                    debug!(target: "AssertStateManager", "清理过期状态: key={}", key);
                 }
             }
         });
@@ -249,7 +249,7 @@ impl RuleCoverageTracker {
         };
 
         let mut report = format!(
-            "📊 Cerberus验证规则覆盖率报告 (运行时间: {}秒)\n💡 覆盖率: {}/{} ({}%) - 系统状态: {}\n",
+            "📊 运行时断言规则覆盖率报告 (运行时间: {}秒)\n💡 覆盖率: {}/{} ({}%) - 系统状态: {}\n",
             uptime_seconds, total_triggered, total_rules, coverage_percentage, health_indicator
         );
 
@@ -278,10 +278,10 @@ impl RuleCoverageTracker {
     }
 }
 
-/// Cerberus 验证引擎 - 在后台任务中运行
-pub struct CerberusEngine {
+/// 运行时断言验证引擎 - 在后台任务中运行
+pub struct AssertEngine {
     /// 配置
-    config: CerberusConfig,
+    config: AssertConfig,
     /// 验证规则
     rules: Vec<Arc<dyn ValidationRule>>,
     /// 状态管理器
@@ -294,9 +294,9 @@ pub struct CerberusEngine {
     coverage_tracker: Arc<RuleCoverageTracker>,
 }
 
-impl CerberusEngine {
+impl AssertEngine {
     /// 创建新的验证引擎
-    pub fn new(config: CerberusConfig) -> (Self, mpsc::UnboundedSender<ValidationContext>) {
+    pub fn new(config: AssertConfig) -> (Self, mpsc::UnboundedSender<ValidationContext>) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let rules = get_all_rules();
         let coverage_tracker = Arc::new(RuleCoverageTracker::new(&rules));
@@ -312,12 +312,12 @@ impl CerberusEngine {
 
         (engine, sender)
     }
-    
+
     /// 启动验证引擎
     pub async fn start(mut self) {
         let receiver = self.validation_receiver.take().expect("验证接收器已被取走");
 
-        info!(target: "CerberusEngine", "Cerberus 验证引擎启动，规则数量: {}", self.rules.len());
+        info!(target: "AssertEngine", "运行时断言验证引擎启动，规则数量: {}", self.rules.len());
 
         // 启动状态管理器的清理任务
         self.state_manager.start_cleanup_task();
@@ -340,36 +340,36 @@ impl CerberusEngine {
                 interval.tick().await;
 
                 let report = coverage_tracker.generate_coverage_report();
-                info!(target: "CerberusCoverage",
+                info!(target: "AssertCoverage",
                     event_name = "coverage_report",
                     "\n{}", report
                 );
             }
         });
     }
-    
+
     /// 处理验证任务
     async fn process_validation_tasks(self, mut receiver: mpsc::UnboundedReceiver<ValidationContext>) {
         while let Some(context) = receiver.recv().await {
             self.process_single_validation(context).await;
         }
-        
-        info!(target: "CerberusEngine", "Cerberus 验证引擎停止");
+
+        info!(target: "AssertEngine", "运行时断言验证引擎停止");
     }
-    
+
     /// 处理单个验证任务
     async fn process_single_validation(&self, context: ValidationContext) {
         let start_time = Instant::now();
-        
+
         // 获取适用的规则
         let applicable_rules: Vec<_> = self.rules.iter()
             .filter(|rule| rule.is_applicable(&context))
             .collect();
-        
+
         if applicable_rules.is_empty() {
             return;
         }
-        
+
         // 提取关键业务字段用于日志
         let symbol = context.get_string_field("symbol").unwrap_or_default();
         let price = context.get_number_field("price").unwrap_or(0.0);
@@ -377,7 +377,7 @@ impl CerberusEngine {
 
         // 只在有多个规则时显示开始日志，避免冗余
         if applicable_rules.len() > 1 {
-            debug!(target: "CerberusEngine",
+            debug!(target: "AssertEngine",
                 event_name = "validation_task_start",
                 target = %context.target,
                 event = %context.event_name,
@@ -405,7 +405,7 @@ impl CerberusEngine {
             match rule.validate(&context) {
                 ValidationResult::Pass => {
                     pass_count += 1;
-                    trace!(target: "CerberusEngine",
+                    trace!(target: "AssertEngine",
                         event_name = "validation_pass",
                         rule_id = %rule.id(),
                         rule_description = %rule_description,
@@ -419,9 +419,9 @@ impl CerberusEngine {
                     deviation_count += 1;
                     // 记录偏差事件 - 使用tracing结构化日志格式
                     warn!(
-                        target: "CerberusDeviation",
+                        target: "AssertDeviation",
                         event_name = "validation_deviation",
-                        event_type = "CERBERUS_DEVIATION",
+                        event_type = "ASSERT_DEVIATION",
                         rule_id = %deviation.rule_id,
                         rule_description = %rule_description,
                         deviation_type = %deviation.deviation_type,
@@ -437,7 +437,7 @@ impl CerberusEngine {
                 }
                 ValidationResult::Skip(reason) => {
                     skip_count += 1;
-                    debug!(target: "CerberusEngine",
+                    debug!(target: "AssertEngine",
                         event_name = "validation_skip",
                         rule_id = %rule.id(),
                         rule_description = %rule_description,
@@ -452,7 +452,7 @@ impl CerberusEngine {
 
         // 记录验证任务完成统计
         if deviation_count > 0 || skip_count > 0 {
-            info!(target: "CerberusEngine",
+            info!(target: "AssertEngine",
                 event_name = "validation_task_complete",
                 target = %context.target,
                 event = %context.event_name,
@@ -464,26 +464,26 @@ impl CerberusEngine {
                 symbol, pass_count, deviation_count, skip_count
             );
         }
-        
+
         let duration = start_time.elapsed();
         if duration.as_millis() > 10 {
-            warn!(target: "CerberusEngine", "验证任务耗时过长: {}ms", duration.as_millis());
+            warn!(target: "AssertEngine", "验证任务耗时过长: {}ms", duration.as_millis());
         }
     }
-    
+
     /// 获取性能报告
     pub fn get_performance_report(&self) -> Vec<(String, PerfStats)> {
         self.performance_reporter.generate_report()
     }
-    
+
     /// 获取状态管理器统计
     pub fn get_state_stats(&self) -> usize {
         self.state_manager.state_count()
     }
 }
 
-/// Cerberus Tracing 层 - 集成到 tracing 系统
-pub struct CerberusLayer {
+/// 运行时断言 Tracing 层 - 集成到 tracing 系统
+pub struct AssertLayer {
     /// 验证任务发送器
     validation_sender: mpsc::UnboundedSender<ValidationContext>,
     /// 性能报告器
@@ -492,10 +492,10 @@ pub struct CerberusLayer {
     span_timings: DashMap<Id, Instant>,
 }
 
-impl CerberusLayer {
-    /// 创建新的 Cerberus 层（不启动引擎）
-    pub fn new(config: CerberusConfig) -> (Self, CerberusEngine) {
-        let (engine, sender) = CerberusEngine::new(config.clone());
+impl AssertLayer {
+    /// 创建新的断言层（不启动引擎）
+    pub fn new(config: AssertConfig) -> (Self, AssertEngine) {
+        let (engine, sender) = AssertEngine::new(config.clone());
         let performance_reporter = Arc::new(PerformanceReporter::new(config.performance_top_n));
 
         let layer = Self {
@@ -506,49 +506,65 @@ impl CerberusLayer {
 
         (layer, engine)
     }
-    
-    /// 从 tracing::Event 提取验证上下文
-    fn extract_validation_context<S>(&self, event: &Event, _ctx: &Context<S>) -> Option<ValidationContext>
-    where
-        S: Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
-    {
+}
+
+impl<S> Layer<S> for AssertLayer
+where
+    S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        // 提取事件的基本信息
         let metadata = event.metadata();
         let target = metadata.target().to_string();
-        
-        // 提取事件字段
-        let mut fields = HashMap::new();
-        let mut visitor = FieldVisitor::new(&mut fields);
-        event.record(&mut visitor);
-        
-        // 提取事件名称
-        let event_name = fields.get("event_name")
+
+        // 创建字段访问器来提取事件数据
+        let mut field_visitor = FieldVisitor::new();
+        event.record(&mut field_visitor);
+
+        // 获取事件名称
+        let event_name = field_visitor.fields.get("event_name")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
+            .unwrap_or("unknown_event")
             .to_string();
-        
-        Some(ValidationContext {
-            target,
-            event_name,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            fields,
-            span_data: None,
-            trace_id: None,
-        })
+
+        // 创建验证上下文
+        let mut context = ValidationContext::new(target, event_name);
+        context = context.with_fields(field_visitor.fields);
+
+        // 获取当前 span 的信息
+        if let Some(span) = ctx.lookup_current() {
+            let mut span_data = HashMap::new();
+            span_data.insert("span_name".to_string(), span.name().to_string());
+
+            // 获取 trace_id (如果存在)
+            if let Some(trace_id) = span.extensions().get::<String>() {
+                context = context.with_trace_id(trace_id.clone());
+            }
+
+            context.span_data = Some(span_data);
+        }
+
+        // 发送验证任务（非阻塞）
+        if let Err(_) = self.validation_sender.send(context) {
+            // 验证引擎可能已停止，静默忽略
+        }
     }
 }
 
-/// 字段访问器 - 用于提取 tracing::Event 的字段
-struct FieldVisitor<'a> {
-    fields: &'a mut HashMap<String, serde_json::Value>,
+/// 字段访问器 - 用于提取事件字段
+struct FieldVisitor {
+    fields: HashMap<String, serde_json::Value>,
 }
 
-impl<'a> FieldVisitor<'a> {
-    fn new(fields: &'a mut HashMap<String, serde_json::Value>) -> Self {
-        Self { fields }
+impl FieldVisitor {
+    fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
     }
 }
 
-impl<'a> tracing::field::Visit for FieldVisitor<'a> {
+impl tracing::field::Visit for FieldVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         self.fields.insert(
             field.name().to_string(),
@@ -563,6 +579,27 @@ impl<'a> tracing::field::Visit for FieldVisitor<'a> {
         );
     }
 
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.fields.insert(
+            field.name().to_string(),
+            serde_json::Value::Bool(value),
+        );
+    }
+
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        if let Some(number) = serde_json::Number::from_f64(value) {
+            self.fields.insert(
+                field.name().to_string(),
+                serde_json::Value::Number(number),
+            );
+        } else {
+            self.fields.insert(
+                field.name().to_string(),
+                serde_json::Value::String(format!("{}", value)),
+            );
+        }
+    }
+
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.fields.insert(
             field.name().to_string(),
@@ -575,62 +612,5 @@ impl<'a> tracing::field::Visit for FieldVisitor<'a> {
             field.name().to_string(),
             serde_json::Value::Number(serde_json::Number::from(value)),
         );
-    }
-
-    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-        if let Some(num) = serde_json::Number::from_f64(value) {
-            self.fields.insert(
-                field.name().to_string(),
-                serde_json::Value::Number(num),
-            );
-        }
-    }
-
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.fields.insert(
-            field.name().to_string(),
-            serde_json::Value::Bool(value),
-        );
-    }
-}
-
-impl<S> Layer<S> for CerberusLayer
-where
-    S: Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
-{
-    fn on_new_span(&self, _attrs: &tracing::span::Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
-        // 记录 span 开始时间
-        self.span_timings.insert(id.clone(), Instant::now());
-    }
-
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        // 提取验证上下文
-        if let Some(validation_context) = self.extract_validation_context(event, &ctx) {
-            // 异步发送到验证引擎 (非阻塞)
-            if let Err(_) = self.validation_sender.send(validation_context) {
-                error!(target: "CerberusLayer", "验证任务队列已满，丢弃验证任务");
-            }
-        }
-    }
-
-    fn on_close(&self, id: Id, ctx: Context<'_, S>) {
-        // 记录 span 性能数据
-        if let Some((_, start_time)) = self.span_timings.remove(&id) {
-            let duration = start_time.elapsed();
-
-            if let Some(span) = ctx.span(&id) {
-                let span_name = span.metadata().name();
-                self.performance_reporter.record_span(span_name, duration);
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for CerberusEngine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CerberusEngine")
-            .field("rules_count", &self.rules.len())
-            .field("config", &self.config)
-            .finish()
     }
 }

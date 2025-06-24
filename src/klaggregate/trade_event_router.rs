@@ -88,7 +88,7 @@ impl TradeEventRouter {
                     let mut route_count = self.route_count.write().await;
                     *route_count.entry(trade.symbol.clone()).or_insert(0) += 1;
 
-                    // 发出 Cerberus 路由成功验证事件
+                    // 发出路由成功验证事件
                     info!(target: "TradeEventRouter",
                         event_name = "route_success",
                         symbol = %trade.symbol,
@@ -100,7 +100,7 @@ impl TradeEventRouter {
                 Err(e) => {
                     error!(target: "TradeEventRouter", event_name = "聚合失败", symbol = %trade.symbol, error = %e, "处理品种交易失败");
 
-                    // 发出 Cerberus 路由失败验证事件
+                    // 发出路由失败验证事件
                     error!(target: "TradeEventRouter",
                         event_name = "route_failure",
                         symbol = %trade.symbol,
@@ -120,7 +120,7 @@ impl TradeEventRouter {
         } else {
             warn!(target: "TradeEventRouter", event_name = "聚合器未找到", symbol = %trade.symbol, "未找到品种聚合器");
 
-            // 发出 Cerberus 路由失败验证事件
+            // 发出路由失败验证事件
             error!(target: "TradeEventRouter",
                 event_name = "route_failure",
                 symbol = %trade.symbol,
