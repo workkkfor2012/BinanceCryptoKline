@@ -21,7 +21,6 @@ pub use observability::{
 // 导出模块日志相关类型
 pub use module_logging::{
     ModuleLayer,
-    NamedPipeLogForwardingLayer,
 };
 
 // 导出 trace 可视化相关类型

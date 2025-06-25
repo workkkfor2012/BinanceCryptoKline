@@ -83,7 +83,7 @@ impl KlineBackfiller {
                     BACKFILL_LOG_INTERVAL, total_count);
 
                 // 输出日志
-                info!(target: "backfill", "{}", summary);
+                info!(log.type = "module", target = "backfill", "{}", summary);
             }
 
             // 清空交易对计数器
@@ -100,23 +100,23 @@ impl KlineBackfiller {
     /// 运行一次性补齐流程
     #[instrument(name = "backfill_run_once", target = "backfill", skip_all)]
     pub async fn run_once(&self) -> Result<()> {
-        info!(target: "backfill", "开始一次性补齐K线数据...");
+        info!(log.type = "module", target = "backfill", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
         // 1. 获取交易对列表
         let all_symbols = if self.test_mode {
-            info!(target: "backfill", "🔧 测试模式已启用，限制交易对为: {:?}", self.test_symbols);
+            info!(log.type = "module", target = "backfill", "🔧 测试模式已启用，限制交易对为: {:?}", self.test_symbols);
             self.test_symbols.clone()
         } else {
-            info!(target: "backfill", "📡 获取所有正在交易的U本位永续合约交易对...");
+            info!(log.type = "module", target = "backfill", "📡 获取所有正在交易的U本位永续合约交易对...");
             match self.api.get_trading_usdt_perpetual_symbols().await {
                 Ok(symbols) => {
-                    info!(target: "backfill", "✅ 获取到 {} 个交易对", symbols.len());
+                    info!(log.type = "module", target = "backfill", "✅ 获取到 {} 个交易对", symbols.len());
                     symbols
                 },
                 Err(e) => {
                     // 获取交易对失败是严重错误，直接返回错误并结束程序
-                    error!(target: "backfill", "❌ 获取交易对信息失败: {}", e);
+                    error!(log.type = "module", target = "backfill", "❌ 获取交易对信息失败: {}", e);
                     return Err(AppError::ApiError(format!("获取交易对信息失败: {}", e)));
                 }
             }
@@ -124,153 +124,29 @@ impl KlineBackfiller {
 
         // 如果没有获取到交易对，直接返回错误
         if all_symbols.is_empty() {
-            error!(target: "backfill", "没有获取到交易对，补齐流程结束");
+            error!(log.type = "module", target = "backfill", "没有获取到交易对，补齐流程结束");
             return Err(AppError::ApiError("没有获取到交易对，无法继续补齐流程".to_string()));
         }
 
-        // 预先创建所有需要的表
-        info!(target: "backfill", "预先创建所有需要的表，避免下载时的锁竞争");
+        // 2. 创建所有必要的表
         self.ensure_all_tables(&all_symbols)?;
-        info!(target: "backfill", "所有表创建完成");
 
-        // 2. 获取数据库中所有已存在的K线表
-        let existing_tables = self.get_existing_kline_tables()?;
-        info!(target: "backfill", "数据库中找到 {} 个已存在的K线表", existing_tables.len());
+        // 3. 创建所有下载任务 - 声明为循环以便TraceDistiller聚合
+        let task_creation_loop_span = tracing::info_span!(
+            "task_creation_loop",
+            target = "backfill",
+            iterator_type = "SymbolInterval",
+            task_count = all_symbols.len() * self.intervals.len()
+        );
 
-        // 3. 按品种和周期组织已存在的表
-        let mut existing_symbol_intervals = HashMap::new();
-        for (symbol, interval) in &existing_tables {
-            existing_symbol_intervals
-                .entry(symbol.clone())
-                .or_insert_with(Vec::new)
-                .push(interval.clone());
-        }
+        let tasks = async {
+            self.create_all_download_tasks(&all_symbols).await
+        }.instrument(task_creation_loop_span).await?;
 
-        info!(target: "backfill", "需要补齐 {} 个已存在品种的K线数据", existing_symbol_intervals.len());
-
-        // 4. 找出新增的品种（在交易所列表中但不在数据库中）
-        let mut new_symbols = Vec::new();
-        for symbol in &all_symbols {
-            if !existing_symbol_intervals.contains_key(symbol) {
-                new_symbols.push(symbol.clone());
-            }
-        }
-        info!(target: "backfill", "发现 {} 个新品种需要下载完整数据", new_symbols.len());
-
-        // 5. 创建下载任务
-        let mut tasks = Vec::new();
-        let current_time = chrono::Utc::now().timestamp_millis();
-
-        // 5.1 为已存在的品种创建补齐任务
-        // 【测试模式】只处理指定的交易对
-        for (symbol, intervals) in existing_symbol_intervals {
-            // 只处理我们指定的交易对
-            if !all_symbols.contains(&symbol) {
-                continue;
-            }
-            for interval in intervals {
-                // 获取最后一根K线的时间戳
-                if let Some(last_timestamp) = self.db.get_latest_kline_timestamp(&symbol, &interval)? {
-                    // 计算从最后时间戳到当前时间需要补齐的数据
-                    let interval_ms = crate::klcommon::api::interval_to_milliseconds(&interval);
-                    let start_time = last_timestamp + interval_ms; // 从最后一根K线后一个周期开始
-
-                    // 对齐开始时间和结束时间
-                    let aligned_start_time = get_aligned_time(start_time, &interval);
-                    let aligned_end_time = get_aligned_time(current_time, &interval);
-
-                    // 不记录时间对齐信息
-
-                    // 只有当最后K线时间早于当前时间时才需要补齐
-                    if aligned_start_time < aligned_end_time {
-                        // 创建下载任务
-                        let task = DownloadTask {
-                            symbol: symbol.clone(),
-                            interval: interval.clone(),
-                            start_time: Some(aligned_start_time),
-                            end_time: Some(aligned_end_time),
-                            limit: 1000,
-                        };
-
-                        tasks.push(task);
-                    } else {
-
-                    }
-                } else {
-                    // 表存在但没有K线数据，将其视为新品种处理
-                   // warn!("表 {}/{} 存在但没有K线数据，将按照新品种下载完整数据", symbol, interval);
-
-                    // 计算起始时间（根据周期不同设置不同的历史长度）
-                    let start_time = match interval.as_str() {
-                        "1m" => current_time - 1000 * 60 * 1000, // 1000分钟
-                        "5m" => current_time - 5000 * 60 * 1000, // 5000分钟
-                        "30m" => current_time - 30000 * 60 * 1000, // 30000分钟
-                        "4h" => current_time - 4 * 1000 * 60 * 60 * 1000, // 4000小时
-                        "1d" => current_time - 1000 * 24 * 60 * 60 * 1000, // 1000天
-                        "1w" => current_time - 200 * 7 * 24 * 60 * 60 * 1000, // 200周
-                        _ => current_time - 1000 * 60 * 1000, // 默认1000分钟
-                    };
-
-                    // 对齐开始时间和结束时间
-                    let aligned_start_time = get_aligned_time(start_time, &interval);
-                    let aligned_end_time = get_aligned_time(current_time, &interval);
-
-                    // 不记录时间对齐信息
-
-                    // 创建下载任务
-                    let task = DownloadTask {
-                        symbol: symbol.clone(),
-                        interval: interval.clone(),
-                        start_time: Some(aligned_start_time),
-                        end_time: Some(aligned_end_time),
-                        limit: 1000,
-                    };
-
-                    tasks.push(task);
-                }
-            }
-        }
-
-        // 5.2 为新品种创建完整下载任务
-        for symbol in new_symbols {
-            for interval in &self.intervals {
-
-
-                // 计算起始时间（根据周期不同设置不同的历史长度）
-                let start_time = match interval.as_str() {
-                    "1m" => current_time - 1000 * 60 * 1000, // 1000分钟
-                    "5m" => current_time - 5000 * 60 * 1000, // 5000分钟
-                    "30m" => current_time - 30000 * 60 * 1000, // 30000分钟
-                    "1h" => current_time - 1000 * 60 * 60 * 1000, // 1000小时
-                    "4h" => current_time - 4 * 1000 * 60 * 60 * 1000, // 4000小时
-                    "1d" => current_time - 1000 * 24 * 60 * 60 * 1000, // 1000天
-                    "1w" => current_time - 200 * 7 * 24 * 60 * 60 * 1000, // 200周
-                    _ => current_time - 1000 * 60 * 1000, // 默认1000分钟
-                };
-
-                // 对齐开始时间和结束时间
-                let aligned_start_time = get_aligned_time(start_time, &interval);
-                let aligned_end_time = get_aligned_time(current_time, &interval);
-
-                // 不记录时间对齐信息
-
-                // 创建下载任务
-                let task = DownloadTask {
-                    symbol: symbol.clone(),
-                    interval: interval.clone(),
-                    start_time: Some(aligned_start_time),
-                    end_time: Some(aligned_end_time),
-                    limit: 1000,
-                };
-
-                tasks.push(task);
-            }
-        }
-
-        info!(target: "backfill", "创建了 {} 个下载任务（包括补齐任务和新品种完整下载任务）", tasks.len());
+        info!(log.type = "module", target = "backfill", "创建了 {} 个下载任务（包括补齐任务和新品种完整下载任务）", tasks.len());
 
         if tasks.is_empty() {
-            info!(target: "backfill", "没有需要补齐或下载的K线数据，所有数据都是最新的");
+            info!(log.type = "module", target = "backfill", "没有需要补齐或下载的K线数据，所有数据都是最新的");
             return Ok(());
         }
 
@@ -296,7 +172,7 @@ impl KlineBackfiller {
         );
 
         // 使用 .instrument() 将这个 span 附加到接下来的异步块上
-        let (success_count, error_count) = async {
+        let (_success_count, error_count) = async {
 
             for (task_index, task) in tasks.into_iter().enumerate() {
                 let api_clone = self.api.clone();
@@ -307,8 +183,8 @@ impl KlineBackfiller {
                 let failed_tasks_counter_clone = failed_tasks_counter.clone();
                 let task_clone = task.clone();
 
-                let symbol = task.symbol.clone();
-                let interval = task.interval.clone();
+                let _symbol = task.symbol.clone();
+                let _interval = task.interval.clone();
 
                 // ✨【关键修复】✨ 先定义future，将span创建移动到获取许可之后
                 let download_future = async move {
@@ -329,7 +205,7 @@ impl KlineBackfiller {
 
                 async move {
                     // 记录API请求
-                    let request_id = API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
+                    let _request_id = API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
                     // 不再记录开始请求的日志
 
                     // 下载任务
@@ -342,14 +218,14 @@ impl KlineBackfiller {
                         if klines.is_empty() {
                             // 记录空结果错误
                             let error_msg = format!("{}/{}: API返回空结果", symbol, interval);
-                            error!(target: "backfill", "{}/{}: 补齐K线数据失败: {}", symbol, interval, error_msg);
+                            error!(target = "backfill", "{}/{}: 补齐K线数据失败: {}", symbol, interval, error_msg);
 
                             // 更新错误统计 - 使用标准Mutex而不是tokio的Mutex
                             {
                                 if let Ok(mut reasons) = error_reasons_clone.lock() {
                                     *reasons.entry(error_msg.clone()).or_insert(0) += 1;
                                 } else {
-                                    error!(target: "backfill", "无法获取错误原因统计的锁");
+                                    error!(target = "backfill", "无法获取错误原因统计的锁");
                                 }
                             }
 
@@ -359,10 +235,10 @@ impl KlineBackfiller {
                                     tasks.push((task_clone, error_msg.clone()));
                                     // 增加计数器
                                     failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    debug!(target: "backfill", "添加空结果失败任务: {}/{} - 当前计数: {}",
+                                    debug!(target = "backfill", "添加空结果失败任务: {}/{} - 当前计数: {}",
                                            symbol, interval, failed_tasks_counter_clone.load(std::sync::atomic::Ordering::SeqCst));
                                 } else {
-                                    error!(target: "backfill", "无法获取失败任务列表的锁");
+                                    error!(target = "backfill", "无法获取失败任务列表的锁");
                                 }
                             }
 
@@ -384,7 +260,7 @@ impl KlineBackfiller {
                             }
                             Err(db_err) => {
                                 let error_msg = format!("数据库保存失败: {}", db_err);
-                                error!(target: "backfill", "{}/{}: {}", symbol, interval, error_msg);
+                                error!(target = "backfill", "{}/{}: {}", symbol, interval, error_msg);
                                 Err(AppError::DatabaseError(format!("{}/{}: {}", symbol, interval, error_msg)))
                             }
                         };
@@ -400,7 +276,7 @@ impl KlineBackfiller {
                                     if let Ok(mut reasons) = error_reasons_clone.lock() {
                                         *reasons.entry(error_msg.clone()).or_insert(0) += 1;
                                     } else {
-                                        error!(target: "backfill", "无法获取错误原因统计的锁 (数据库保存失败)");
+                                        error!(target = "backfill", "无法获取错误原因统计的锁 (数据库保存失败)");
                                     }
                                 }
 
@@ -409,10 +285,10 @@ impl KlineBackfiller {
                                     if let Ok(mut tasks) = failed_tasks_clone.lock() {
                                         tasks.push((task_clone.clone(), error_msg.clone()));
                                         let count = failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                                        debug!(target: "backfill", "添加数据库保存失败任务: {}/{} - 当前计数: {}",
+                                        debug!(target = "backfill", "添加数据库保存失败任务: {}/{} - 当前计数: {}",
                                                symbol, interval, count);
                                     } else {
-                                        error!(target: "backfill", "无法获取失败任务列表的锁 (数据库保存失败)");
+                                        error!(target = "backfill", "无法获取失败任务列表的锁 (数据库保存失败)");
                                     }
                                 }
 
@@ -444,53 +320,30 @@ impl KlineBackfiller {
                         // 构建完整URL
                         let fapi_url = format!("https://fapi.binance.com/fapi/v1/klines?{}", url_params);
 
-                        let error_msg = format!("{}", e);
-                        error!(target: "backfill", "API请求 #{}: {}/{} - 请求失败: {}",
-                               request_id, symbol, interval, error_msg);
-                        error!(target: "backfill", "{}/{}: 补齐K线数据失败: {}", symbol, interval, error_msg);
-                        error!(target: "backfill", "失败的URL: {}", fapi_url);
+                        // ✨ [错误记录]: 使用 tracing::error! 替代复杂的 Mutex 操作
+                        // 这个错误会被 on_event 捕获，并附加到 download_kline_task Span 上
+                        tracing::error!(
+                            message = %format!("API下载失败: {}", e),
+                            error.type = "ApiError",
+                            fapi_url = %fapi_url
+                        );
 
-                        // 更新错误统计 - 使用标准Mutex
-                        {
-                            let reason_key = if error_msg.contains("429 Too Many Requests") {
-                                "429 Too Many Requests".to_string()
-                            } else if error_msg.contains("timeout") {
-                                "请求超时".to_string()
-                            } else if error_msg.contains("unexpected EOF during handshake") {
-                                "握手中断".to_string()
-                            } else if error_msg.contains("HTTP error") {
-                                "HTTP error".to_string()
-                            } else if error_msg.contains("empty response") {
-                                "空响应".to_string()
-                            } else {
-                                // 提取错误类型
-                                let parts: Vec<&str> = error_msg.split(':').collect();
-                                if parts.len() > 1 {
-                                    parts[0].trim().to_string()
-                                } else {
-                                    error_msg.clone()
-                                }
-                            };
-
-                            if let Ok(mut reasons) = error_reasons_clone.lock() {
-                                *reasons.entry(reason_key.clone()).or_insert(0) += 1;
-                            } else {
-                                error!(target: "backfill", "无法获取错误原因统计的锁");
-                            }
-
-                            // 将失败的任务和原因添加到失败列表中 - 使用标准Mutex
-                            if let Ok(mut tasks) = failed_tasks_clone.lock() {
-                                tasks.push((task_clone, error_msg.clone()));
-                                // 增加计数器
-                                let count = failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                                debug!(target: "backfill", "添加失败任务: {}/{} - 错误类型: {} - 当前计数: {}",
-                                       symbol, interval, reason_key, count);
-                            } else {
-                                error!(target: "backfill", "无法获取失败任务列表的锁");
-                            }
+                        // ✨ [修复关键bug] 将失败任务添加到failed_tasks列表中，以便重试逻辑能够访问
+                        let error_msg = format!("API下载失败: {}", e);
+                        if let Ok(mut locked_failed_tasks) = failed_tasks_clone.lock() {
+                            locked_failed_tasks.push((task_clone, error_msg.clone()));
+                            failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        } else {
+                            tracing::error!("无法锁定 failed_tasks 列表以记录失败任务！");
                         }
 
-                        Err(e)
+                        // 更新错误统计
+                        if let Ok(mut reasons) = error_reasons_clone.lock() {
+                            *reasons.entry(error_msg.clone()).or_insert(0) += 1;
+                        }
+
+                        // 返回错误
+                        Err(AppError::ApiError(error_msg))
                         }
                     }
                     }.instrument(task_span).await // instrument 并 await
@@ -514,19 +367,19 @@ impl KlineBackfiller {
                             Ok(_) => {
                                 success_count += 1;
                                 if i % 100 == 0 {
-                                    debug!(target: "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
+                                    debug!(target = "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
                                 }
                             },
                             Err(_) => {
                                 error_count += 1;
                                 if error_count % 10 == 0 {
-                                    debug!(target: "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
+                                    debug!(target = "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
                                 }
                             },
                         }
                     }
                     Err(join_err) => { // Task panicked
-                        error!(target: "backfill", "任务 #{} 执行因panic而失败: {}", i + 1, join_err);
+                        error!(target = "backfill", "任务 #{} 执行因panic而失败: {}", i + 1, join_err);
                         error_count += 1;
                         // 注意：此处panic的任务目前不会被添加到 failed_tasks 列表，因为原始task对象不易获取
                         // 可以在最外层执行 backfill 时增加对 panic 的捕获和记录，如果需要更全面的失败任务列表
@@ -544,7 +397,7 @@ impl KlineBackfiller {
             tracing::Span::current().record("error_count", error_count);
             tracing::Span::current().record("elapsed_seconds", total_seconds);
 
-            info!(target: "backfill",
+            info!(target = "backfill",
                 "第一轮K线补齐完成，成功: {}，失败: {}，耗时: {}分{}秒",
                 success_count, error_count, minutes, seconds
             );
@@ -558,17 +411,17 @@ impl KlineBackfiller {
         let failed_tasks_size = match failed_tasks.lock() {
             Ok(tasks) => tasks.len(),
             Err(_) => {
-                error!(target: "backfill", "无法获取失败任务列表的锁");
+                error!(target = "backfill", "无法获取失败任务列表的锁");
                 0
             }
         };
         let failed_tasks_count = failed_tasks_counter.load(std::sync::atomic::Ordering::SeqCst);
-        debug!(target: "backfill", "任务完成后，失败任务列表大小: {}, 计数器值: {}, 统计的错误数: {}",
+        debug!(target = "backfill", "任务完成后，失败任务列表大小: {}, 计数器值: {}, 统计的错误数: {}",
                failed_tasks_size, failed_tasks_count, error_count);
 
         // 如果存在不一致，记录警告
         if failed_tasks_size != error_count || failed_tasks_count != error_count {
-            warn!(target: "backfill", "失败任务统计不一致: 列表大小={}, 计数器值={}, 统计错误数={}",
+            warn!(target = "backfill", "失败任务统计不一致: 列表大小={}, 计数器值={}, 统计错误数={}",
                   failed_tasks_size, failed_tasks_count, error_count);
         }
 
@@ -801,8 +654,8 @@ impl KlineBackfiller {
                     let retry_error_reasons_clone = retry_error_reasons.clone();
                     let task_clone = task.clone();
 
-                    let symbol = task.symbol.clone();
-                    let interval = task.interval.clone();
+                    let _symbol = task.symbol.clone();
+                    let _interval = task.interval.clone();
 
                     // ✨【关键修复】✨ 先定义future，将span创建移动到获取许可之后
                     let retry_future = async move {
@@ -1176,5 +1029,121 @@ impl KlineBackfiller {
 
         info!(target: "backfill", "表创建完成，新创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
         Ok(())
+    }
+
+    /// 创建所有下载任务的主函数
+    /// 注意：移除了#[instrument]注解，因为已被外部的task_creation_loop span追踪
+    async fn create_all_download_tasks(&self, all_symbols: &[String]) -> Result<Vec<DownloadTask>> {
+        let mut tasks = Vec::new();
+
+        // 获取数据库中已存在的表信息
+        let existing_tables = self.get_existing_kline_tables()?;
+        let mut existing_symbol_intervals = HashMap::new();
+
+        for (symbol, interval) in &existing_tables {
+            existing_symbol_intervals
+                .entry(symbol.clone())
+                .or_insert_with(Vec::new)
+                .push(interval.clone());
+        }
+
+        // 为新品种创建完整下载任务（先计算，避免借用冲突）
+        let new_symbols: Vec<String> = all_symbols.iter()
+            .filter(|symbol| !existing_symbol_intervals.contains_key(*symbol))
+            .cloned()
+            .collect();
+
+        // 为已存在的品种创建补齐任务
+        for (symbol, intervals) in existing_symbol_intervals {
+            if !all_symbols.contains(&symbol) {
+                continue;
+            }
+            for interval in intervals {
+                if let Some(task) = self.create_task_for_existing_symbol(&symbol, &interval).await? {
+                    tasks.push(task);
+                }
+            }
+        }
+
+        for symbol in new_symbols {
+            for interval in &self.intervals {
+                let task = self.create_task_for_new_symbol(&symbol, interval).await?;
+                tasks.push(task);
+            }
+        }
+
+        Ok(tasks)
+    }
+
+    /// 为已存在的交易对创建补齐任务
+    #[instrument(skip(self), ret, err)]
+    async fn create_task_for_existing_symbol(&self, symbol: &str, interval: &str) -> Result<Option<DownloadTask>> {
+        let current_time = chrono::Utc::now().timestamp_millis();
+
+        if let Some(last_timestamp) = self.db.get_latest_kline_timestamp(symbol, interval)? {
+            // 有数据的情况：创建补齐任务
+            let interval_ms = crate::klcommon::api::interval_to_milliseconds(interval);
+            let start_time = last_timestamp + interval_ms;
+
+            let aligned_start_time = get_aligned_time(start_time, interval);
+            let aligned_end_time = get_aligned_time(current_time, interval);
+
+            if aligned_start_time < aligned_end_time {
+                Ok(Some(DownloadTask {
+                    symbol: symbol.to_string(),
+                    interval: interval.to_string(),
+                    start_time: Some(aligned_start_time),
+                    end_time: Some(aligned_end_time),
+                    limit: 1000,
+                }))
+            } else {
+                Ok(None) // 不需要补齐
+            }
+        } else {
+            // 表存在但无数据：创建完整下载任务
+            let start_time = self.calculate_historical_start_time(current_time, interval);
+            let aligned_start_time = get_aligned_time(start_time, interval);
+            let aligned_end_time = get_aligned_time(current_time, interval);
+
+            Ok(Some(DownloadTask {
+                symbol: symbol.to_string(),
+                interval: interval.to_string(),
+                start_time: Some(aligned_start_time),
+                end_time: Some(aligned_end_time),
+                limit: 1000,
+            }))
+        }
+    }
+
+    /// 为新品种创建完整下载任务
+    #[instrument(skip(self), ret, err)]
+    async fn create_task_for_new_symbol(&self, symbol: &str, interval: &str) -> Result<DownloadTask> {
+        let current_time = chrono::Utc::now().timestamp_millis();
+        let start_time = self.calculate_historical_start_time(current_time, interval);
+
+        let aligned_start_time = get_aligned_time(start_time, interval);
+        let aligned_end_time = get_aligned_time(current_time, interval);
+
+        Ok(DownloadTask {
+            symbol: symbol.to_string(),
+            interval: interval.to_string(),
+            start_time: Some(aligned_start_time),
+            end_time: Some(aligned_end_time),
+            limit: 1000,
+        })
+    }
+
+    /// 根据周期计算历史数据的起始时间
+    fn calculate_historical_start_time(&self, current_time: i64, interval: &str) -> i64 {
+        match interval {
+            "1m" => current_time - 1000 * 60 * 1000, // 1000分钟
+            "5m" => current_time - 5000 * 60 * 1000, // 5000分钟
+            "30m" => current_time - 30000 * 60 * 1000, // 30000分钟
+            "1h" => current_time - 1000 * 60 * 60 * 1000, // 1000小时
+            "4h" => current_time - 4 * 1000 * 60 * 60 * 1000, // 4000小时
+            "1d" => current_time - 1000 * 24 * 60 * 60 * 1000, // 1000天
+            "1w" => current_time - 200 * 7 * 24 * 60 * 60 * 1000, // 200周
+            _ => current_time - 1000 * 60 * 1000, // 默认1000分钟
+        }
     }
 }

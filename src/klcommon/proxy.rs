@@ -2,7 +2,7 @@
 ///
 /// 集中管理所有代理设置，便于统一修改
 
-use tracing::instrument;
+
 
 /// 代理服务器地址
 pub const PROXY_HOST: &str = "127.0.0.1";

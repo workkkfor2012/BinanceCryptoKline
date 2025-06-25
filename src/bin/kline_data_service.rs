@@ -60,41 +60,41 @@ async fn run_app() -> Result<()> {
     let intervals = "1m,5m,30m,1h,4h,1d,1w".to_string();
     let interval_list = intervals.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
 
-    info!("启动K线数据补齐服务");
-    info!("使用周期: {}", intervals);
+    info!(log.type = "module", "启动K线数据补齐服务");
+    info!(log.type = "module", "使用周期: {}", intervals);
 
     // 创建数据库连接
     let db_path = std::path::PathBuf::from("./data/klines.db");
     let db = Arc::new(Database::new(&db_path)?);
 
     // 执行K线数据补齐
-    info!("开始补齐K线数据...");
+    info!(log.type = "module", "开始补齐K线数据...");
 
     // 创建补齐器实例
     let backfiller = if TEST_MODE {
-        info!("🔧 启用测试模式，限制交易对为: {:?}", TEST_SYMBOLS);
+        info!(log.type = "module", "🔧 启用测试模式，限制交易对为: {:?}", TEST_SYMBOLS);
         KlineBackfiller::new_test_mode(
             db.clone(),
             interval_list,
             TEST_SYMBOLS.iter().map(|s| s.to_string()).collect()
         )
     } else {
-        info!("📡 生产模式，将获取所有交易对");
+        info!(log.type = "module", "📡 生产模式，将获取所有交易对");
         KlineBackfiller::new(db.clone(), interval_list)
     };
 
     // 运行一次性补齐流程
     match backfiller.run_once().await {
         Ok(_) => {
-            info!("历史K线补齐完成");
+            info!(log.type = "module", "历史K线补齐完成");
         },
         Err(e) => {
-            error!("历史K线补齐失败: {}", e);
+            error!(log.type = "module", "历史K线补齐失败: {}", e);
             return Err(e);
         }
     }
 
-    info!("K线数据补齐服务完成");
+    info!(log.type = "module", "K线数据补齐服务完成");
 
     Ok(())
 }
@@ -147,11 +147,11 @@ fn init_logging_with_distiller() -> TraceDistillerStore {
                 .with(create_env_filter(&log_level))
                 .init();
 
-            info!("🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼）");
-            info!("📊 模块日志: 只处理顶层日志，log_type=module");
-            info!("🔍 Trace可视化: 只处理Span内日志，log_type=trace");
-            info!("🔬 轨迹提炼: 构建调用树用于调试快照");
-            info!("🔗 共享管道: {}", pipe_name);
+            info!(log.type = "module", "🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼）");
+            info!(log.type = "module", "📊 模块日志: 只处理顶层日志，log_type=module");
+            info!(log.type = "module", "🔍 Trace可视化: 只处理Span内日志，log_type=trace");
+            info!(log.type = "module", "🔬 轨迹提炼: 构建调用树用于调试快照");
+            info!(log.type = "module", "🔗 共享管道: {}", pipe_name);
         }
         "websocket" => {
             // WebSocket模式已不再支持，回退到文件模式 + 轨迹提炼
@@ -164,8 +164,8 @@ fn init_logging_with_distiller() -> TraceDistillerStore {
                 .with(create_env_filter(&log_level))
                 .init();
 
-            info!("⚠️  WebSocket模式已不再支持，已回退到文件模式 + 轨迹提炼");
-            info!("💡 请使用 LOG_TRANSPORT=named_pipe 启用日志传输");
+            info!(log.type = "module", "⚠️  WebSocket模式已不再支持，已回退到文件模式 + 轨迹提炼");
+            info!(log.type = "module", "💡 请使用 LOG_TRANSPORT=named_pipe 启用日志传输");
         }
         _ => {
             // 文件模式（默认）+ 轨迹提炼
@@ -178,11 +178,11 @@ fn init_logging_with_distiller() -> TraceDistillerStore {
                 .with(create_env_filter(&log_level))
                 .init();
 
-            info!("日志系统已初始化（文件模式 + 轨迹提炼）");
+            info!(log.type = "module", "日志系统已初始化（文件模式 + 轨迹提炼）");
         }
     }
 
-    info!("日志级别: {}", log_level);
+    info!(log.type = "module", "日志级别: {}", log_level);
 
     // 返回distiller_store供主程序使用
     distiller_store
@@ -225,7 +225,7 @@ fn load_logging_config() -> Result<(String, String, String)> {
 
 /// 生成程序退出时的最终快照
 async fn generate_final_snapshot(store: &TraceDistillerStore) {
-    info!("🔬 程序退出，生成最终Trace快照...");
+    info!(log.type = "module", "🔬 程序退出，生成最终Trace快照...");
 
     // 等待一小段时间，确保所有正在进行的span都能完成
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -234,7 +234,7 @@ async fn generate_final_snapshot(store: &TraceDistillerStore) {
 
     // 确保目录存在
     if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
-        error!("无法创建调试快照目录: {}", e);
+        error!(log.type = "module", "无法创建调试快照目录: {}", e);
         return;
     }
 
@@ -250,15 +250,15 @@ async fn generate_final_snapshot(store: &TraceDistillerStore) {
         Ok(mut file) => {
             use tokio::io::AsyncWriteExt;
             if file.write_all(report_text.as_bytes()).await.is_err() {
-                error!("写入快照文件 {} 失败", filename);
+                error!(log.type = "module", "写入快照文件 {} 失败", filename);
             } else {
-                info!("✅ 已生成最终Trace快照: {}", filename);
+                info!(log.type = "module", "✅ 已生成最终Trace快照: {}", filename);
             }
         },
         Err(e) => {
-            error!("创建快照文件 {} 失败: {}", filename, e);
+            error!(log.type = "module", "创建快照文件 {} 失败: {}", filename, e);
         }
     }
 
-    info!("✅ 最终快照生成完成");
+    info!(log.type = "module", "✅ 最终快照生成完成");
 }

@@ -33,7 +33,6 @@ pub use proxy::{ProxyConfig, get_proxy_url, PROXY_HOST, PROXY_PORT};
 // 导出日志相关类型，保持向后兼容
 pub use log::{
     ModuleLayer,
-    NamedPipeLogForwardingLayer,
     NamedPipeLogManager,
     TraceVisualizationLayer,
     AssertEngine,

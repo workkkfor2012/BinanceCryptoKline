@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use tokio::task;
+
 use crossbeam_channel::{bounded, Sender, Receiver};
 
 // Global counters for tracking insert and update operations
@@ -62,31 +63,44 @@ impl DbWriteQueueProcessor {
         // ✨ 关键修复：使用 tokio::spawn 而不是 std::thread::spawn
         // 这样可以保持 tracing 上下文，避免 ensure_symbol_table 变成孤儿 Span
         tokio::spawn(async move {
-            info!(target: "db", "数据库写入队列处理器已启动");
+            info!(log.type = "module", target = "db", "数据库写入队列处理器已启动");
 
             while *self.is_running.lock().unwrap() {
                 // 尝试从队列中获取任务，最多等待100毫秒
                 match self.receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(task) => {
-                        // ✨【关键修复】✨ 使用传递过来的 parent_span 来建立正确的追踪上下文
-                        // 为每个被处理的任务创建一个新的 span，并将其设置为 parent_span 的子 span
-                        let db_write_span = tracing::info_span!(
-                            parent: &task.parent_span,  // 明确指定父 span
-                            "db_write_task",
-                            symbol = %task.symbol,
-                            interval = %task.interval,
-                            klines_count = task.klines.len(),
-                            target = "db"
-                        );
+                        // 克隆必要的数据，因为它们需要被 move 到新线程
+                        let pool_clone = self.pool.clone();
+                        let symbol_clone = task.symbol.clone();
+                        let interval_clone = task.interval.clone();
+                        let klines_clone = task.klines.clone();
+                        let result_sender = task.result_sender;
 
-                        // 使用 .in_scope() 来包裹实际的工作，确保所有内部调用都在正确的追踪上下文中
-                        let result = db_write_span.in_scope(|| {
-                            self.process_write_task(task.symbol.as_str(), task.interval.as_str(), &task.klines)
+                        // 在调用 spawn_blocking 之前，使用 parent_span 来确保正确的追踪上下文
+                        let join_handle = task.parent_span.in_scope(|| {
+                            task::spawn_blocking(move || {
+                                // 在阻塞线程中执行数据库操作
+                                Self::process_write_task_static(&pool_clone, &symbol_clone, &interval_clone, &klines_clone)
+                            })
                         });
 
-                        // 发送结果
-                        if let Err(e) = task.result_sender.send(result) {
-                            error!(target: "db", "无法发送写入任务结果: {}", e);
+                        // 等待阻塞任务完成并处理结果
+                        match join_handle.await {
+                            Ok(db_result) => {
+                                // 发送数据库操作结果
+                                if let Err(e) = result_sender.send(db_result) {
+                                    error!(log.type = "module", target = "db", "无法发送写入任务结果: {}", e);
+                                }
+                            },
+                            Err(join_error) => {
+                                // JoinError 表示任务 panic 了
+                                let error_result = Err(AppError::DatabaseError(
+                                    format!("数据库写入任务 panic: {:?}", join_error)
+                                ));
+                                if let Err(e) = result_sender.send(error_result) {
+                                    error!(log.type = "module", target = "db", "无法发送写入任务错误结果: {}", e);
+                                }
+                            }
                         }
                     },
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
@@ -95,16 +109,124 @@ impl DbWriteQueueProcessor {
                     },
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                         // 发送端已关闭，退出循环
-                        info!(target: "db", "数据库写入队列已关闭，处理器将退出");
+                        info!(log.type = "module", target = "db", "数据库写入队列已关闭，处理器将退出");
                         break;
                     }
                 }
             }
 
-            info!(target: "db", "数据库写入队列处理器已停止");
+            info!(log.type = "module", target = "db", "数据库写入队列处理器已停止");
         });
 
         is_running
+    }
+
+    /// 静态版本的写入任务处理函数，用于在 spawn_blocking 中执行
+    fn process_write_task_static(pool: &DbPool, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
+        if klines.is_empty() {
+            return Ok(0);
+        }
+
+        // 创建表名
+        let symbol_lower = symbol.to_lowercase().replace("usdt", "");
+        let interval_lower = interval.to_lowercase();
+        let table_name = format!("k_{symbol_lower}_{interval_lower}");
+
+        // 获取数据库连接
+        let mut conn = pool.get()
+            .map_err(|e| AppError::DatabaseError(format!("获取数据库连接失败: {}", e)))?;
+
+        // 确保表存在
+        Self::ensure_symbol_table_static(&conn, symbol, interval, &table_name)?;
+
+        // 开始事务
+        let tx = conn.transaction()
+            .map_err(|e| AppError::DatabaseError(format!("开始事务失败: {}", e)))?;
+
+        let mut count = 0;
+        let mut _updated = 0;
+
+        // 处理每个K线
+        for kline in klines {
+            // 检查是否存在
+            let exists: bool = tx.query_row(
+                &format!("SELECT 1 FROM {} WHERE open_time = ?", table_name),
+                params![kline.open_time],
+                |_| Ok(true)
+            ).optional().map_err(|e| AppError::DatabaseError(format!("查询K线失败: {}", e)))?.is_some();
+
+            if exists {
+                // 更新现有K线
+                let result = tx.execute(
+                    &format!("UPDATE {} SET
+                        open = ?, high = ?, low = ?, close = ?, volume = ?,
+                        close_time = ?, quote_asset_volume = ?
+                    WHERE open_time = ?", table_name),
+                    params![
+                        kline.open,
+                        kline.high,
+                        kline.low,
+                        kline.close,
+                        kline.volume,
+                        kline.close_time,
+                        kline.quote_asset_volume,
+                        kline.open_time,
+                    ],
+                );
+
+                match result {
+                    Ok(_) => {
+                        _updated += 1;
+                        count += 1;
+                    },
+                    Err(e) => {
+                        // 回滚事务
+                        let _ = tx.rollback();
+                        return Err(AppError::DatabaseError(format!("更新K线失败: {}", e)));
+                    }
+                }
+            } else {
+                // 插入新K线
+                let result = tx.execute(
+                    &format!("INSERT INTO {} (
+                        open_time, open, high, low, close, volume,
+                        close_time, quote_asset_volume
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
+                    params![
+                        kline.open_time,
+                        kline.open,
+                        kline.high,
+                        kline.low,
+                        kline.close,
+                        kline.volume,
+                        kline.close_time,
+                        kline.quote_asset_volume,
+                    ],
+                );
+
+                match result {
+                    Ok(_) => count += 1,
+                    Err(e) => {
+                        let _ = tx.rollback();
+                        // ✨ [错误记录]: 在返回错误前，记录更详细的上下文
+                        tracing::error!(
+                            message = %format!("数据库写入失败: {}", e),
+                            error.type = "DatabaseError",
+                            table_name = %table_name,
+                            failed_at_kline_index = count // 当前处理的K线索引
+                        );
+                        return Err(AppError::DatabaseError(format!("插入K线失败: {}", e)));
+                    }
+                }
+            }
+        }
+
+        // 提交事务
+        tx.commit()
+            .map_err(|e| AppError::DatabaseError(format!("提交事务失败: {}", e)))?;
+
+        //debug!("成功保存 {} 条K线数据到表 {} (更新: {})", count, table_name, updated);
+        Ok(count)
     }
 
     /// 处理单个写入任务
@@ -193,8 +315,14 @@ impl DbWriteQueueProcessor {
                 match result {
                     Ok(_) => count += 1,
                     Err(e) => {
-                        // 回滚事务
                         let _ = tx.rollback();
+                        // ✨ [错误记录]: 在返回错误前，记录更详细的上下文
+                        tracing::error!(
+                            message = %format!("数据库写入失败: {}", e),
+                            error.type = "DatabaseError",
+                            table_name = %table_name,
+                            failed_at_kline_index = count // 当前处理的K线索引
+                        );
                         return Err(AppError::DatabaseError(format!("插入K线失败: {}", e)));
                     }
                 }
@@ -207,6 +335,29 @@ impl DbWriteQueueProcessor {
 
         //debug!("成功保存 {} 条K线数据到表 {} (更新: {})", count, table_name, updated);
         Ok(count)
+    }
+
+    /// 静态版本的确保表存在函数，用于在 spawn_blocking 中执行
+    fn ensure_symbol_table_static(conn: &rusqlite::Connection, _symbol: &str, _interval: &str, table_name: &str) -> Result<()> {
+        // 创建表
+        let create_table_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {} (
+                open_time INTEGER PRIMARY KEY,
+                open TEXT NOT NULL,
+                high TEXT NOT NULL,
+                low TEXT NOT NULL,
+                close TEXT NOT NULL,
+                volume TEXT NOT NULL,
+                close_time INTEGER NOT NULL,
+                quote_asset_volume TEXT NOT NULL
+            )",
+            table_name
+        );
+
+        conn.execute(&create_table_sql, [])
+            .map_err(|e| AppError::DatabaseError(format!("创建表 {} 失败: {}", table_name, e)))?;
+
+        Ok(())
     }
 
     /// 确保表存在
@@ -254,7 +405,7 @@ impl Database {
             }
         }
 
-        info!(target: "db", "Using SQLite database with optimized performance settings at {}", db_path.display());
+        info!(log.type = "module", target = "db", "Using SQLite database with optimized performance settings at {}", db_path.display());
 
         // Create database connection manager with WAL mode and performance optimizations
         let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
@@ -295,7 +446,7 @@ impl Database {
         // Initialize database tables
         db.init_db()?;
 
-        info!(target: "db", "SQLite database with optimized performance settings and write queue initialized successfully");
+        info!(log.type = "module", target = "db", "SQLite database with optimized performance settings and write queue initialized successfully");
         Ok(db)
     }
 
@@ -626,7 +777,7 @@ impl Database {
     /// 关闭写入队列处理器
     #[instrument(target = "Database", skip_all)]
     pub fn shutdown(&self) {
-        info!(target: "db", "正在关闭数据库写入队列...");
+        info!(log.type = "module", target = "db", "正在关闭数据库写入队列...");
 
         // 设置运行标志为false，通知处理器停止
         if let Ok(mut running) = self.queue_processor_running.lock() {
@@ -636,7 +787,7 @@ impl Database {
         // 等待所有剩余的任务处理完成
         // 这里我们不等待，因为处理器会在接收到关闭信号后自行退出
 
-        info!(target: "db", "数据库写入队列已关闭");
+        info!(log.type = "module", target = "db", "数据库写入队列已关闭");
     }
 }
 

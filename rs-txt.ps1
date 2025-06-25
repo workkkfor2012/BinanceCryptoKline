@@ -8,7 +8,11 @@ $sourceFiles = @(
     "src\kldata\backfill.rs",
     "src\klcommon\log\trace_distiller.rs",
     "src\klcommon\log\trace_visualization.rs",
+    "src\klcommon\api.rs",
+    "src\klcommon\db.rs",
+    "src\klcommon\log\module_logging.rs",
     "src\klcommon\log\observability.rs"
+
 )
 
 $htmlFilePath = "src\weblog\static\index.html"

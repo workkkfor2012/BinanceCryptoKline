@@ -48,7 +48,7 @@ impl Default for NodeType {
     fn default() -> Self { NodeType::Call }
 }
 
-/// ✨ [修改] 调用树节点结构，增加NodeType
+/// ✨ [修改] 调用树节点结构，增加NodeType和AI调试增强字段
 #[derive(Debug)]
 pub struct DistilledTraceNode {
     pub name: String,
@@ -61,11 +61,18 @@ pub struct DistilledTraceNode {
     pub has_error: bool,
     pub error_messages: Vec<String>,
     is_critical_path: bool,
+    // ✨ [新增] 用于AI调试的增强字段
+    pub code_filepath: &'static str,
+    pub code_lineno: u32,
+    // ✨ [新增] 错误发生时，从父节点快照的关键字段
+    pub state_snapshot_on_error: Option<HashMap<String, String>>,
+    // ✨ [新增] 存储事件，特别是决策点事件
+    pub events: Vec<HashMap<String, String>>,
 }
 
 impl DistilledTraceNode {
-    // ✨ [修改] new函数，根据span名称和字段自动判断节点类型
-    fn new(name: String, fields: HashMap<String, String>) -> Self {
+    // ✨ [修改] new函数，接收代码位置信息
+    fn new(name: String, fields: HashMap<String, String>, filepath: &'static str, lineno: u32) -> Self {
         let node_type = if name.ends_with("_loop") {
             NodeType::Loop {
                 iterator_type: fields.get("iterator_type").cloned().unwrap_or_else(|| "item".to_string()),
@@ -88,6 +95,10 @@ impl DistilledTraceNode {
             has_error: false,
             error_messages: Vec::new(),
             is_critical_path: false,
+            code_filepath: filepath, // ✨ 新增
+            code_lineno: lineno,     // ✨ 新增
+            state_snapshot_on_error: None, // ✨ 新增
+            events: Vec::new(),      // ✨ 新增
         }
     }
 }
@@ -215,13 +226,17 @@ where
             return;
         }
 
+        let metadata = span.metadata();
         let mut fields = HashMap::new();
         let mut visitor = FieldExtractor::new(&mut fields);
         attrs.record(&mut visitor);
 
+        // ✨ [修改] 创建 Node 时传入代码位置信息
         let node = Arc::new(RwLock::new(DistilledTraceNode::new(
-            span.metadata().name().to_string(),
+            metadata.name().to_string(),
             fields,
+            metadata.file().unwrap_or("unknown"),
+            metadata.line().unwrap_or(0),
         )));
 
         // ✨ 简化：只把节点存入当前span的extensions
@@ -270,24 +285,49 @@ where
     }
 
     fn on_event(&self, event: &event::Event<'_>, ctx: Context<'_, S>) {
-        // 捕获错误和警告信息
-        if *event.metadata().level() <= Level::WARN {
-            if let Some(span) = ctx.lookup_current() {
-                if let Some(node) = span.extensions().get::<Arc<RwLock<DistilledTraceNode>>>() {
-                    let mut node_guard = node.write().unwrap();
-                    
-                    if *event.metadata().level() <= Level::ERROR {
-                        node_guard.has_error = true;
+        let current_span = if let Some(span) = ctx.lookup_current() { span } else { return; };
+        let node_arc = if let Some(node) = current_span.extensions().get::<Arc<RwLock<DistilledTraceNode>>>() { node.clone() } else { return; };
+
+        // ✨ [修改] 提取所有事件字段
+        let mut fields = HashMap::new();
+        let mut visitor = FieldExtractor::new(&mut fields);
+        event.record(&mut visitor);
+
+        // ✨ [修改] 捕获所有事件，特别是决策点事件
+        {
+            let mut node_guard = node_arc.write().unwrap();
+
+            // ✨ [新增] 存储所有事件到节点
+            node_guard.events.push(fields.clone());
+
+            // 处理错误级别的事件
+            if *event.metadata().level() <= Level::WARN {
+                if *event.metadata().level() <= Level::ERROR {
+                    node_guard.has_error = true;
+                }
+
+                if let Some(message) = fields.get("message") {
+                    node_guard.error_messages.push(message.clone());
+                }
+
+                // ✨ [新增] 如果是错误，并且快照还未被捕获，则进行状态快照
+                if node_guard.has_error && node_guard.state_snapshot_on_error.is_none() {
+                    let mut snapshot = HashMap::new();
+                    // 遍历所有父节点
+                    if let Some(parent_path) = ctx.span_scope(&current_span.id()) {
+                        for parent_span in parent_path.from_root() {
+                            if parent_span.id() == current_span.id() { continue; } // 跳过自己
+
+                            if let Some(p_node_arc) = parent_span.extensions().get::<Arc<RwLock<DistilledTraceNode>>>() {
+                                let p_node = p_node_arc.read().unwrap();
+                                // 将父节点的字段加入快照，并用父节点名作为前缀避免冲突
+                                for (key, value) in &p_node.fields {
+                                    snapshot.insert(format!("{}.{}", p_node.name, key), value.clone());
+                                }
+                            }
+                        }
                     }
-                    
-                    // 提取错误消息
-                    let mut fields = HashMap::new();
-                    let mut visitor = FieldExtractor::new(&mut fields);
-                    event.record(&mut visitor);
-                    
-                    if let Some(message) = fields.get("message") {
-                        node_guard.error_messages.push(message.clone());
-                    }
+                    node_guard.state_snapshot_on_error = Some(snapshot);
                 }
             }
         }
@@ -321,6 +361,9 @@ where
                 is_loop_node = true;
             }
         }
+
+        // ✨ 智能决策推理：从函数返回值推断业务决策
+        Self::infer_business_decision(&node_arc);
 
         // ✨ 如果关闭的是一个循环节点，执行路径原型聚合
         if is_loop_node {
@@ -529,12 +572,40 @@ fn generate_node_text(
                 "".to_string()
             };
 
+            // ✨ [新增] 在节点名称后附加上代码位置
+            let name_with_location = format!("{}({}:{})", node.name,
+                node.code_filepath.split('/').last().unwrap_or(""), node.code_lineno);
+
             writeln!(
                 summary,
                 "{}{}{}{}{} ({}{}){}",
                 prefix, connector, critical_marker, error_marker,
-                node.name, duration_str, self_time_str, fields_str
+                name_with_location, // ✨ 使用带位置的名称
+                duration_str, self_time_str, fields_str
             ).unwrap();
+
+            // ✨ [新增] 如果有错误状态快照，则打印它
+            if let Some(snapshot) = &node.state_snapshot_on_error {
+                let snapshot_prefix = format!("{}  {}", prefix, if is_last { "   " } else { "│  " });
+                writeln!(summary, "{}{}", snapshot_prefix, "└─ 💡 错误状态快照:").unwrap();
+                for (key, value) in snapshot {
+                    writeln!(summary, "{}    - {} = {}", snapshot_prefix, key, value).unwrap();
+                }
+            }
+
+            // ✨ [新增] 如果有事件，特别是决策点事件，则打印它们
+            if !node.events.is_empty() {
+                let event_prefix = format!("{}  {}", prefix, if is_last { "   " } else { "│  " });
+                for event in &node.events {
+                    if event.get("decision").is_some() {
+                        let event_str = event.iter()
+                            .map(|(k, v)| format!("{}={}", k, v))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(summary, "{}{}", event_prefix, format!("└─ 🎯 决策点: [{}]", event_str)).unwrap();
+                    }
+                }
+            }
         },
         NodeType::Loop { iterator_type, task_count, concurrency, iteration_archetypes } => {
             let total_iterations = if *task_count > 0 { *task_count } else { node.children.len() }; // Fallback if count not provided
@@ -629,5 +700,98 @@ fn collect_errors(node: &std::sync::RwLockReadGuard<DistilledTraceNode>, summary
     for child_arc in &node.children {
         let child_node = child_arc.read().unwrap();
         collect_errors(&child_node, summary);
+    }
+}
+
+impl TraceDistillerLayer {
+    /// ✨ 智能决策推理：从函数返回值推断业务决策
+    fn infer_business_decision(node_arc: &Arc<RwLock<DistilledTraceNode>>) {
+        let mut node = node_arc.write().unwrap();
+
+        // 检查是否为我们关心的决策函数
+        let function_name = &node.name;
+        if !Self::is_decision_function(function_name) {
+            return;
+        }
+
+        // 查找返回值事件
+        let return_event = node.events.iter()
+            .find(|event| event.get("message").map_or(false, |msg| msg.contains("return")));
+
+        if let Some(event) = return_event {
+            let inferred_decision = Self::parse_return_value_decision(function_name, event);
+            if let Some(decision) = inferred_decision {
+                node.fields.insert("inferred_decision".to_string(), decision);
+            }
+        }
+    }
+
+    /// 检查函数名是否为决策函数
+    fn is_decision_function(function_name: &str) -> bool {
+        matches!(function_name,
+            "create_task_for_existing_symbol" |
+            "create_task_for_new_symbol" |
+            "create_all_download_tasks"
+        )
+    }
+
+    /// 解析返回值并推断决策
+    fn parse_return_value_decision(function_name: &str, event: &HashMap<String, String>) -> Option<String> {
+        let return_value = event.get("message")?;
+
+        match function_name {
+            "create_task_for_existing_symbol" => {
+                if return_value.contains("Ok(Some(") {
+                    Some("task_created".to_string())
+                } else if return_value.contains("Ok(None)") {
+                    Some("task_skipped".to_string())
+                } else if return_value.contains("Err(") {
+                    Some("task_error".to_string())
+                } else {
+                    None
+                }
+            },
+            "create_task_for_new_symbol" => {
+                if return_value.contains("Ok(") {
+                    Some("new_symbol_task_created".to_string())
+                } else if return_value.contains("Err(") {
+                    Some("new_symbol_task_error".to_string())
+                } else {
+                    None
+                }
+            },
+            "create_all_download_tasks" => {
+                // 尝试从返回值中提取任务数量
+                if let Some(task_count) = Self::extract_task_count_from_return(return_value) {
+                    Some(format!("tasks_created_count_{}", task_count))
+                } else if return_value.contains("Ok(") {
+                    Some("tasks_created".to_string())
+                } else if return_value.contains("Err(") {
+                    Some("tasks_creation_error".to_string())
+                } else {
+                    None
+                }
+            },
+            _ => None
+        }
+    }
+
+    /// 从返回值字符串中提取任务数量
+    fn extract_task_count_from_return(return_value: &str) -> Option<usize> {
+        // 尝试匹配 Vec 的长度，例如 "Ok([DownloadTask { ... }, ...])"
+        // 或者其他可能的格式
+        if return_value.contains("Ok([") {
+            // 简单计算逗号数量 + 1 来估算任务数量
+            let comma_count = return_value.matches(',').count();
+            if comma_count > 0 {
+                Some(comma_count + 1)
+            } else if return_value.contains("DownloadTask") {
+                Some(1)
+            } else {
+                Some(0) // 空数组
+            }
+        } else {
+            None
+        }
     }
 }
