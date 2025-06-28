@@ -32,6 +32,7 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 /// 写入任务结构体，表示一个待执行的数据库写入操作
 #[derive(Debug)]
 struct WriteTask {
+    transaction_id: u64,  // ✨ [新增] 事务ID，用于业务追踪
     symbol: String,
     interval: String,
     klines: Vec<Kline>,
@@ -88,7 +89,7 @@ impl DbWriteQueueProcessor {
 
                 // ✨ 现在调用的是 Trait 方法，业务逻辑完全解耦！
                 let processing_future = async move {
-                    let db_result = Self::process_write_task_wrapper(pool_clone, task.symbol, task.interval, task.klines).await;
+                    let db_result = Self::process_write_task_wrapper(pool_clone, task.transaction_id, task.symbol, task.interval, task.klines).await;
                     let _ = task.result_sender.send(db_result);
                 };
 
@@ -105,9 +106,16 @@ impl DbWriteQueueProcessor {
     #[instrument(
         name = "db_write_task",
         skip_all,
-        fields(symbol = %symbol, interval = %interval, kline_count = klines.len())
+        fields(symbol = %symbol, interval = %interval, kline_count = klines.len(), transaction_id = transaction_id)
     )]
-    async fn process_write_task_wrapper(pool: DbPool, symbol: String, interval: String, klines: Vec<Kline>) -> Result<usize> {
+    async fn process_write_task_wrapper(pool: DbPool, transaction_id: u64, symbol: String, interval: String, klines: Vec<Kline>) -> Result<usize> {
+        // 埋点：DB写入开始
+        tracing::info!(
+            log_type = "transaction",
+            transaction_id,
+            event_name = "db_write_start",
+            kline_count_to_write = klines.len(),
+        );
         tracing::debug!(decision = "db_write_start", symbol = %symbol, interval = %interval, kline_count = klines.len(), "开始处理数据库写入任务");
 
         // 为日志记录克隆变量
@@ -124,12 +132,41 @@ impl DbWriteQueueProcessor {
         }).await;
 
         match result {
-            Ok(db_result) => {
-                tracing::debug!(decision = "db_write_complete", symbol = %symbol_for_log, interval = %interval_for_log, result = ?db_result, "数据库写入任务完成");
-                db_result
+            Ok(Ok(count)) => {
+                // 埋点：DB写入成功
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id,
+                    event_name = "db_write_success",
+                    saved_kline_count = count,
+                );
+                tracing::debug!(decision = "db_write_complete", symbol = %symbol_for_log, interval = %interval_for_log, result = ?count, "数据库写入任务完成");
+                Ok(count)
+            },
+            Ok(Err(e)) => {
+                // 埋点：DB写入失败 (事务内错误)
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id,
+                    event_name = "db_write_failure",
+                    reason = "database_operation_error",
+                    error.summary = e.get_error_type_summary(),
+                    error.details = %e,
+                );
+                tracing::debug!(decision = "db_write_complete", symbol = %symbol_for_log, interval = %interval_for_log, result = ?e, "数据库写入任务完成");
+                Err(e)
             },
             Err(join_error) => {
                 let panic_error = AppError::DatabaseError(format!("数据库写入任务 panic: {:?}", join_error));
+                // 埋点：DB写入失败 (任务Panic)
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id,
+                    event_name = "db_write_failure",
+                    reason = "task_panic",
+                    error.summary = panic_error.get_error_type_summary(),
+                    error.details = %panic_error,
+                );
                 tracing::error!(
                     message = "数据库写入任务panic",
                     symbol = %symbol_for_log,
@@ -338,6 +375,7 @@ impl DbWriteQueueProcessor {
     }
 
     /// 处理单个写入任务
+    #[allow(dead_code)]
     pub fn process_write_task(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);
@@ -481,6 +519,7 @@ impl DbWriteQueueProcessor {
 
     /// 确保表存在
     // #[instrument] 移除：高频调用函数，每次数据库操作都会调用，产生大量噪音
+    #[allow(dead_code)]
     fn ensure_symbol_table(&self, conn: &rusqlite::Connection, _symbol: &str, _interval: &str, table_name: &str) -> Result<()> {
         // 创建表
         let create_table_sql = format!(
@@ -510,6 +549,7 @@ pub struct Database {
     pool: DbPool,
     // ✨ 5. [修改] 使用 mpsc::Sender
     write_queue_sender: mpsc::Sender<WriteTask>,
+    #[allow(dead_code)]
     queue_processor_running: Arc<Mutex<bool>>,
 }
 
@@ -726,8 +766,8 @@ impl Database {
     }
 
     /// Save klines to the database using the write queue (Async)
-    #[instrument(skip(self, klines), fields(symbol = %symbol, interval = %interval, kline_count = klines.len()), ret, err)]
-    pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
+    #[instrument(skip(self, klines), fields(symbol = %symbol, interval = %interval, kline_count = klines.len(), transaction_id = transaction_id), ret, err)]
+    pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline], transaction_id: u64) -> Result<usize> {
         if klines.is_empty() {
             tracing::debug!(decision = "empty_klines", symbol = %symbol, interval = %interval, "K线数据为空，跳过保存");
             return Ok(0);
@@ -746,6 +786,7 @@ impl Database {
 
         // 创建写入任务，并捕获当前的 tracing 上下文
         let task = WriteTask {
+            transaction_id,
             symbol: symbol.to_string(),
             interval: interval.to_string(),
             klines: klines_copy,

@@ -137,6 +137,7 @@ impl LatestKlineUpdater {
 
                 // 创建下载任务
                 let task = DownloadTask {
+                    transaction_id: 0, // 最新K线更新不需要业务追踪，使用0作为占位符
                     symbol: symbol.clone(),
                     interval: interval.clone(),
                     start_time: Some(start_time),
@@ -188,7 +189,7 @@ impl LatestKlineUpdater {
                         sorted_klines.sort_by_key(|k| k.open_time);
 
                         // 保存到数据库
-                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines).await?;
+                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines, 0).await?;
 
                         // 增加成功计数
                         success_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

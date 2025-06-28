@@ -281,6 +281,7 @@ impl RuleCoverageTracker {
 /// 运行时断言验证引擎 - 在后台任务中运行
 pub struct AssertEngine {
     /// 配置
+    #[allow(dead_code)]
     config: AssertConfig,
     /// 验证规则
     rules: Vec<Arc<dyn ValidationRule>>,
@@ -487,8 +488,10 @@ pub struct AssertLayer {
     /// 验证任务发送器
     validation_sender: mpsc::UnboundedSender<ValidationContext>,
     /// 性能报告器
+    #[allow(dead_code)]
     performance_reporter: Arc<PerformanceReporter>,
     /// Span 开始时间记录
+    #[allow(dead_code)]
     span_timings: DashMap<Id, Instant>,
 }
 

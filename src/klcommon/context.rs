@@ -23,6 +23,7 @@ pub trait TraceContext: Clone + Send + Sync + 'static {
     fn new() -> Self where Self: Sized;
 
     /// 使用此上下文来包裹一个 Future
+    #[allow(async_fn_in_trait)]
     async fn instrument<F: std::future::Future>(&self, future: F) -> F::Output;
 }
 

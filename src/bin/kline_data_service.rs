@@ -12,7 +12,9 @@ use tracing::{info, error, instrument, info_span, Instrument};
 use kline_server::klcommon::log::{
     TraceDistillerStore,
     TraceDistillerLayer,
-    distill_all_completed_traces_to_text
+    distill_all_completed_traces_to_text,
+    TransactionLayer,
+    TransactionLogManager
 };
 
 /// 默认配置文件路径
@@ -34,8 +36,8 @@ static SNAPSHOT_COUNTER: AtomicU32 = AtomicU32::new(1);
 #[tokio::main]
 #[instrument(name = "main", ret, err)]
 async fn main() -> Result<()> {
-    // 初始化日志系统并获取TraceDistillerStore
-    let distiller_store = init_logging_with_distiller();
+    // ✨ [修改] 接收 TransactionLogManager 实例
+    let (distiller_store, transaction_manager) = init_logging_with_distiller();
 
     // 创建应用程序的根Span，代表整个应用生命周期
     let root_span = info_span!(
@@ -71,6 +73,13 @@ async fn main() -> Result<()> {
 
     // 程序退出时生成最终快照
     generate_final_snapshot(&distiller_store).await;
+
+    // ✨ [新增] 在程序完全退出前，优雅地关闭业务追踪日志
+    if let Some(mut manager) = transaction_manager {
+        info!(target: "kline_data_service", log_type = "module", "正在关闭业务追踪日志，确保所有日志已写入...");
+        manager.shutdown().await;
+        info!(target: "kline_data_service", log_type = "module", "业务追踪日志已关闭。");
+    }
 
     result
 }
@@ -171,9 +180,9 @@ async fn run_app() -> Result<()> {
     Ok(())
 }
 
-/// 初始化日志系统（同时支持模块日志、trace可视化和轨迹提炼）
+/// ✨ [修改] 让日志初始化函数返回 TransactionLogManager 实例
 #[instrument(name = "init_logging_with_distiller", skip_all)]
-fn init_logging_with_distiller() -> TraceDistillerStore {
+fn init_logging_with_distiller() -> (TraceDistillerStore, Option<TransactionLogManager>) {
     use kline_server::klcommon::log::{
         ModuleLayer,
         NamedPipeLogManager,
@@ -226,23 +235,49 @@ fn init_logging_with_distiller() -> TraceDistillerStore {
             let module_layer = ModuleLayer::new(log_manager.clone());
             let trace_layer = TraceVisualizationLayer::new(log_manager.clone());
 
-            Registry::default()
-                .with(module_layer)         // 处理顶层模块日志
-                .with(trace_layer)          // 处理 span 日志用于路径可视化
-                .with(distiller_layer)      // 处理轨迹提炼用于调试快照
-                .with(create_env_filter(&log_level))
-                .init();
+            // ✨ [修改] 创建 TransactionLayer 并准备返回
+            match TransactionLayer::new() {
+                Ok((transaction_layer, transaction_manager)) => {
+                    Registry::default()
+                        .with(module_layer)         // 处理 log_type="module"
+                        .with(transaction_layer)    // 处理 log_type="transaction"
+                        .with(trace_layer)          // 处理 span 日志用于路径可视化
+                        .with(distiller_layer)      // 处理轨迹提炼用于调试快照
+                        .with(create_env_filter(&log_level))
+                        .init();
 
-            info!(target: "kline_data_service", log_type = "module", "🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼）");
-            info!(target: "kline_data_service", log_type = "module", "📊 模块日志: 只处理顶层日志，log_type=module");
-            info!(target: "kline_data_service", log_type = "module", "🔍 Trace可视化: 只处理Span内日志，log_type=trace");
-            info!(target: "kline_data_service", log_type = "module", "🔬 轨迹提炼: 构建调用树用于调试快照");
-            info!(target: "kline_data_service", log_type = "module", "🔗 共享管道: {}", pipe_name);
+                    info!(target: "kline_data_service", log_type = "module", "🎯 四重日志系统已初始化（命名管道模式 + 轨迹提炼）");
+                    info!(target: "kline_data_service", log_type = "module", "📊 模块日志: 只处理顶层日志，log_type=module");
+                    info!(target: "kline_data_service", log_type = "module", "🔖 业务追踪: 保存到 logs/transaction_log，log_type=transaction");
+                    info!(target: "kline_data_service", log_type = "module", "🔍 Trace可视化: 只处理Span内日志，log_type=trace");
+                    info!(target: "kline_data_service", log_type = "module", "🔬 轨迹提炼: 构建调用树用于调试快照");
+                    info!(target: "kline_data_service", log_type = "module", "🔗 共享管道: {}", pipe_name);
 
-            if enable_full_tracing {
-                info!(target: "kline_data_service", log_type = "module", "🔍 完全追踪功能已启用");
-            } else {
-                info!(target: "kline_data_service", log_type = "module", "⚡ 完全追踪功能已禁用（高性能模式）");
+                    if enable_full_tracing {
+                        info!(target: "kline_data_service", log_type = "module", "🔍 完全追踪功能已启用");
+                    } else {
+                        info!(target: "kline_data_service", log_type = "module", "⚡ 完全追踪功能已禁用（高性能模式）");
+                    }
+
+                    // ✨ [修改] 返回 distiller_store 和 transaction_manager
+                    return (distiller_store, Some(transaction_manager));
+                },
+                Err(e) => {
+                    eprintln!("严重错误：无法创建业务追踪日志文件层: {}", e);
+                    // 如果失败，只初始化其他层
+                    Registry::default()
+                        .with(module_layer)         // 处理 log_type="module"
+                        .with(trace_layer)          // 处理 span 日志用于路径可视化
+                        .with(distiller_layer)      // 处理轨迹提炼用于调试快照
+                        .with(create_env_filter(&log_level))
+                        .init();
+
+                    info!(target: "kline_data_service", log_type = "module", "🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼，业务追踪层创建失败）");
+                    info!(target: "kline_data_service", log_type = "module", "📊 模块日志: log_type=module");
+                    info!(target: "kline_data_service", log_type = "module", "🔍 Trace可视化: log_type=trace");
+
+                    return (distiller_store, None);
+                }
             }
         }
         "websocket" => {
@@ -286,8 +321,8 @@ fn init_logging_with_distiller() -> TraceDistillerStore {
         enable_full_tracing = enable_full_tracing
     );
 
-    // 返回distiller_store供主程序使用
-    distiller_store
+    // ✨ [修改] 其他日志模式返回 None，因为没有 TransactionLayer
+    (distiller_store, None)
 }
 
 /// 创建环境过滤器，始终过滤掉第三方库的调试日志

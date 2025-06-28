@@ -264,6 +264,7 @@ pub struct ExchangeInfo {
 /// 下载任务，用于特定交易对和时间范围
 #[derive(Debug, Clone)]
 pub struct DownloadTask {
+    pub transaction_id: u64,     // ✨ [新增] 事务ID，用于业务追踪
     pub symbol: String,
     pub interval: String,
     pub start_time: Option<i64>,  // 可选，如果为None则下载最新1000根K线

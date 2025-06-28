@@ -4,7 +4,7 @@ use tracing::{info, warn, error, instrument, Instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 use futures::{stream, StreamExt};
 
@@ -19,6 +19,9 @@ static BACKFILL_STATS: Lazy<(AtomicUsize, std::sync::Mutex<Instant>, std::sync::
 static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::new(|| {
     (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0))
 });
+
+// ✨ [新增] 用于生成唯一事务ID的全局原子计数器
+static NEXT_TRANSACTION_ID: AtomicU64 = AtomicU64::new(1);
 
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
@@ -250,8 +253,17 @@ impl KlineBackfiller {
     }
 
     /// 处理单个下载任务的核心逻辑
-    #[instrument(name = "download_kline_task", skip_all, fields(symbol = %task.symbol, interval = %task.interval, limit = task.limit, start_time = ?task.start_time, end_time = ?task.end_time), ret)]
+    #[instrument(name = "download_kline_task", skip_all, fields(symbol = %task.symbol, interval = %task.interval, limit = task.limit, start_time = ?task.start_time, end_time = ?task.end_time, transaction_id = task.transaction_id), ret)]
     async fn process_single_task(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
+        // 埋点：任务处理开始
+        tracing::info!(
+            log_type = "transaction",
+            transaction_id = task.transaction_id,
+            event_name = "processing_start",
+            symbol = %task.symbol,
+            interval = %task.interval,
+        );
+
         API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
         tracing::debug!(decision = "download_start", symbol = %task.symbol, interval = %task.interval, "开始下载K线任务");
 
@@ -267,7 +279,7 @@ impl KlineBackfiller {
             }
 
             tracing::debug!(decision = "save_klines", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "开始保存K线数据");
-            let count = db.save_klines(&task.symbol, &task.interval, &klines).await?;
+            let count = db.save_klines(&task.symbol, &task.interval, &klines, task.transaction_id).await?;
             Self::update_backfill_stats(&task.symbol, &task.interval, count);
             tracing::debug!(decision = "save_success", symbol = %task.symbol, interval = %task.interval, saved_count = count, "K线数据保存成功");
             Ok(count)
@@ -275,10 +287,25 @@ impl KlineBackfiller {
 
         match result {
             Ok(count) => {
+                // 埋点：任务处理成功
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id = task.transaction_id,
+                    event_name = "processing_success",
+                    saved_kline_count = count,
+                );
                 tracing::debug!(decision = "task_success", symbol = %task.symbol, interval = %task.interval, saved_count = count, "任务成功完成");
                 TaskResult::Success(count)
             },
             Err(e) => {
+                // 埋点：任务处理失败
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id = task.transaction_id,
+                    event_name = "processing_failure",
+                    error.summary = e.get_error_type_summary(),
+                    error.details = %e,
+                );
                 API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
                 error!(target: "backfill", "{}/{}: 任务失败: {}", task.symbol, task.interval, e);
                 tracing::error!(
@@ -299,7 +326,7 @@ impl KlineBackfiller {
         let retry_keywords = [
             "HTTP error", "timeout", "429", "Too Many Requests", "handshake", "connection", "network"
         ];
-        info!(target: "backfill", "将重试包含以下关键词的错误: {:?}", retry_keywords);
+        info!(target: "backfill", "将重试包含以下关键词的错11误: {:?}", retry_keywords);
 
         let retry_tasks: Vec<DownloadTask> = failed_tasks.iter()
             .filter(|(_, error)| {
@@ -437,6 +464,16 @@ impl KlineBackfiller {
             existing_map.insert((symbol, interval), true);
         }
 
+        // ✨ [关键修复] 为表创建循环创建一个专用的、符合约定的 Span
+        let table_creation_loop_span = tracing::info_span!(
+            "table_creation_loop",      // 名字必须以 _loop 结尾！
+            iterator_type = "table_config",
+            task_count = total_tables,
+            concurrency = 1             // 这是一个串行循环
+        );
+        // 进入这个 Span 的上下文，后续所有操作都将成为它的子节点
+        let _enter = table_creation_loop_span.enter();
+
         // 为每个交易对和周期创建表
         for symbol in symbols {
             for interval in &self.intervals {
@@ -446,12 +483,12 @@ impl KlineBackfiller {
                     continue;
                 }
 
-                // 创建表
+                // 创建表的操作现在是 "table_creation_loop" 的子节点
                 self.db.ensure_symbol_table(symbol, interval)?;
                 created_count += 1;
 
-                // 每创建10个表输出一次日志
-                if created_count % 10 == 0 {
+                // 每创建100个表输出一次日志 (调整频率避免刷屏)
+                if created_count % 100 == 0 {
                     //debug!("已创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
                 }
             }
@@ -485,6 +522,15 @@ impl KlineBackfiller {
 
         tracing::debug!(decision = "task_creation_analysis", existing_symbols = existing_symbol_intervals.len(), new_symbols = new_symbols.len(), "任务创建分析完成");
 
+        // ✨ [关键修复] 为已存在品种的补齐任务创建循环创建专用 Span
+        let existing_task_creation_loop_span = tracing::info_span!(
+            "existing_task_creation_loop",
+            iterator_type = "existing_symbol_interval",
+            task_count = existing_symbol_intervals.len(),
+            concurrency = 1
+        );
+        let _enter_existing = existing_task_creation_loop_span.enter();
+
         // 为已存在的品种创建补齐任务
         for (symbol, intervals) in existing_symbol_intervals {
             if !all_symbols.contains(&symbol) {
@@ -497,6 +543,18 @@ impl KlineBackfiller {
             }
         }
 
+        // 退出已存在品种任务创建的 span
+        drop(_enter_existing);
+
+        // ✨ [关键修复] 为新品种的完整下载任务创建循环创建专用 Span
+        let new_task_creation_loop_span = tracing::info_span!(
+            "new_task_creation_loop",
+            iterator_type = "new_symbol_interval",
+            task_count = new_symbols.len() * self.intervals.len(),
+            concurrency = 1
+        );
+        let _enter_new = new_task_creation_loop_span.enter();
+
         for symbol in new_symbols {
             for interval in &self.intervals {
                 let task = self.create_task_for_new_symbol(&symbol, interval).await?;
@@ -504,6 +562,9 @@ impl KlineBackfiller {
                 tracing::debug!(decision = "full_download_task_created_for_new_symbol", symbol = %symbol, interval = %interval, "为新交易对创建完整下载任务");
             }
         }
+
+        // 退出新品种任务创建的 span
+        drop(_enter_new);
 
         tracing::debug!(decision = "task_creation_complete", total_tasks = tasks.len(), "所有下载任务创建完成");
         Ok(tasks)
@@ -523,8 +584,21 @@ impl KlineBackfiller {
             let aligned_end_time = get_aligned_time(current_time, interval);
 
             if aligned_start_time < aligned_end_time {
+                let transaction_id = NEXT_TRANSACTION_ID.fetch_add(1, Ordering::Relaxed);
+
+                // 埋点：任务创建事件
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id,
+                    event_name = "task_created",
+                    reason = "backfill_for_existing_symbol",
+                    symbol = %symbol,
+                    interval = %interval,
+                );
+
                 tracing::debug!(decision = "backfill_task_created", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "为现有交易对创建补齐任务");
                 Ok(Some(DownloadTask {
+                    transaction_id,
                     symbol: symbol.to_string(),
                     interval: interval.to_string(),
                     start_time: Some(aligned_start_time),
@@ -541,8 +615,21 @@ impl KlineBackfiller {
             let aligned_start_time = get_aligned_time(start_time, interval);
             let aligned_end_time = get_aligned_time(current_time, interval);
 
+            let transaction_id = NEXT_TRANSACTION_ID.fetch_add(1, Ordering::Relaxed);
+
+            // 埋点：任务创建事件
+            tracing::info!(
+                log_type = "transaction",
+                transaction_id,
+                event_name = "task_created",
+                reason = "full_download_for_empty_table",
+                symbol = %symbol,
+                interval = %interval,
+            );
+
             tracing::debug!(decision = "full_download_task_created_for_empty_table", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "表存在但无数据，创建完整下载任务");
             Ok(Some(DownloadTask {
+                transaction_id,
                 symbol: symbol.to_string(),
                 interval: interval.to_string(),
                 start_time: Some(aligned_start_time),
@@ -561,8 +648,21 @@ impl KlineBackfiller {
         let aligned_start_time = get_aligned_time(start_time, interval);
         let aligned_end_time = get_aligned_time(current_time, interval);
 
+        let transaction_id = NEXT_TRANSACTION_ID.fetch_add(1, Ordering::Relaxed);
+
+        // 埋点：任务创建事件
+        tracing::info!(
+            log_type = "transaction",
+            transaction_id,
+            event_name = "task_created",
+            reason = "full_download_for_new_symbol",
+            symbol = %symbol,
+            interval = %interval,
+        );
+
         tracing::debug!(decision = "full_download_task_created_for_new_symbol", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "为新交易对创建完整下载任务");
         Ok(DownloadTask {
+            transaction_id,
             symbol: symbol.to_string(),
             interval: interval.to_string(),
             start_time: Some(aligned_start_time),

@@ -322,8 +322,14 @@ impl BinanceApi {
     }
 
     /// 下载连续合约K线数据
-    #[instrument(skip(task), fields(symbol = %task.symbol, interval = %task.interval, limit = task.limit, start_time = ?task.start_time, end_time = ?task.end_time), ret, err)]
+    #[instrument(skip(task), fields(symbol = %task.symbol, interval = %task.interval, limit = task.limit, start_time = ?task.start_time, end_time = ?task.end_time, transaction_id = task.transaction_id), ret, err)]
     pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
+        // 埋点：API调用开始
+        tracing::info!(
+            log_type = "transaction",
+            transaction_id = task.transaction_id,
+            event_name = "api_call_start",
+        );
         // 构建URL参数
         let mut url_params = format!(
             "pair={}&contractType=PERPETUAL&interval={}&limit={}",
@@ -360,6 +366,15 @@ impl BinanceApi {
                 // 只在错误时记录请求URL
                 error!(target: "api", log_type = "module", "{}/{}: 连续合约请求失败: URL={}, 错误: {}", task.symbol, task.interval, fapi_url, e);
                 let http_error = AppError::from(e);
+                // 埋点：API调用失败 (网络层面)
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id = task.transaction_id,
+                    event_name = "api_call_failure",
+                    reason = "http_request_error",
+                    error.summary = http_error.get_error_type_summary(),
+                    error.details = %http_error
+                );
                 tracing::error!(
                     message = "HTTP请求失败",
                     symbol = %task.symbol,
@@ -379,6 +394,15 @@ impl BinanceApi {
                 "下载 {} 的连续合约K线失败: {} - {}",
                 task.symbol, status, text
             ));
+            // 埋点：API调用失败 (业务层面，如4xx错误)
+            tracing::info!(
+                log_type = "transaction",
+                transaction_id = task.transaction_id,
+                event_name = "api_call_failure",
+                reason = "api_status_error",
+                error.summary = api_error.get_error_type_summary(),
+                error.details = %api_error
+            );
             error!(target: "api", log_type = "module",
                 "下载 {} 的连续合约K线失败: {} - {}",
                 task.symbol, status, text
@@ -407,6 +431,15 @@ impl BinanceApi {
             Err(e) => {
                 error!(target: "api", log_type = "module", "{}/{}: 连续合约解析JSON失败: {}, 原始响应: {}", task.symbol, task.interval, e, response_text);
                 let json_error = AppError::JsonError(e);
+                // 埋点：API调用失败 (JSON解析错误)
+                tracing::info!(
+                    log_type = "transaction",
+                    transaction_id = task.transaction_id,
+                    event_name = "api_call_failure",
+                    reason = "json_parse_error",
+                    error.summary = json_error.get_error_type_summary(),
+                    error.details = %json_error
+                );
                 tracing::error!(
                     message = "JSON解析失败",
                     symbol = %task.symbol,
@@ -421,11 +454,20 @@ impl BinanceApi {
 
         // 检查是否为空结果
         if raw_klines.is_empty() {
-            error!(target: "api", log_type = "module", "{}/{}: 连续合约返回空结果，原始响应: {}", task.symbol, task.interval, response_text);
             let data_error = AppError::DataError(format!(
                 "连续合约空结果，原始响应: {}",
                 response_text
             ));
+            // 埋点：API调用失败 (空数据)
+            tracing::info!(
+                log_type = "transaction",
+                transaction_id = task.transaction_id,
+                event_name = "api_call_failure",
+                reason = "empty_data",
+                error.summary = data_error.get_error_type_summary(),
+                error.details = %data_error
+            );
+            error!(target: "api", log_type = "module", "{}/{}: 连续合约返回空结果，原始响应: {}", task.symbol, task.interval, response_text);
             tracing::error!(
                 message = "API返回空K线数据",
                 symbol = %task.symbol,
@@ -461,6 +503,14 @@ impl BinanceApi {
         } else {
             tracing::debug!(decision = "kline_parse_success", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "K线数据解析完成");
         }
+
+        // 埋点：API调用成功
+        tracing::info!(
+            log_type = "transaction",
+            transaction_id = task.transaction_id,
+            event_name = "api_call_success",
+            received_kline_count = klines.len(),
+        );
 
         Ok(klines)
     }

@@ -11,6 +11,7 @@ pub mod observability;
 pub mod module_logging;
 pub mod trace_visualization;
 pub mod trace_distiller;
+pub mod transaction_logging;
 pub mod assert;
 
 // 重新导出常用类型，保持向后兼容
@@ -27,6 +28,12 @@ pub use module_logging::{
 pub use trace_visualization::{
     TraceVisualizationLayer,
     JsonVisitor,
+};
+
+// 导出业务追踪日志相关类型
+pub use transaction_logging::{
+    TransactionLayer,
+    TransactionLogManager,
 };
 
 // 导出 trace 提炼器相关类型（为大模型分析设计）

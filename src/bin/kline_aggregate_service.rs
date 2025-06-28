@@ -216,10 +216,10 @@ fn init_observability_system_inner() -> Result<(kline_server::klcommon::AssertEn
     // b) 给前端的实时可视化JSON层
     let trace_viz_layer = TraceVisualizationLayer::new(log_manager.clone());
 
-    // c) 【新增】给后端的内存调用树构建层
+    // d) 【新增】给后端的内存调用树构建层
     let distiller_layer = TraceDistillerLayer::new(distiller_store.clone());
 
-    // d) 创建运行时断言验证层
+    // e) 创建运行时断言验证层
     let (assert_layer, assert_engine) = create_default_assert_layer();
 
     // --- 4. 组合所有 Layer ---
