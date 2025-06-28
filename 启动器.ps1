@@ -1,4 +1,4 @@
-# K线系统启动器UI启动脚本
+﻿# K线系统启动器UI启动脚本 (修复版)
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -10,8 +10,11 @@ if (-not (Test-Path "Cargo.toml")) {
     exit 1
 }
 
+# 使用指定的Python路径
+$pythonPath = "F:\work\tool\python312\\python.exe"
+
 try {
-    $pythonVersion = python --version 2>&1
+    $pythonVersion = & $pythonPath --version 2>&1
     Write-Host "✅ Python: $pythonVersion" -ForegroundColor Green
 } catch {
     Write-Host "❌ 未找到Python" -ForegroundColor Red
@@ -28,9 +31,10 @@ if (-not (Test-Path "launcher_ui.py")) {
 Write-Host "🚀 启动图形界面..." -ForegroundColor Yellow
 
 try {
-    python launcher_ui.py
+    & $pythonPath launcher_ui.py
 } catch {
     Write-Host "❌ 启动失败: $_" -ForegroundColor Red
+    Write-Host "错误详情: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Write-Host "✅ 启动器已退出" -ForegroundColor Green

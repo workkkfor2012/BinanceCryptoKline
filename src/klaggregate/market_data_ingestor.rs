@@ -41,7 +41,7 @@ impl MarketDataIngestor {
         config: AggregateConfig,
         trade_router: Arc<TradeEventRouter>,
     ) -> Result<Self> {
-        info!(target: "MarketDataIngestor", event_name = "接入器初始化", "创建行情数据接入器");
+        info!(target: "MarketDataIngestor", log_type = "module", event_name = "接入器初始化", "🔧 创建行情数据接入器");
         
         Ok(Self {
             config,
@@ -62,13 +62,13 @@ impl MarketDataIngestor {
             return Ok(());
         }
 
-        info!(target: "MarketDataIngestor", event_name = "接入器启动开始", "启动行情数据接入器");
+        info!(target: "MarketDataIngestor", log_type = "module", event_name = "接入器启动开始", "🚀 启动行情数据接入器");
         self.is_running.store(true, Ordering::Relaxed);
 
         // 获取需要订阅的品种列表
         let symbols = self.trade_router.get_registered_symbols().await;
         if symbols.is_empty() {
-            error!(target: "MarketDataIngestor", event_name = "无注册品种", "没有注册的交易品种");
+            error!(target: "MarketDataIngestor", log_type = "module", event_name = "无注册品种", "❌ 没有注册的交易品种");
             return Err(AppError::ConfigError("没有注册的交易品种".to_string()));
         }
 
@@ -124,7 +124,7 @@ impl MarketDataIngestor {
         // 启动统计输出任务
         self.start_statistics_task().await;
 
-        info!(target: "MarketDataIngestor", event_name = "接入器启动完成", "行情数据接入器启动完成");
+        info!(target: "MarketDataIngestor", log_type = "module", event_name = "接入器启动完成", "✅ 行情数据接入器启动完成");
         Ok(())
     }
 
@@ -135,7 +135,7 @@ impl MarketDataIngestor {
             return Ok(());
         }
 
-        info!(target: "MarketDataIngestor", event_name = "接入器停止开始", "停止行情数据接入器");
+        info!(target: "MarketDataIngestor", log_type = "module", event_name = "接入器停止开始", "🛑 停止行情数据接入器");
         self.is_running.store(false, Ordering::Relaxed);
 
         // 停止WebSocket客户端
@@ -144,7 +144,7 @@ impl MarketDataIngestor {
             debug!(target: "MarketDataIngestor", event_name = "WebSocket客户端自动停止", "WebSocket客户端将自动停止");
         }
 
-        info!(target: "MarketDataIngestor", event_name = "接入器停止完成", "行情数据接入器已停止");
+        info!(target: "MarketDataIngestor", log_type = "module", event_name = "接入器停止完成", "✅ 行情数据接入器已停止");
         Ok(())
     }
     

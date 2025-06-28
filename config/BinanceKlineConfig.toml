@@ -44,3 +44,5 @@ enable_compressed_logging = true
 log_level = "trace"
 log_transport = "named_pipe"
 pipe_name = "kline_log_pipe"
+# 是否启用完全追踪功能（包括跨线程上下文传递）
+enable_full_tracing = true

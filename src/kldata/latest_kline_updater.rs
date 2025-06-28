@@ -188,7 +188,7 @@ impl LatestKlineUpdater {
                         sorted_klines.sort_by_key(|k| k.open_time);
 
                         // 保存到数据库
-                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
+                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines).await?;
 
                         // 增加成功计数
                         success_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

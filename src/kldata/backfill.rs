@@ -1,12 +1,12 @@
 use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, AppError};
 use crate::klcommon::api::get_aligned_time;
-use tracing::{debug, info, warn, error, instrument, Instrument};
+use tracing::{info, warn, error, instrument, Instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use once_cell::sync::Lazy;
-// 时间戳相关导入已移至 timestamp_checker.rs
+use futures::{stream, StreamExt};
 
 // 全局统计变量，用于跟踪补齐K线的数量和日志显示
 // 格式: (补齐K线总数, 最后日志时间, 交易对统计Map)
@@ -22,6 +22,17 @@ static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::
 
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
+const CONCURRENCY: usize = 50; // 并发数
+
+// 任务执行结果的枚举，方便模式匹配
+#[derive(Debug)]
+enum TaskResult {
+    Success(usize), // 成功，并返回写入的K线数量
+    Failure {
+        task: DownloadTask,
+        error: AppError,
+    },
+}
 
 /// K线数据补齐模块
 pub struct KlineBackfiller {
@@ -83,7 +94,7 @@ impl KlineBackfiller {
                     BACKFILL_LOG_INTERVAL, total_count);
 
                 // 输出日志
-                info!(log.type = "module", target = "backfill", "{}", summary);
+                info!(target: "backfill", log_type = "module", "{}", summary);
             }
 
             // 清空交易对计数器
@@ -100,859 +111,235 @@ impl KlineBackfiller {
     /// 运行一次性补齐流程
     #[instrument(name = "backfill_run_once", target = "backfill", skip_all)]
     pub async fn run_once(&self) -> Result<()> {
-        info!(log.type = "module", target = "backfill", "开始一次性补齐K线数据...");
+        info!(target: "backfill", log_type = "module", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
-        // 1. 获取交易对列表
-        let all_symbols = if self.test_mode {
-            info!(log.type = "module", target = "backfill", "🔧 测试模式已启用，限制交易对为: {:?}", self.test_symbols);
-            self.test_symbols.clone()
-        } else {
-            info!(log.type = "module", target = "backfill", "📡 获取所有正在交易的U本位永续合约交易对...");
-            match self.api.get_trading_usdt_perpetual_symbols().await {
-                Ok(symbols) => {
-                    info!(log.type = "module", target = "backfill", "✅ 获取到 {} 个交易对", symbols.len());
-                    symbols
-                },
-                Err(e) => {
-                    // 获取交易对失败是严重错误，直接返回错误并结束程序
-                    error!(log.type = "module", target = "backfill", "❌ 获取交易对信息失败: {}", e);
-                    return Err(AppError::ApiError(format!("获取交易对信息失败: {}", e)));
-                }
-            }
-        };
-
-        // 如果没有获取到交易对，直接返回错误
-        if all_symbols.is_empty() {
-            error!(log.type = "module", target = "backfill", "没有获取到交易对，补齐流程结束");
-            return Err(AppError::ApiError("没有获取到交易对，无法继续补齐流程".to_string()));
-        }
-
-        // 2. 创建所有必要的表
+        // 步骤 1 & 2: 获取交易对并准备表
+        let all_symbols = self.get_symbols().await?;
+        info!(target: "backfill", log_type = "module", "🗄️ 开始准备数据库表结构1...");
+      
+        
         self.ensure_all_tables(&all_symbols)?;
+        info!(target: "backfill", log_type = "module", "✅ 数据库表结构准备完成");
 
-        // 3. 创建所有下载任务 - 声明为循环以便TraceDistiller聚合
-        let task_creation_loop_span = tracing::info_span!(
-            "task_creation_loop",
-            target = "backfill",
-            iterator_type = "SymbolInterval",
-            task_count = all_symbols.len() * self.intervals.len()
-        );
-
-        let tasks = async {
-            self.create_all_download_tasks(&all_symbols).await
-        }.instrument(task_creation_loop_span).await?;
-
-        info!(log.type = "module", target = "backfill", "创建了 {} 个下载任务（包括补齐任务和新品种完整下载任务）", tasks.len());
-
+        // 步骤 3: 创建任务
+        info!(target: "backfill", log_type = "module", "📋 开始创建下载任务...");
+        let tasks = self.create_all_download_tasks(&all_symbols).await?;
         if tasks.is_empty() {
-            info!(log.type = "module", target = "backfill", "没有需要补齐或下载的K线数据，所有数据都是最新的");
+            info!(target: "backfill", log_type = "module", "✅ 所有数据都是最新的，无需补齐");
             return Ok(());
         }
+        info!(target: "backfill", log_type = "module", "📋 已创建 {} 个下载任务", tasks.len());
 
-        // 在async块外部声明这些变量，以便在async块结束后仍能访问
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(50)); // 增加到50个并发，充分利用网络带宽，写入操作由DbWriteQueue序列化处理
-        let mut handles = Vec::new();
-        // 存储失败任务及其失败原因 - 使用更简单的结构
-        let failed_tasks = Arc::new(std::sync::Mutex::new(Vec::new()));
-        // 存储失败原因的统计
-        let error_reasons = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-        // 创建一个计数器来跟踪添加到失败列表的任务数量
-        let failed_tasks_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // 步骤 4: 执行第一轮下载
+        info!(target: "backfill", log_type = "module", "开始第一轮下载，共 {} 个任务...", tasks.len());
+        let failed_tasks = self.execute_tasks(tasks, "initial_download_loop").await;
 
-        // ✨【必须的修改】✨ 1. 包裹第一轮下载循环
-        // 我们用一个新的 span 来框住整个批量下载的逻辑。
-        // 这将成为所有 download_kline_task 的父 span。
-        let initial_download_loop_span = tracing::info_span!(
-            "initial_download_loop", // 约定的 `_loop` 后缀
-            target = "backfill",
-            task_count = tasks.len(),
-            concurrency = 50, // 明确指出并发数
-            iterator_type = "DownloadTask"
-        );
-
-        // 使用 .instrument() 将这个 span 附加到接下来的异步块上
-        let (_success_count, error_count) = async {
-
-            for (task_index, task) in tasks.into_iter().enumerate() {
-                let api_clone = self.api.clone();
-                let semaphore_clone = semaphore.clone();
-                let db_clone = self.db.clone();
-                let failed_tasks_clone = failed_tasks.clone();
-                let error_reasons_clone = error_reasons.clone();
-                let failed_tasks_counter_clone = failed_tasks_counter.clone();
-                let task_clone = task.clone();
-
-                let _symbol = task.symbol.clone();
-                let _interval = task.interval.clone();
-
-                // ✨【关键修复】✨ 先定义future，将span创建移动到获取许可之后
-                let download_future = async move {
-                    // 获取信号量许可
-                    let _permit = semaphore_clone.acquire().await.unwrap();
-
-                    let symbol = task.symbol.clone();
-                    let interval = task.interval.clone();
-
-                    // ✨【关键修复】✨ 在这里创建span，它只包裹真正的下载和保存工作
-                    let task_span = tracing::info_span!(
-                        "download_kline_task", // 不再需要 "_sample" 后缀
-                        symbol = %symbol,
-                        interval = %interval,
-                        target = "backfill",
-                        task_index = task_index
-                    );
-
-                async move {
-                    // 记录API请求
-                    let _request_id = API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
-                    // 不再记录开始请求的日志
-
-                    // 下载任务
-                    match api_clone.download_continuous_klines(&task).await {
-                        Ok(klines) => {
-                        // 更新成功请求计数
-                        API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
-                        // 不再记录成功请求的日志
-
-                        if klines.is_empty() {
-                            // 记录空结果错误
-                            let error_msg = format!("{}/{}: API返回空结果", symbol, interval);
-                            error!(target = "backfill", "{}/{}: 补齐K线数据失败: {}", symbol, interval, error_msg);
-
-                            // 更新错误统计 - 使用标准Mutex而不是tokio的Mutex
-                            {
-                                if let Ok(mut reasons) = error_reasons_clone.lock() {
-                                    *reasons.entry(error_msg.clone()).or_insert(0) += 1;
-                                } else {
-                                    error!(target = "backfill", "无法获取错误原因统计的锁");
-                                }
-                            }
-
-                            // 将失败的任务和原因添加到失败列表中 - 使用标准Mutex
-                            {
-                                if let Ok(mut tasks) = failed_tasks_clone.lock() {
-                                    tasks.push((task_clone, error_msg.clone()));
-                                    // 增加计数器
-                                    failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    debug!(target = "backfill", "添加空结果失败任务: {}/{} - 当前计数: {}",
-                                           symbol, interval, failed_tasks_counter_clone.load(std::sync::atomic::Ordering::SeqCst));
-                                } else {
-                                    error!(target = "backfill", "无法获取失败任务列表的锁");
-                                }
-                            }
-
-                            return Err(AppError::DataError(error_msg.clone()));
-                        }
-
-                        // 按时间排序
-                        let mut sorted_klines = klines.clone();
-                        sorted_klines.sort_by_key(|k| k.open_time);
-
-                        // 不再使用db_queue，直接使用db_clone
-
-                        // 直接保存到数据库
-                        let save_result = match db_clone.save_klines(&symbol, &interval, &sorted_klines) {
-                            Ok(count) => {
-                                // 更新统计信息
-                                Self::update_backfill_stats(&symbol, &interval, count);
-                                Ok(())
-                            }
-                            Err(db_err) => {
-                                let error_msg = format!("数据库保存失败: {}", db_err);
-                                error!(target = "backfill", "{}/{}: {}", symbol, interval, error_msg);
-                                Err(AppError::DatabaseError(format!("{}/{}: {}", symbol, interval, error_msg)))
-                            }
-                        };
-
-                        // 处理保存结果
-                        match save_result {
-                            Ok(_) => Ok(()),
-                            Err(e) => {
-                                let error_msg = format!("{}", e);
-
-                                // 更新错误统计
-                                {
-                                    if let Ok(mut reasons) = error_reasons_clone.lock() {
-                                        *reasons.entry(error_msg.clone()).or_insert(0) += 1;
-                                    } else {
-                                        error!(target = "backfill", "无法获取错误原因统计的锁 (数据库保存失败)");
-                                    }
-                                }
-
-                                // 将失败的任务和原因添加到失败列表中
-                                {
-                                    if let Ok(mut tasks) = failed_tasks_clone.lock() {
-                                        tasks.push((task_clone.clone(), error_msg.clone()));
-                                        let count = failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                                        debug!(target = "backfill", "添加数据库保存失败任务: {}/{} - 当前计数: {}",
-                                               symbol, interval, count);
-                                    } else {
-                                        error!(target = "backfill", "无法获取失败任务列表的锁 (数据库保存失败)");
-                                    }
-                                }
-
-                                // 返回错误
-                                Err(e)
-                            }
-                        }
-                        }
-                        Err(e) => {
-                        // 更新失败请求计数
-                        API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
-
-                        // 构建URL参数用于日志记录
-                        let mut url_params = format!(
-                            "symbol={}&interval={}&limit={}",
-                            task.symbol, task.interval, task.limit
-                        );
-
-                        // 添加可选的起始时间
-                        if let Some(start_time) = task.start_time {
-                            url_params.push_str(&format!("&startTime={}", start_time));
-                        }
-
-                        // 添加可选的结束时间
-                        if let Some(end_time) = task.end_time {
-                            url_params.push_str(&format!("&endTime={}", end_time));
-                        }
-
-                        // 构建完整URL
-                        let fapi_url = format!("https://fapi.binance.com/fapi/v1/klines?{}", url_params);
-
-                        // ✨ [错误记录]: 使用 tracing::error! 替代复杂的 Mutex 操作
-                        // 这个错误会被 on_event 捕获，并附加到 download_kline_task Span 上
-                        tracing::error!(
-                            message = %format!("API下载失败: {}", e),
-                            error.type = "ApiError",
-                            fapi_url = %fapi_url
-                        );
-
-                        // ✨ [修复关键bug] 将失败任务添加到failed_tasks列表中，以便重试逻辑能够访问
-                        let error_msg = format!("API下载失败: {}", e);
-                        if let Ok(mut locked_failed_tasks) = failed_tasks_clone.lock() {
-                            locked_failed_tasks.push((task_clone, error_msg.clone()));
-                            failed_tasks_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        } else {
-                            tracing::error!("无法锁定 failed_tasks 列表以记录失败任务！");
-                        }
-
-                        // 更新错误统计
-                        if let Ok(mut reasons) = error_reasons_clone.lock() {
-                            *reasons.entry(error_msg.clone()).or_insert(0) += 1;
-                        }
-
-                        // 返回错误
-                        Err(AppError::ApiError(error_msg))
-                        }
-                    }
-                    }.instrument(task_span).await // instrument 并 await
-                };
-
-                // ✨【最终修复】✨ 在 spawn 之前，用父 span 的上下文来"包裹"这个 future
-                // `tracing::Span::current()` 获取到的是当前的 `initial_download_loop` span
-                let instrumented_future = download_future.instrument(tracing::Span::current());
-                let handle = tokio::spawn(instrumented_future); // spawn 被包裹后的 future
-                handles.push(handle);
-            }
-
-            // 等待所有任务完成
-            let mut success_count = 0;
-            let mut error_count = 0;
-
-            for (i, handle) in handles.into_iter().enumerate() {
-                match handle.await {
-                    Ok(result) => {
-                        match result {
-                            Ok(_) => {
-                                success_count += 1;
-                                if i % 100 == 0 {
-                                    debug!(target = "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
-                                }
-                            },
-                            Err(_) => {
-                                error_count += 1;
-                                if error_count % 10 == 0 {
-                                    debug!(target = "backfill", "已完成 {} 个任务，成功: {}, 失败: {}", i+1, success_count, error_count);
-                                }
-                            },
-                        }
-                    }
-                    Err(join_err) => { // Task panicked
-                        error!(target = "backfill", "任务 #{} 执行因panic而失败: {}", i + 1, join_err);
-                        error_count += 1;
-                        // 注意：此处panic的任务目前不会被添加到 failed_tasks 列表，因为原始task对象不易获取
-                        // 可以在最外层执行 backfill 时增加对 panic 的捕获和记录，如果需要更全面的失败任务列表
-                    }
+        // 步骤 5: 如果有失败，执行重试
+        if !failed_tasks.is_empty() {
+            tracing::debug!(decision = "retry_needed", failed_count = failed_tasks.len(), "检测到失败任务，准备重试");
+            let retry_tasks = self.prepare_retry_tasks(&failed_tasks);
+            if !retry_tasks.is_empty() {
+                info!(target: "backfill", log_type = "module", "开始重试 {} 个失败任务...", retry_tasks.len());
+                tracing::debug!(decision = "retry_execution", retry_count = retry_tasks.len(), "开始执行重试任务");
+                let final_failed_tasks = self.execute_tasks(retry_tasks, "retry_download_loop").await;
+                if !final_failed_tasks.is_empty() {
+                    tracing::debug!(decision = "final_failures", final_failed_count = final_failed_tasks.len(), "重试后仍有失败任务");
+                    self.report_final_failures(final_failed_tasks);
                 }
-            }
-
-            let elapsed = start_time.elapsed();
-            let total_seconds = elapsed.as_secs();
-            let minutes = total_seconds / 60;
-            let seconds = total_seconds % 60;
-
-            // ✨【建议】✨ 将结果记录到span中，这样on_close时可以读取到
-            tracing::Span::current().record("success_count", success_count);
-            tracing::Span::current().record("error_count", error_count);
-            tracing::Span::current().record("elapsed_seconds", total_seconds);
-
-            info!(target = "backfill",
-                "第一轮K线补齐完成，成功: {}，失败: {}，耗时: {}分{}秒",
-                success_count, error_count, minutes, seconds
-            );
-
-            // 返回统计结果
-            (success_count, error_count)
-
-        }.instrument(initial_download_loop_span).await; // <-- 在这里 await instrument 过的 future
-
-        // 检查失败任务列表大小和计数器
-        let failed_tasks_size = match failed_tasks.lock() {
-            Ok(tasks) => tasks.len(),
-            Err(_) => {
-                error!(target = "backfill", "无法获取失败任务列表的锁");
-                0
-            }
-        };
-        let failed_tasks_count = failed_tasks_counter.load(std::sync::atomic::Ordering::SeqCst);
-        debug!(target = "backfill", "任务完成后，失败任务列表大小: {}, 计数器值: {}, 统计的错误数: {}",
-               failed_tasks_size, failed_tasks_count, error_count);
-
-        // 如果存在不一致，记录警告
-        if failed_tasks_size != error_count || failed_tasks_count != error_count {
-            warn!(target = "backfill", "失败任务统计不一致: 列表大小={}, 计数器值={}, 统计错误数={}",
-                  failed_tasks_size, failed_tasks_count, error_count);
-        }
-
-        // 打印失败原因统计 - 使用标准Mutex
-        let reasons = match error_reasons.lock() {
-            Ok(r) => r,
-            Err(e) => {
-                error!(target: "backfill", "无法获取错误原因统计的锁: {}", e);
-                return Err(AppError::Unknown("无法获取错误原因统计的锁".to_string()));
-            }
-        };
-
-        if !reasons.is_empty() {
-            info!(target: "backfill", "失败原因统计:");
-
-            // 将原因按出现次数排序
-            let mut reason_counts: Vec<(String, usize)> = reasons.iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            reason_counts.sort_by(|a, b| b.1.cmp(&a.1));
-
-            for (reason, count) in reason_counts {
-                let percentage = (count as f64 / error_count as f64) * 100.0;
-                info!(target: "backfill", "  - {}: {} 次 ({:.1}%)", reason, count, percentage);
-            }
-        }
-
-        // 获取失败的任务列表和错误信息 - 使用标准Mutex
-        let failed_tasks_with_errors = match failed_tasks.lock() {
-            Ok(tasks) => tasks,
-            Err(e) => {
-                error!(target: "backfill", "无法获取失败任务列表的锁: {}", e);
-                // 创建一个空列表作为后备
-                return Err(AppError::Unknown("无法获取失败任务列表的锁".to_string()));
-            }
-        };
-
-        // 打印所有失败任务的详细错误信息
-        info!(target: "backfill", "所有失败任务的详细错误信息 (总计 {} 个):", failed_tasks_with_errors.len());
-        info!(target: "backfill", "失败任务计数器值: {}, 统计的错误数: {}",
-              failed_tasks_counter.load(std::sync::atomic::Ordering::SeqCst), error_count);
-
-        // 调试信息：检查失败任务列表是否为空
-        if failed_tasks_with_errors.is_empty() {
-            error!(target: "backfill", "失败任务列表为空，但统计显示有 {} 个失败任务", error_count);
-
-            // 如果列表为空但计数器不为零，说明有并发问题
-            if failed_tasks_counter.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-                error!(target: "backfill", "检测到并发问题: 计数器值为 {}, 但列表为空",
-                       failed_tasks_counter.load(std::sync::atomic::Ordering::SeqCst));
+            } else {
+                tracing::debug!(decision = "no_retry", reason = "no_retryable_tasks", "没有可重试的任务");
             }
         } else {
-            debug!(target: "backfill", "失败任务列表中有 {} 个任务", failed_tasks_with_errors.len());
-
-            // 打印前5个失败任务的信息用于调试
-            for (i, (task, error_msg)) in failed_tasks_with_errors.iter().take(5).enumerate() {
-                debug!(target: "backfill", "调试 - 失败任务 #{}: {}/{} - 错误: {}",
-                       i+1, task.symbol, task.interval, error_msg);
-            }
+            tracing::debug!(decision = "no_retry", reason = "no_failures", "所有任务都成功，无需重试");
         }
 
-        // 按错误类型分组统计
-        let _error_type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-        // 记录每种错误类型的前5个示例
-        let _error_examples: std::collections::HashMap<String, Vec<(String, String, String)>> = std::collections::HashMap::new();
-
-        // 只在日志中记录失败任务的总数
-        info!(target: "backfill", "失败任务详细信息 (总计 {} 个):", failed_tasks_with_errors.len());
-        info!(target: "backfill", "{}", "=".repeat(100));
-
-        // 按错误类型分组统计
-        let mut error_type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-        // 记录每种错误类型的前5个示例
-        let mut error_examples: std::collections::HashMap<String, Vec<(String, String, String)>> = std::collections::HashMap::new();
-
-        for (i, (task, error_msg)) in failed_tasks_with_errors.iter().enumerate() {
-            // 提取错误类型
-            let error_type = if error_msg.contains("HTTP error") {
-                "HTTP error"
-            } else if error_msg.contains("timeout") {
-                "请求超时"
-            } else if error_msg.contains("429 Too Many Requests") {
-                "429 Too Many Requests"
-            } else if error_msg.contains("空结果") {
-                "空结果"
-            } else if error_msg.contains("unexpected EOF during handshake") {
-                "握手中断"
-            } else {
-                // 提取错误类型的第一部分
-                let parts: Vec<&str> = error_msg.split(':').collect();
-                if parts.len() > 1 {
-                    parts[0].trim()
-                } else {
-                    "其他错误"
-                }
-            };
-
-            // 更新错误类型计数
-            *error_type_counts.entry(error_type.to_string()).or_insert(0) += 1;
-
-            // 为每种错误类型保存最多5个示例
-            if let Some(examples) = error_examples.get_mut(error_type) {
-                if examples.len() < 5 {
-                    examples.push((task.symbol.clone(), task.interval.clone(), error_msg.clone()));
-                }
-            } else {
-                error_examples.insert(error_type.to_string(), vec![(task.symbol.clone(), task.interval.clone(), error_msg.clone())]);
-            }
-
-            // 构建URL参数用于日志记录
-            let mut url_params = format!(
-                "symbol={}&interval={}&limit={}",
-                task.symbol, task.interval, task.limit
-            );
-
-            // 添加可选的起始时间
-            if let Some(start_time) = task.start_time {
-                url_params.push_str(&format!("&startTime={}", start_time));
-            }
-
-            // 添加可选的结束时间
-            if let Some(end_time) = task.end_time {
-                url_params.push_str(&format!("&endTime={}", end_time));
-            }
-
-            // 构建完整URL
-            let fapi_url = format!("https://fapi.binance.com/fapi/v1/klines?{}", url_params);
-
-            // 不再写入错误日志文件，只在控制台打印详细信息
-
-            // 每10个错误在控制台打印一个详细示例
-            if i < 10 || i % 100 == 0 {
-                info!(target: "backfill", "失败任务 #{}: {}/{} - {}", i+1, task.symbol, task.interval, error_type);
-                info!(target: "backfill", "  错误信息: {}", error_msg);
-                info!(target: "backfill", "  请求URL: {}", fapi_url);
-            }
-
-            // 每100个错误打印一次进度
-            if (i + 1) % 100 == 0 || i == failed_tasks_with_errors.len() - 1 {
-                info!(target: "backfill", "已处理 {}/{} 个失败任务", i + 1, failed_tasks_with_errors.len());
-            };
-        }
-
-        info!(target: "backfill", "所有失败任务的详细信息已记录到主日志文件");
-
-        // 打印错误类型统计
-        info!(target: "backfill", "失败任务按错误类型统计:");
-        let mut sorted_error_types: Vec<(String, usize)> = error_type_counts.into_iter().collect();
-        sorted_error_types.sort_by(|a, b| b.1.cmp(&a.1)); // 按数量降序排序
-
-        for (error_type, count) in &sorted_error_types {
-            let percentage = (count * 100) as f64 / failed_tasks_with_errors.len() as f64;
-            info!(target: "backfill", "  - {}: {} 个任务 ({:.1}%)", error_type, count, percentage);
-
-            // 打印该错误类型的示例
-            if let Some(examples) = error_examples.get(error_type) {
-                info!(target: "backfill", "    示例:");
-                for (idx, (symbol, interval, error)) in examples.iter().enumerate() {
-                    info!(target: "backfill", "    {}) {}/{}: {}", idx + 1, symbol, interval, error);
-                }
-            }
-        }
-
-        // 定义需要重试的错误类型
-        let retry_error_types = vec![
-            "HTTP error",
-            "请求超时",
-            "429 Too Many Requests"
-        ];
-
-        info!(target: "backfill", "将重试以下类型的错误: {:?}", retry_error_types);
-
-        // 获取需要重试的任务列表（根据错误类型过滤）
-        let retry_tasks: Vec<DownloadTask> = { // 使用一个块来限制 failed_tasks_with_errors 的作用域
-            let failed_tasks_with_errors = failed_tasks_with_errors;
-            failed_tasks_with_errors
-                .iter()
-                .filter(|(_, error_msg)| {
-                    let error_type = if error_msg.contains("HTTP error") {
-                        "HTTP error"
-                    } else if error_msg.contains("timeout") {
-                        "请求超时"
-                    } else if error_msg.contains("429 Too Many Requests") {
-                        "429 Too Many Requests"
-                    } else if error_msg.contains("空结果") {
-                        "空结果"
-                    } else {
-                        // 提取错误类型的第一部分
-                        let parts: Vec<&str> = error_msg.split(':').collect();
-                        if parts.len() > 1 {
-                            parts[0].trim()
-                        } else {
-                            "其他错误"
-                        }
-                    };
-
-                    retry_error_types.contains(&error_type)
-                })
-                .map(|(task, _)| task.clone())
-                .collect()
-        };
-
-        // 如果有需要重试的任务，进行重试
-        if !retry_tasks.is_empty() {
-            info!(target: "backfill", "开始重试 {} 个失败的下载任务...", retry_tasks.len());
-
-            // ✨【必须的修改】✨ 2. 包裹第二轮重试循环
-            let retry_loop_span = tracing::info_span!(
-                "retry_download_loop", // 同样使用 `_loop` 后缀
-                target = "backfill",
-                task_count = retry_tasks.len(),
-                concurrency = 50,
-                iterator_type = "RetryTask"
-            );
-
-            async {
-                let retry_start_time = Instant::now();
-                let mut retry_handles = Vec::new();
-                let retry_failed_tasks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-                let retry_error_reasons = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-                let retry_semaphore = Arc::new(tokio::sync::Semaphore::new(50)); // 重试使用50个并发，充分利用网络带宽，写入操作由DbWriteQueue序列化处理
-
-                for (retry_index, task) in retry_tasks.into_iter().enumerate() {
-                    let api_clone = self.api.clone();
-                    let semaphore_clone = retry_semaphore.clone();
-                    let db_clone = self.db.clone();
-                    let retry_failed_tasks_clone = retry_failed_tasks.clone();
-                    let retry_error_reasons_clone = retry_error_reasons.clone();
-                    let task_clone = task.clone();
-
-                    let _symbol = task.symbol.clone();
-                    let _interval = task.interval.clone();
-
-                    // ✨【关键修复】✨ 先定义future，将span创建移动到获取许可之后
-                    let retry_future = async move {
-                        // 获取信号量许可
-                        let _permit = semaphore_clone.acquire().await.unwrap();
-
-                        let symbol = task.symbol.clone();
-                        let interval = task.interval.clone();
-
-                        // ✨【关键修复】✨ 在这里创建span，它只包裹真正的重试工作
-                        let retry_task_span = tracing::info_span!(
-                            "retry_download_task", // 不再需要 "_sample" 后缀
-                            symbol = %symbol,
-                            interval = %interval,
-                            target = "backfill",
-                            retry_index = retry_index
-                        );
-
-                    async move {
-                        // 记录API请求
-                        let request_id = API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
-                        // 不再记录开始请求的日志
-
-                        // 构建URL参数
-                        let mut url_params = format!(
-                            "symbol={}&interval={}&limit={}",
-                            task.symbol, task.interval, task.limit
-                        );
-
-                        // 添加可选的起始时间
-                        if let Some(start_time) = task.start_time {
-                            url_params.push_str(&format!("&startTime={}", start_time));
-                        }
-
-                        // 添加可选的结束时间
-                        if let Some(end_time) = task.end_time {
-                            url_params.push_str(&format!("&endTime={}", end_time));
-                        }
-
-                        // 构建完整URL
-                        let fapi_url = format!("https://fapi.binance.com/fapi/v1/klines?{}", url_params);
-                        // 不再记录URL日志，只在失败时记录
-
-                        // 下载任务
-                        match api_clone.download_continuous_klines(&task).await {
-                            Ok(klines) => {
-                                // 更新成功请求计数
-                                API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
-                                // 不再记录成功请求的日志
-
-                                if klines.is_empty() {
-                                    // 记录空结果错误
-                                    let error_msg = "空结果".to_string();
-                                    error!(target: "backfill", "{}/{}: 重试下载失败: {}", symbol, interval, error_msg);
-
-                                    // 更新错误统计
-                                    {
-                                        let mut reasons = retry_error_reasons_clone.lock().await;
-                                        *reasons.entry(error_msg.clone()).or_insert(0) += 1;
-                                    }
-
-                                    // 将失败的任务和原因添加到失败列表中
-                                    retry_failed_tasks_clone.lock().await.push((task_clone, error_msg));
-                                    return Err(AppError::DataError("空结果".to_string()));
-                                }
-
-                                // 按时间排序
-                                let mut sorted_klines = klines.clone();
-                                sorted_klines.sort_by_key(|k| k.open_time);
-
-                                // 保存到数据库
-                                let count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
-
-                                // 更新统计信息
-                                Self::update_backfill_stats(&symbol, &interval, count);
-
-                                Ok(())
-                            }
-                            Err(e) => {
-                                // 更新失败请求计数
-                                API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
-
-                                let error_msg = format!("{}", e);
-                                error!(target: "backfill", "重试API请求 #{}: {}/{} - 请求失败: {}",
-                                       request_id, symbol, interval, error_msg);
-                                error!(target: "backfill", "{}/{}: 重试下载失败: {}", symbol, interval, error_msg);
-                                error!(target: "backfill", "失败的URL: {}", fapi_url);
-
-                                // 更新错误统计
-                                {
-                                    let mut reasons = retry_error_reasons_clone.lock().await;
-                                    let reason_key = if error_msg.contains("429 Too Many Requests") {
-                                        "429 Too Many Requests".to_string()
-                                    } else if error_msg.contains("timeout") {
-                                        "请求超时".to_string()
-                                    } else if error_msg.contains("unexpected EOF during handshake") {
-                                        "握手中断".to_string()
-                                    } else if error_msg.contains("HTTP error") {
-                                        "HTTP error".to_string()
-                                    } else if error_msg.contains("empty response") {
-                                        "空响应".to_string()
-                                    } else {
-                                        // 提取错误类型
-                                        let parts: Vec<&str> = error_msg.split(':').collect();
-                                        if parts.len() > 1 {
-                                            parts[0].trim().to_string()
-                                        } else {
-                                            error_msg.clone()
-                                        }
-                                    };
-                                    *reasons.entry(reason_key).or_insert(0) += 1;
-                                }
-
-                                // 将失败的任务和原因添加到失败列表中
-                                retry_failed_tasks_clone.lock().await.push((task_clone, format!("URL={}, 错误: {}", fapi_url, error_msg)));
-                                Err(e)
-                            }
-                        }
-                    }.instrument(retry_task_span).await // instrument 并 await
-                };
-
-                    // ✨【最终修复】✨ 对重试任务也应用相同的 instrument 逻辑
-                    let instrumented_retry_future = retry_future.instrument(tracing::Span::current());
-                    let handle = tokio::spawn(instrumented_retry_future);
-                    retry_handles.push(handle);
-                }
-
-                // 等待所有重试任务完成
-                let mut retry_success_count = 0;
-                let mut retry_error_count = 0;
-
-                for handle in retry_handles {
-                    match handle.await {
-                        Ok(result) => {
-                            match result {
-                                Ok(_) => retry_success_count += 1,
-                                Err(_) => retry_error_count += 1,
-                            }
-                        }
-                        Err(e) => {
-                            error!(target: "backfill", "重试任务执行失败: {}", e);
-                            retry_error_count += 1;
-                        }
-                    }
-                }
-
-                let retry_elapsed = retry_start_time.elapsed();
-                let final_failed_tasks = retry_failed_tasks.lock().await.len();
-                let total_seconds = retry_elapsed.as_secs();
-                let minutes = total_seconds / 60;
-                let seconds = total_seconds % 60;
-
-                // ✨【建议】✨ 记录统计结果到span，包括更多有用的信息
-                tracing::Span::current().record("success_count", retry_success_count);
-                tracing::Span::current().record("error_count", retry_error_count);
-                tracing::Span::current().record("final_failed_count", final_failed_tasks);
-                tracing::Span::current().record("elapsed_seconds", total_seconds);
-
-                info!(target: "backfill",
-                    "重试下载完成，成功: {}，失败: {}，最终失败: {}，耗时: {}分{}秒",
-                    retry_success_count, retry_error_count, final_failed_tasks, minutes, seconds
-                );
-
-            // 打印重试失败原因统计
-            let retry_reasons = retry_error_reasons.lock().await;
-            if !retry_reasons.is_empty() {
-                info!(target: "backfill", "重试失败原因统计:");
-
-                // 将原因按出现次数排序
-                let mut reason_counts: Vec<(String, usize)> = retry_reasons.iter()
-                    .map(|(k, v)| (k.clone(), *v))
-                    .collect();
-                reason_counts.sort_by(|a, b| b.1.cmp(&a.1));
-
-                for (reason, count) in reason_counts {
-                    let percentage = (count as f64 / retry_error_count as f64) * 100.0;
-                    info!(target: "backfill", "  - {}: {} 次 ({:.1}%)", reason, count, percentage);
-                }
-            }
-
-            // 如果有最终失败的任务，打印所有失败任务的详细信息
-            if final_failed_tasks > 0 {
-                let final_failed = retry_failed_tasks.lock().await;
-                info!(target: "backfill", "所有最终失败任务的详细信息（共 {} 个）:", final_failed.len());
-
-                // 按错误类型分组
-                let mut error_type_groups = std::collections::HashMap::new();
-
-                // 只在日志中记录重试失败任务的总数
-                info!(target: "backfill", "重试失败任务详细信息 (总计 {} 个):", final_failed.len());
-                info!(target: "backfill", "{}", "=".repeat(100));
-
-                for (i, (task, reason)) in final_failed.iter().enumerate() {
-                    // 提取错误类型
-                    let error_type = if reason.contains("429 Too Many Requests") {
-                        "429 Too Many Requests"
-                    } else if reason.contains("timeout") {
-                        "请求超时"
-                    } else if reason.contains("unexpected EOF during handshake") {
-                        "握手中断"
-                    } else if reason.contains("HTTP error") {
-                        "HTTP error"
-                    } else if reason.contains("空结果") {
-                        "空结果"
-                    } else {
-                        "其他错误"
-                    };
-
-                    error_type_groups
-                        .entry(error_type.to_string())
-                        .or_insert_with(Vec::new)
-                        .push((task.clone(), reason.clone()));
-
-                    // 构建URL参数用于日志记录
-                    let mut url_params = format!(
-                        "symbol={}&interval={}&limit={}",
-                        task.symbol, task.interval, task.limit
-                    );
-
-                    // 添加可选的起始时间
-                    if let Some(start_time) = task.start_time {
-                        url_params.push_str(&format!("&startTime={}", start_time));
-                    }
-
-                    // 添加可选的结束时间
-                    if let Some(end_time) = task.end_time {
-                        url_params.push_str(&format!("&endTime={}", end_time));
-                    }
-
-                    // 构建完整URL
-                    let fapi_url = format!("https://fapi.binance.com/fapi/v1/klines?{}", url_params);
-
-                    // 不再写入错误日志文件，只在控制台打印详细信息
-
-                    // 每10个错误在控制台打印一个详细示例
-                    if i < 10 || i % 100 == 0 {
-                        info!(target: "backfill", "重试失败任务 #{}: {}/{} - {}", i+1, task.symbol, task.interval, error_type);
-                        info!(target: "backfill", "  错误信息: {}", reason);
-                        info!(target: "backfill", "  请求URL: {}", fapi_url);
-                    }
-                }
-
-                info!(target: "backfill", "所有重试失败任务的详细信息已记录到主日志文件");
-
-                // 按错误类型显示
-                for (error_type, tasks) in &error_type_groups {
-                    info!(target: "backfill", "\n错误类型: {} - {} 个任务", error_type, tasks.len());
-
-                    // 只显示每种类型的前5个示例
-                    for (i, (task, reason)) in tasks.iter().take(5).enumerate() {
-                        info!(target: "backfill", "  {}. {}/{}: {}", i+1, task.symbol, task.interval, reason);
-                    }
-
-                    // 如果有更多，显示剩余数量
-                    if tasks.len() > 5 {
-                        info!(target: "backfill", "  ... 以及其他 {} 个任务", tasks.len() - 5);
-                    }
-                }
-            }
-
-            }.instrument(retry_loop_span).await; // <-- await instrument 过的 future
-        }
-
-        let total_elapsed = start_time.elapsed();
-        let total_seconds = total_elapsed.as_secs();
-        let hours = total_seconds / 3600;
-        let minutes = (total_seconds % 3600) / 60;
-        let seconds = total_seconds % 60;
-
-        // 获取API请求统计
-        let total_requests = API_REQUEST_STATS.0.load(Ordering::SeqCst);
-        let successful_requests = API_REQUEST_STATS.1.load(Ordering::SeqCst);
-        let failed_requests = API_REQUEST_STATS.2.load(Ordering::SeqCst);
-
-        info!(target: "backfill", "API请求统计: 总计发送 {} 个请求，成功 {} 个，失败 {} 个",
-            total_requests, successful_requests, failed_requests
-        );
-
-        // 获取总计补齐的K线数量
-        let total_klines = BACKFILL_STATS.0.load(Ordering::Relaxed);
-
-        info!(target: "backfill",
-            "K线补齐全部完成，总计: {} 条K线，总耗时: {}小时{}分{}秒",
-            total_klines, hours, minutes, seconds
-        );
-
-        // 时间戳检查功能已移至 timestamp_checker.rs，测试已通过，此处屏蔽
-        // let timestamp_checker = crate::kldata::TimestampChecker::new(self.db.clone(), self.intervals.clone());
-        // timestamp_checker.check_last_kline_consistency().await?;
-        info!(target: "backfill", "时间戳检查功能已移至 timestamp_checker.rs，测试已通过，此处屏蔽");
-
+        self.report_summary(start_time);
         Ok(())
     }
 
-    // 时间戳检查相关方法已移至 timestamp_checker.rs
+    /// 执行一批下载任务，并返回失败的任务列表
+    async fn execute_tasks(&self, tasks: Vec<DownloadTask>, loop_name: &str) -> Vec<(DownloadTask, AppError)> {
+        let task_count = tasks.len();
+        let start_time = Instant::now();
 
-    // 时间戳转换方法已移至 timestamp_checker.rs
+        let results = stream::iter(tasks)
+            .map(|task| {
+                let api = self.api.clone();
+                let db = self.db.clone();
+                // 将任务处理逻辑封装在一个 future 中
+                async move {
+                    Self::process_single_task(api, db, task).await
+                }
+            })
+            .buffer_unordered(CONCURRENCY); // 以指定并发数执行
+
+        let mut success_count = 0;
+        let mut failed_tasks = Vec::new();
+
+        let processing_span = match loop_name {
+            "initial_download_loop" => tracing::info_span!(
+                "initial_download_loop",
+                target = "backfill",
+                task_count = task_count,
+                concurrency = CONCURRENCY
+            ),
+            "retry_download_loop" => tracing::info_span!(
+                "retry_download_loop",
+                target = "backfill",
+                task_count = task_count,
+                concurrency = CONCURRENCY
+            ),
+            _ => tracing::info_span!(
+                "download_loop",
+                target = "backfill",
+                task_count = task_count,
+                concurrency = CONCURRENCY
+            ),
+        };
+
+        results
+            .for_each(|result| {
+                match result {
+                    TaskResult::Success(count) => {
+                        if count > 0 { success_count += 1; }
+                    }
+                    TaskResult::Failure { task, error } => {
+                        failed_tasks.push((task, error));
+                    }
+                }
+                async {}
+            })
+            .instrument(processing_span)
+            .await;
+
+        let elapsed = start_time.elapsed();
+        info!(
+            target:"backfill", log_type = "module",
+            "[{}] 完成。成功: {}, 失败: {}, 耗时: {:.2?}",
+            loop_name, success_count, failed_tasks.len(), elapsed
+        );
+
+        failed_tasks
+    }
+
+    /// 处理单个下载任务的核心逻辑
+    async fn process_single_task(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
+        API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
+        let task_span = tracing::info_span!(
+            "download_kline_task",
+            symbol = %task.symbol,
+            interval = %task.interval
+        );
+
+        let result = async {
+            let klines = api.download_continuous_klines(&task).await?;
+            API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
+
+            if klines.is_empty() {
+                warn!(target: "backfill", "{}/{}: API返回空结果，跳过", task.symbol, task.interval);
+                tracing::debug!(decision = "empty_response", symbol = %task.symbol, interval = %task.interval, "API返回空结果，跳过处理");
+                return Ok(0); // 空结果不是错误，但也没有写入
+            }
+
+            tracing::debug!(decision = "save_klines", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "开始保存K线数据");
+            let count = db.save_klines(&task.symbol, &task.interval, &klines).await?;
+            Self::update_backfill_stats(&task.symbol, &task.interval, count);
+            Ok(count)
+        }.instrument(task_span).await;
+
+        match result {
+            Ok(count) => {
+                tracing::debug!(decision = "task_success", symbol = %task.symbol, interval = %task.interval, saved_count = count, "任务成功完成");
+                TaskResult::Success(count)
+            },
+            Err(e) => {
+                API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
+                error!(target: "backfill", "{}/{}: 任务失败: {}", task.symbol, task.interval, e);
+                tracing::error!(message = "下载任务失败", symbol = %task.symbol, interval = %task.interval, error.details = %e);
+                TaskResult::Failure { task, error: e }
+            }
+        }
+    }
+
+    /// 从失败任务中筛选出需要重试的任务
+    fn prepare_retry_tasks(&self, failed_tasks: &[(DownloadTask, AppError)]) -> Vec<DownloadTask> {
+        let retry_keywords = [
+            "HTTP error", "timeout", "429", "Too Many Requests", "handshake", "connection", "network"
+        ];
+        info!(target: "backfill", "将重试包含以下关键词的错误: {:?}", retry_keywords);
+
+        let retry_tasks: Vec<DownloadTask> = failed_tasks.iter()
+            .filter(|(_, error)| {
+                let error_msg = error.to_string();
+                retry_keywords.iter().any(|keyword| error_msg.contains(keyword))
+            })
+            .map(|(task, _)| task.clone())
+            .collect();
+
+        // 报告不可重试的错误
+        let non_retry_count = failed_tasks.len() - retry_tasks.len();
+        if non_retry_count > 0 {
+            warn!(target: "backfill", log_type = "module", "⚠️ {} 个任务因不可重试的错误（如数据库错误、数据解析错误）被永久放弃", non_retry_count);
+        }
+
+        retry_tasks
+    }
+
+    /// 报告最终无法完成的任务
+    fn report_final_failures(&self, final_failures: Vec<(DownloadTask, AppError)>) {
+        error!(target: "backfill", log_type = "module", "❌ 重试后仍有 {} 个任务最终失败，需要人工检查", final_failures.len());
+        let mut error_summary: HashMap<String, usize> = HashMap::new();
+
+        for (task, error) in final_failures.iter().take(10) { // 只打印前10个的详情
+            let error_msg = error.to_string();
+            let error_type = error_msg.split(':').next().unwrap_or("Unknown Error").trim();
+            *error_summary.entry(error_type.to_string()).or_default() += 1;
+            error!(target: "backfill", "  - {}/{}: {}", task.symbol, task.interval, error_msg);
+        }
+
+        if final_failures.len() > 10 {
+            error!(target: "backfill", "  ... 以及其他 {} 个失败任务。", final_failures.len() - 10);
+        }
+
+        error!(target: "backfill", log_type = "module", "最终失败任务摘要 - 需要人工干预:");
+        for (err_type, count) in error_summary {
+            error!(target: "backfill", log_type = "module", "  - {}: {} 次", err_type, count);
+        }
+    }
+
+    /// 报告最终的运行摘要
+    fn report_summary(&self, start_time: Instant) {
+        let elapsed = start_time.elapsed();
+        let total_requests = API_REQUEST_STATS.0.load(Ordering::SeqCst);
+        let successful_requests = API_REQUEST_STATS.1.load(Ordering::SeqCst);
+        let failed_requests = API_REQUEST_STATS.2.load(Ordering::SeqCst);
+        let total_klines = BACKFILL_STATS.0.load(Ordering::Relaxed);
+
+        info!(target: "backfill", log_type = "module", "================ K线补齐运行摘要 ================");
+        info!(target: "backfill", log_type = "module", "✅ K线补齐全部完成，总耗时: {:.2?}", elapsed);
+        info!(target: "backfill", log_type = "module", "📊 总计补齐K线: {} 条", total_klines);
+        info!(target: "backfill", log_type = "module", "🌐 API请求统计: 总计 {}, 成功 {}, 失败 {}", total_requests, successful_requests, failed_requests);
+        info!(target: "backfill", log_type = "module", "==============================================");
+    }
+
+    #[instrument(skip(self), ret, err)]
+    async fn get_symbols(&self) -> Result<Vec<String>> {
+        if self.test_mode {
+            info!(target: "backfill", log_type = "module", "🔧 测试模式，使用1预设交易对: {:?}", self.test_symbols);
+            tracing::debug!(decision = "symbol_source", source = "test_mode", symbols = ?self.test_symbols, "使用测试模式预设交易对");
+            return Ok(self.test_symbols.clone());
+        }
+        info!(target: "backfill", log_type = "module", "📡 获取所有正在交易的U本位永续合约交易对...");
+        tracing::debug!(decision = "symbol_source", source = "api", "从API获取交易对列表");
+        let symbols = self.api.get_trading_usdt_perpetual_symbols().await?;
+        info!(target: "backfill", log_type = "module", "✅ 获取到 {} 个交易对", symbols.len());
+        if symbols.is_empty() {
+            tracing::error!(message = "API返回空交易对列表", "获取交易对失败，无法继续");
+            return Err(AppError::ApiError("没有获取到交易对，无法继续。".to_string()));
+        }
+        Ok(symbols)
+    }
 
     /// 获取数据库中已存在的K线表
     fn get_existing_kline_tables(&self) -> Result<Vec<(String, String)>> {
@@ -993,8 +380,9 @@ impl KlineBackfiller {
 
     /// 预先创建所有需要的表
     fn ensure_all_tables(&self, symbols: &[String]) -> Result<()> {
-        info!(target: "backfill", "开始预先创建所有需要的表，共 {} 个交易对，每个 {} 个周期",
-              symbols.len(), self.intervals.len());
+        let total_tables = symbols.len() * self.intervals.len();
+        info!(target: "backfill", log_type = "module", "🗄️ 开始预先创建数据库表，共 {} 个交易对 × {} 个周期 = {} 个表",
+              symbols.len(), self.intervals.len(), total_tables);
 
         let mut created_count = 0;
         let mut existing_count = 0;
@@ -1027,7 +415,7 @@ impl KlineBackfiller {
             }
         }
 
-        info!(target: "backfill", "表创建完成，新创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
+        info!(target: "backfill", log_type = "module", "✅ 数据库表创建完成，新创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
         Ok(())
     }
 
@@ -1076,7 +464,7 @@ impl KlineBackfiller {
     }
 
     /// 为已存在的交易对创建补齐任务
-    #[instrument(skip(self), ret, err)]
+    // #[instrument] 移除：高频调用函数，在任务创建阶段会被大量调用产生噪音
     async fn create_task_for_existing_symbol(&self, symbol: &str, interval: &str) -> Result<Option<DownloadTask>> {
         let current_time = chrono::Utc::now().timestamp_millis();
 
@@ -1116,7 +504,7 @@ impl KlineBackfiller {
     }
 
     /// 为新品种创建完整下载任务
-    #[instrument(skip(self), ret, err)]
+    // #[instrument] 移除：高频调用函数，在任务创建阶段会被大量调用产生噪音
     async fn create_task_for_new_symbol(&self, symbol: &str, interval: &str) -> Result<DownloadTask> {
         let current_time = chrono::Utc::now().timestamp_millis();
         let start_time = self.calculate_historical_start_time(current_time, interval);

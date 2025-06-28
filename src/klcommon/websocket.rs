@@ -398,7 +398,7 @@ pub async fn process_messages<H: MessageHandler>(
     handler: Arc<H>,
     connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
 ) {
-    info!(target: "MarketDataIngestor", "启动WebSocket消息处理器");
+    info!(target: "MarketDataIngestor", log_type = "module", "🚀 启动WebSocket消息处理器");
 
     // 统计信息
     let mut _message_count = 0;
@@ -429,7 +429,7 @@ pub async fn process_messages<H: MessageHandler>(
         }
     }
 
-    info!(target: "MarketDataIngestor", "WebSocket消息处理器已停止");
+    info!(target: "MarketDataIngestor", log_type = "module", "✅ WebSocket消息处理器已停止");
 }
 
 //=============================================================================
@@ -494,12 +494,12 @@ impl ConnectionManager {
             format!("/stream?streams={}", streams.join("/"))
         };
 
-        info!(target: "MarketDataIngestor", "连接到WebSocket: {}:{}{}", host, port, path);
-        info!(target: "MarketDataIngestor", "订阅的流: {}", streams.join(", "));
+        info!(target: "MarketDataIngestor", log_type = "module", "🔗 连接到WebSocket: {}:{}{}", host, port, path);
+        info!(target: "MarketDataIngestor", log_type = "module", "📡 订阅的流: {}", streams.join(", "));
 
         // 建立TCP连接（通过代理或直接）
         let tcp_stream = if self.use_proxy {
-            info!(target: "MarketDataIngestor", "通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
+            info!(target: "MarketDataIngestor", log_type = "module", "🌐 通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
 
             // 连接到代理
             let socks_stream = Socks5Stream::connect(
@@ -516,7 +516,7 @@ impl ConnectionManager {
             TcpStream::connect(addr).await?
         };
 
-        info!(target: "MarketDataIngestor", "TCP连接已建立");
+        info!(target: "MarketDataIngestor", log_type = "module", "✅ TCP连接已建立");
 
         // 创建 TLS 连接
         let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
@@ -539,9 +539,9 @@ impl ConnectionManager {
         let server_name = ServerName::try_from(host)
             .map_err(|_| AppError::WebSocketError("无效的域名".to_string()))?;
 
-        info!(target: "MarketDataIngestor", "建立TLS连接...");
+        info!(target: "MarketDataIngestor", log_type = "module", "🔐 建立TLS连接...");
         let tls_stream = connector.connect(server_name, tcp_stream).await?;
-        info!(target: "MarketDataIngestor", "TLS连接已建立");
+        info!(target: "MarketDataIngestor", log_type = "module", "✅ TLS连接已建立");
 
         // 创建 HTTP 请求
         let req = Request::builder()
@@ -577,7 +577,7 @@ impl ConnectionManager {
             ws_collector.write_frame(Frame::new(true, OpCode::Text, None, subscribe_msg.into_bytes().into())).await
                 .map_err(|e| AppError::WebSocketError(format!("发送订阅消息失败: {}", e)))?;
 
-            info!(target: "MarketDataIngestor", "订阅消息发送成功，等待服务器响应");
+            info!(target: "MarketDataIngestor", log_type = "module", "✅ 订阅消息发送成功，等待服务器响应");
         } else {
             info!(target: "MarketDataIngestor", "使用直接连接格式，无需发送额外订阅消息。路径: {}", path);
         }

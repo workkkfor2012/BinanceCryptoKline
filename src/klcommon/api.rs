@@ -1,5 +1,5 @@
 use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result, get_proxy_url};
-use tracing::{debug, error, warn, info, instrument};
+use tracing::{debug, error, warn, info, instrument, Instrument};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -79,6 +79,7 @@ impl BinanceApi {
     pub fn new() -> Self {
         // 使用fapi.binance.com作为API端点
         let api_url = "https://fapi.binance.com".to_string();
+        info!(target: "api", log_type = "module", "🌐 初始化币安API客户端，端点: {}", api_url);
         Self { api_url }
     }
 
@@ -109,7 +110,7 @@ impl BinanceApi {
                     .map_err(|e| AppError::ApiError(format!("创建带代理的HTTP客户端失败: {}", e)))?
             },
             Err(e) => {
-                warn!(log.type = "module", target = "api", "设置代理失败，将尝试直接连接: {} - {}", proxy_url, e);
+                warn!(target: "api", log_type = "module", "设置代理失败，将尝试直接连接: {} - {}", proxy_url, e);
                 client_builder
                     .build()
                     .map_err(|e| AppError::ApiError(format!("创建HTTP客户端失败: {}", e)))?
@@ -142,7 +143,7 @@ impl BinanceApi {
                 resp
             },
             Err(e) => {
-                error!(log.type = "module", target = "api", "获取交易所信息失败: {} - {}", fapi_url, e);
+                error!(target: "api", log_type = "module", "获取交易所信息失败: {} - {}", fapi_url, e);
                 return Err(e.into());
             }
         };
@@ -150,7 +151,7 @@ impl BinanceApi {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await?;
-            error!(log.type = "module", target = "api", "从fapi获取交易所信息失败: {} - {}", status, text);
+            error!(target: "api", log_type = "module", "从fapi获取交易所信息失败: {} - {}", status, text);
             return Err(AppError::ApiError(format!(
                 "从fapi获取交易所信息失败: {} - {}",
                 status, text
@@ -170,7 +171,7 @@ impl BinanceApi {
                 info
             },
             Err(e) => {
-                error!(log.type = "module", target = "api", "解析交易所信息JSON失败: {}, 响应前1000个字符: {}",
+                error!(target: "api", log_type = "module", "解析交易所信息JSON失败: {}, 响应前1000个字符: {}",
                     e, &response_text[..response_text.len().min(1000)]);
                 return Err(AppError::JsonError(e));
             }
@@ -207,55 +208,76 @@ impl BinanceApi {
         // 重试间隔（秒）
         const RETRY_INTERVAL: u64 = 1;
 
-        // 重试逻辑
-        for retry in 0..MAX_RETRIES {
-            // 获取交易所信息
-            match self.get_exchange_info().await {
-                Ok(exchange_info) => {
-                    // 过滤出U本位永续合约交易对
-                    // 条件：
-                    // 1. 以USDT结尾（U本位）
-                    // 2. 状态为TRADING（正在交易）
-                    // 3. 合约类型为PERPETUAL（永续合约）
-                    let usdt_perpetual_symbols: Vec<String> = exchange_info.symbols
-                        .iter()
-                        .filter(|symbol| {
-                            let is_usdt = symbol.symbol.ends_with("USDT");
-                            let is_trading = symbol.status == "TRADING";
-                            let is_perpetual = symbol.contract_type == "PERPETUAL";
-                            is_usdt && is_trading && is_perpetual
-                        })
-                        .map(|symbol| symbol.symbol.clone())
-                        .collect();
+        // 为重试循环创建专用的Span
+        let retry_loop_span = tracing::info_span!(
+            "exchange_info_retry_loop",
+            max_retries = MAX_RETRIES,
+            retry_interval = RETRY_INTERVAL
+        );
 
-                    // 如果没有找到交易对，只打印信息
-                    if usdt_perpetual_symbols.is_empty() {
-                        warn!(log.type = "module", target = "api", "从API获取不到U本位永续合约交易对 (尝试 {}/{})", retry + 1, MAX_RETRIES);
-                        if retry == MAX_RETRIES - 1 {
-                            return Err(AppError::ApiError("获取U本位永续合约交易对失败，已重试5次但未获取到任何交易对".to_string()));
+        let result = async {
+            // 重试逻辑
+            for retry in 0..MAX_RETRIES {
+                tracing::debug!(decision = "retry_attempt", attempt = retry + 1, max_retries = MAX_RETRIES, "开始获取交易所信息");
+                // 获取交易所信息
+                match self.get_exchange_info().await {
+                    Ok(exchange_info) => {
+                        tracing::debug!(decision = "exchange_info_success", total_symbols = exchange_info.symbols.len(), "成功获取交易所信息");
+                        // 过滤出U本位永续合约交易对
+                        // 条件：
+                        // 1. 以USDT结尾（U本位）
+                        // 2. 状态为TRADING（正在交易）
+                        // 3. 合约类型为PERPETUAL（永续合约）
+                        let usdt_perpetual_symbols: Vec<String> = exchange_info.symbols
+                            .iter()
+                            .filter(|symbol| {
+                                let is_usdt = symbol.symbol.ends_with("USDT");
+                                let is_trading = symbol.status == "TRADING";
+                                let is_perpetual = symbol.contract_type == "PERPETUAL";
+                                is_usdt && is_trading && is_perpetual
+                            })
+                            .map(|symbol| symbol.symbol.clone())
+                            .collect();
+
+                        // 如果没有找到交易对，只打印信息
+                        if usdt_perpetual_symbols.is_empty() {
+                            warn!(target: "api", log_type = "module", "从API获取不到U本位永续合约交易对 (尝试 {}/{})", retry + 1, MAX_RETRIES);
+                            tracing::debug!(decision = "empty_symbols", attempt = retry + 1, "过滤后没有找到符合条件的交易对");
+                            if retry == MAX_RETRIES - 1 {
+                                tracing::error!(message = "获取交易对最终失败", reason = "empty_result", max_retries = MAX_RETRIES);
+                                return Err(AppError::ApiError("获取U本位永续合约交易对失败，已重试5次但未获取到任何交易对".to_string()));
+                            }
+                        } else {
+                            // 只输出过滤后的交易对数量
+                            info!(target: "api", log_type = "module", "获取U本位永续合约交易对成功，获取到 {} 个交易对", usdt_perpetual_symbols.len());
+                            tracing::debug!(decision = "symbols_success", symbol_count = usdt_perpetual_symbols.len(), attempt = retry + 1, "成功获取交易对列表");
+                            return Ok(usdt_perpetual_symbols);
                         }
-                    } else {
-                        // 只输出过滤后的交易对数量
-                        info!(log.type = "module", target = "api", "获取U本位永续合约交易对成功，获取到 {} 个交易对", usdt_perpetual_symbols.len());
-                        return Ok(usdt_perpetual_symbols);
+                    },
+                    Err(e) => {
+                        error!(target: "api", "获取交易所信息失败 (尝试 {}/{}): {}", retry + 1, MAX_RETRIES, e);
+                        tracing::error!(message = "获取交易所信息失败", attempt = retry + 1, max_retries = MAX_RETRIES, error.details = %e);
+                        if retry == MAX_RETRIES - 1 {
+                            error!(target: "api", log_type = "module", "❌ 获取交易所信息失败，已重试{}次，需要检查网络连接: {}", MAX_RETRIES, e);
+                            return Err(AppError::ApiError(format!("获取交易所信息失败，已重试{}次: {}", MAX_RETRIES, e)));
+                        }
                     }
-                },
-                Err(e) => {
-                    error!(target: "api", "获取交易所信息失败 (尝试 {}/{}): {}", retry + 1, MAX_RETRIES, e);
-                    if retry == MAX_RETRIES - 1 {
-                        return Err(AppError::ApiError(format!("获取交易所信息失败，已重试{}次: {}", MAX_RETRIES, e)));
-                    }
+                }
+
+                // 如果不是最后一次重试，等待一段时间后再重试
+                if retry < MAX_RETRIES - 1 {
+                    tracing::debug!(decision = "retry_wait", wait_seconds = RETRY_INTERVAL, "等待后重试");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_INTERVAL)).await;
                 }
             }
 
-            // 如果不是最后一次重试，等待一段时间后再重试
-            if retry < MAX_RETRIES - 1 {
-                tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_INTERVAL)).await;
-            }
-        }
+            // 这里理论上不会执行到，因为在最后一次重试失败时已经返回错误
+            Err(AppError::ApiError("获取U本位永续合约交易对失败2222d11，已达到最大重试次数".to_string()))
+        }.instrument(retry_loop_span).await;
 
-        // 这里理论上不会执行到，因为在最后一次重试失败时已经返回错误
-        Err(AppError::ApiError("获取U本位永续合约交易对失败，已达到最大重试次数".to_string()))
+        result
+
+
     }
 
     /// 下载连续合约K线数据
@@ -289,10 +311,14 @@ impl BinanceApi {
 
         // 发送请求
         let response = match request.send().await {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                tracing::debug!(decision = "http_request_success", symbol = %task.symbol, interval = %task.interval, status = %resp.status(), "HTTP请求成功");
+                resp
+            },
             Err(e) => {
                 // 只在错误时记录请求URL
-                error!(log.type = "module", target = "api", "{}/{}: 连续合约请求失败: URL={}, 错误: {}", task.symbol, task.interval, fapi_url, e);
+                error!(target: "api", log_type = "module", "{}/{}: 连续合约请求失败: URL={}, 错误: {}", task.symbol, task.interval, fapi_url, e);
+                tracing::error!(message = "HTTP请求失败", symbol = %task.symbol, interval = %task.interval, url = %fapi_url, error.details = %e);
                 return Err(e.into());
             }
         };
@@ -300,10 +326,11 @@ impl BinanceApi {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await?;
-            error!(log.type = "module", target = "api",
+            error!(target: "api", log_type = "module",
                 "下载 {} 的连续合约K线失败: {} - {}",
                 task.symbol, status, text
             );
+            tracing::error!(message = "API响应状态错误", symbol = %task.symbol, interval = %task.interval, status = %status, response_text = %text);
             return Err(AppError::ApiError(format!(
                 "下载 {} 的连续合约K线失败: {} - {}",
                 task.symbol, status, text
@@ -317,14 +344,15 @@ impl BinanceApi {
         let raw_klines: Vec<Vec<Value>> = match serde_json::from_str(&response_text) {
             Ok(data) => data,
             Err(e) => {
-                error!(log.type = "module", target = "api", "{}/{}: 连续合约解析JSON失败: {}, 原始响应: {}", task.symbol, task.interval, e, response_text);
+                error!(target: "api", log_type = "module", "{}/{}: 连续合约解析JSON失败: {}, 原始响应: {}", task.symbol, task.interval, e, response_text);
                 return Err(AppError::JsonError(e));
             }
         };
 
         // 检查是否为空结果
         if raw_klines.is_empty() {
-            error!(log.type = "module", target = "api", "{}/{}: 连续合约返回空结果，原始响应: {}", task.symbol, task.interval, response_text);
+            error!(target: "api", log_type = "module", "{}/{}: 连续合约返回空结果，原始响应: {}", task.symbol, task.interval, response_text);
+            tracing::error!(message = "API返回空K线数据", symbol = %task.symbol, interval = %task.interval, response_text = %response_text);
             return Err(AppError::DataError(format!(
                 "连续合约空结果，原始响应: {}",
                 response_text
@@ -337,7 +365,7 @@ impl BinanceApi {
             .collect::<Vec<Kline>>();
 
         if klines.len() != raw_klines.len() {
-            error!(log.type = "module", target = "api",
+            error!(target: "api", log_type = "module",
                 "解析 {} 的部分连续合约K线失败: 解析了 {}/{} 条K线，原始数据: {}",
                 task.symbol,
                 klines.len(),
@@ -389,13 +417,14 @@ impl BinanceApi {
                         match response.json::<ServerTime>().await {
                             Ok(server_time) => {
                                 if retry > 0 {
-                                    info!(log.type = "module", target = "api", "获取服务器时间成功，重试次数: {}", retry);
+                                    info!(target: "api", log_type = "module", "获取服务器时间成功，重试次数: {}", retry);
                                 }
                                 return Ok(server_time);
                             },
                             Err(e) => {
                                 error!(target: "api", "解析服务器时间响应失败 (尝试 {}/{}): {}", retry + 1, MAX_RETRIES, e);
                                 if retry == MAX_RETRIES - 1 {
+                                    error!(target: "api", log_type = "module", "❌ 解析服务器时间响应失败，已重试{}次，需要检查API响应格式: {}", MAX_RETRIES, e);
                                     return Err(AppError::ApiError(format!("解析服务器时间响应失败，已重试{}次: {}", MAX_RETRIES, e)));
                                 }
                             }
@@ -408,6 +437,7 @@ impl BinanceApi {
                         };
                         error!(target: "api", "获取服务器时间失败 (尝试 {}/{}): {} - {}", retry + 1, MAX_RETRIES, status, text);
                         if retry == MAX_RETRIES - 1 {
+                            error!(target: "api", log_type = "module", "❌ 获取服务器时间HTTP请求失败，已重试{}次，需要检查API状态: {} - {}", MAX_RETRIES, status, text);
                             return Err(AppError::ApiError(format!("获取服务器时间失败，已重试{}次: {} - {}", MAX_RETRIES, status, text)));
                         }
                     }
@@ -415,6 +445,7 @@ impl BinanceApi {
                 Err(e) => {
                     error!(target: "api", "获取服务器时间失败 (尝试 {}/{}): URL={}, 错误: {}", retry + 1, MAX_RETRIES, fapi_url, e);
                     if retry == MAX_RETRIES - 1 {
+                        error!(target: "api", log_type = "module", "❌ 获取服务器时间网络请求失败，已重试{}次，需要检查网络连接: {}", MAX_RETRIES, e);
                         return Err(AppError::ApiError(format!("获取服务器时间失败，已重试{}次: {}", MAX_RETRIES, e)));
                     }
                 }

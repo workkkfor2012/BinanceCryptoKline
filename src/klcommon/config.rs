@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::klaggregate::types::constants::*;
 use crate::klcommon::Result;
 
+/// 默认启用完全追踪功能
+fn default_enable_full_tracing() -> bool {
+    true
+}
+
 /// K线聚合系统配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregateConfig {
@@ -119,6 +124,10 @@ pub struct LoggingConfig {
 
     /// 命名管道名称
     pub pipe_name: String,
+
+    /// 是否启用完全追踪功能（包括跨线程上下文传递）
+    #[serde(default = "default_enable_full_tracing")]
+    pub enable_full_tracing: bool,
 }
 
 // 移除 Default 实现，强制从配置文件读取所有配置
@@ -177,6 +186,7 @@ impl Default for LoggingConfig {
             log_level: "trace".to_string(),
             log_transport: "named_pipe".to_string(),
             pipe_name: r"\\.\pipe\kline_log_pipe".to_string(),
+            enable_full_tracing: true,
         }
     }
 }
@@ -280,12 +290,12 @@ impl AggregateConfig {
         
         Ok(())
     }
-    
+
     /// 获取总的K线存储槽数量
     pub fn get_total_kline_slots(&self) -> usize {
         self.max_symbols * self.supported_intervals.len()
     }
-    
+
     /// 获取周期索引
     pub fn get_period_index(&self, interval: &str) -> Option<u32> {
         self.supported_intervals
@@ -293,14 +303,14 @@ impl AggregateConfig {
             .position(|i| i == interval)
             .map(|pos| pos as u32)
     }
-    
+
     /// 根据索引获取周期字符串
     pub fn get_interval_by_index(&self, index: u32) -> Option<&str> {
         self.supported_intervals
             .get(index as usize)
             .map(|s| s.as_str())
     }
-    
+
     // 移除 create_default_config_file 方法，不再支持创建默认配置文件
     // 所有配置必须手动在配置文件中指定
 }

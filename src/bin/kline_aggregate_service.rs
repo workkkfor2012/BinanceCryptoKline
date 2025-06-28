@@ -2,7 +2,8 @@
 //!
 //! 启动完整的K线聚合系统，包括数据接入、聚合、存储和持久化。
 
-use kline_server::klaggregate::{KlineAggregateSystem, AggregateConfig};
+use kline_server::klaggregate::KlineAggregateSystem;
+use kline_server::klcommon::AggregateConfig;
 use kline_server::klcommon::log::{
     ModuleLayer, NamedPipeLogManager, TraceVisualizationLayer,
     TraceDistillerStore, TraceDistillerLayer, distill_all_completed_traces_to_text
@@ -67,12 +68,12 @@ async fn run_app(
 ) -> Result<()> {
     // 首先打印当前的日志级别配置
     let current_log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "未设置".to_string());
-    info!(target: LOG_TARGET, event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
+    info!(target: LOG_TARGET, log_type = "module", event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
 
     // 如果测试模式开启，设置环境变量并打印警告
     if ENABLE_TEST_MODE {
         std::env::set_var("KLINE_TEST_MODE", "true");
-        warn!(target: LOG_TARGET, event_name = "运行模式确认", "🚀 服务以【测试模式】启动，将只订阅 'btcusdt'");
+        warn!(target: LOG_TARGET, log_type = "module", event_name = "运行模式确认", "🚀 服务以【测试模式】启动，将只订阅 'btcusdt'");
     }
 
     trace!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
@@ -89,27 +90,27 @@ async fn run_app(
 
     // 加载配置
     let config = load_config().await?;
-    info!(target: LOG_TARGET, event_name = "配置加载完成123", "配置加载完成456");
+    info!(target: LOG_TARGET, log_type = "module", event_name = "配置加载完成", "✅ 配置文件加载成功");
 
     // 创建K线聚合系统
     let system = match KlineAggregateSystem::new(config).await {
         Ok(system) => {
-            info!(target: LOG_TARGET, event_name = "系统创建成功", "K线聚合系统创建成功");
+            info!(target: LOG_TARGET, log_type = "module", event_name = "系统创建成功", "✅ K线聚合系统创建成功");
             system
         }
         Err(e) => {
-            error!(target: LOG_TARGET, event_name = "系统创建失败", error = %e, "创建K线聚合系统失败");
+            error!(target: LOG_TARGET, log_type = "module", event_name = "系统创建失败", error = %e, "❌ 创建K线聚合系统失败: {}", e);
             return Err(e);
         }
     };
 
     // 启动系统
     if let Err(e) = system.start().await {
-        error!(target: LOG_TARGET, event_name = "系统启动失败", error = %e, "启动K线聚合系统失败");
+        error!(target: LOG_TARGET, log_type = "module", event_name = "系统启动失败", error = %e, "❌ 启动K线聚合系统失败: {}", e);
         return Err(e);
     }
 
-    info!(target: LOG_TARGET, event_name = "服务启动完成", "K线聚合服务启动完成");
+    info!(target: LOG_TARGET, log_type = "module", event_name = "服务启动完成", "🚀 K线聚合服务启动完成");
 
     // 启动状态监控任务
     start_status_monitor(system.clone()).await;
@@ -129,15 +130,15 @@ async fn run_app(
     wait_for_shutdown_signal().await;
 
     // 优雅关闭
-    info!(target: LOG_TARGET, event_name = "收到关闭信号", "收到关闭信号，开始优雅关闭...");
+    info!(target: LOG_TARGET, log_type = "module", event_name = "收到关闭信号", "🛑 收到关闭信号，开始优雅关闭...");
 
     // 【新增】程序退出时生成最终快照
     generate_final_snapshot(&distiller_store).await;
 
     if let Err(e) = system.stop().await {
-        error!(target: LOG_TARGET, event_name = "系统停止失败", error = %e, "关闭K线聚合系统失败");
+        error!(target: LOG_TARGET, log_type = "module", event_name = "系统停止失败", error = %e, "❌ 关闭K线聚合系统失败: {}", e);
     } else {
-        info!(target: LOG_TARGET, event_name = "服务优雅关闭", "K线聚合服务已优雅关闭");
+        info!(target: LOG_TARGET, log_type = "module", event_name = "服务优雅关闭", "✅ K线聚合服务已优雅关闭");
     }
 
     Ok(())
@@ -353,7 +354,7 @@ async fn load_config() -> Result<AggregateConfig> {
         info!(target: LOG_TARGET, event_name = "从文件加载配置", path = %config_path, "从文件加载配置: {}", config_path);
         AggregateConfig::from_file(&config_path)
     } else {
-        error!(target: LOG_TARGET, event_name = "配置文件不存在", path = %config_path, "配置文件不存在: {}，无法启动服务", config_path);
+        error!(target: LOG_TARGET, log_type = "module", event_name = "配置文件不存在", path = %config_path, "❌ 配置文件不存在: {}，无法启动服务", config_path);
         return Err(AppError::ConfigError(format!("配置文件不存在: {}，请确保配置文件存在", config_path)));
     }
 }

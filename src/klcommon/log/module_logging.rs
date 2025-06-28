@@ -34,8 +34,8 @@ where
         let mut visitor = super::trace_visualization::JsonVisitor::new(&mut fields);
         event.record(&mut visitor);
 
-        // 只处理明确标记为 log.type = "module" 的事件
-        if fields.get("log.type").and_then(|v| v.as_str()) != Some("module") {
+        // 只处理明确标记为 log_type = "module" 的事件
+        if fields.get("log_type").and_then(|v| v.as_str()) != Some("module") {
             return;
         }
 

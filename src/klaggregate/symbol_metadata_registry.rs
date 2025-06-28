@@ -44,7 +44,7 @@ impl SymbolMetadataRegistry {
         let total_kline_slots = config.get_total_kline_slots();
         tracing::Span::current().record("total_kline_slots", total_kline_slots);
 
-        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "注册表初始化", max_symbols = config.max_symbols, supported_intervals_count = config.supported_intervals.len(), "初始化交易品种元数据注册表 (最大品种: {}, 支持周期: {})", config.max_symbols, config.supported_intervals.len());
+        info!(target: SYMBOL_METADATA_REGISTRY, log_type = "module", event_name = "注册表初始化", max_symbols = config.max_symbols, supported_intervals_count = config.supported_intervals.len(), "🔧 初始化交易品种元数据注册表 (最大品种: {}, 支持周期: {})", config.max_symbols, config.supported_intervals.len());
         
         // 创建API客户端
         let api_client = BinanceApi::new();
@@ -71,7 +71,7 @@ impl SymbolMetadataRegistry {
         // 初始化品种信息
         registry.initialize_symbol_info().await?;
         
-        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "注册表初始化完成", total_kline_slots = total_kline_slots, "交易品种元数据注册表初始化完成 (总K线槽位: {})", total_kline_slots);
+        info!(target: SYMBOL_METADATA_REGISTRY, log_type = "module", event_name = "注册表初始化完成", total_kline_slots = total_kline_slots, "✅ 交易品种元数据注册表初始化完成 (总K线槽位: {})", total_kline_slots);
         Ok(registry)
     }
 
@@ -88,7 +88,7 @@ impl SymbolMetadataRegistry {
             debug!(target: SYMBOL_METADATA_REGISTRY, event_name = "周期注册", interval = %interval, index = index, "注册周期 {} (索引: {})", interval, index);
         }
 
-        info!(target: SYMBOL_METADATA_REGISTRY, event_name = "周期信息初始化完成", periods_count = period_info.len(), "已注册时间周期 (数量: {})", period_info.len());
+        info!(target: SYMBOL_METADATA_REGISTRY, log_type = "module", event_name = "周期信息初始化完成", periods_count = period_info.len(), "✅ 已注册时间周期 (数量: {})", period_info.len());
         Ok(())
     }
     
@@ -101,7 +101,7 @@ impl SymbolMetadataRegistry {
         let symbols = self.fetch_active_symbols().await?;
         tracing::Span::current().record("symbols_count", symbols.len());
 
-        info!(target: "SymbolMetadataRegistry", event_name = "活跃品种获取", symbols_count = symbols.len(), "从API获取到活跃交易品种 (数量: {})", symbols.len());
+        info!(target: "SymbolMetadataRegistry", log_type = "module", event_name = "活跃品种获取", symbols_count = symbols.len(), "✅ 从API获取到活跃交易品种 (数量: {})", symbols.len());
 
         // 2. 批量查询所有品种的上市时间（优化性能）
         info!(target: "SymbolMetadataRegistry", event_name = "上市时间查询开始", symbols_count = symbols.len(), "批量查询品种上市时间 (品种数: {})", symbols.len());
@@ -199,7 +199,7 @@ impl SymbolMetadataRegistry {
         // 检查是否启用测试模式
         if let Ok(test_mode) = std::env::var("KLINE_TEST_MODE") {
             if test_mode.to_lowercase() == "true" {
-                info!(target: "SymbolMetadataRegistry", event_name = "测试模式激活", "🧪 测试模式已激活，只返回 'btcusdt' 交易对");
+                info!(target: "SymbolMetadataRegistry", log_type = "module", event_name = "测试模式激活", "🧪 测试模式已激活，只返回 'btcusdt' 交易对");
                 tracing::Span::current().record("symbols_count", 1);
                 return Ok(vec!["btcusdt".to_string()]);
             }
@@ -219,7 +219,7 @@ impl SymbolMetadataRegistry {
                     }
                 }
                 Err(e) => {
-                    error!(target: "SymbolMetadataRegistry", event_name = "获取品种API错误", attempt = attempt, max_retries = MAX_RETRIES, error = %e, "获取交易品种列表失败 (尝试: {}/{}, 错误: {})", attempt, MAX_RETRIES, e);
+                    error!(target: "SymbolMetadataRegistry", log_type = "module", event_name = "获取品种API错误", attempt = attempt, max_retries = MAX_RETRIES, error = %e, "❌ 获取交易品种列表失败 (尝试: {}/{}, 错误: {})", attempt, MAX_RETRIES, e);
                 }
             }
 
@@ -228,6 +228,7 @@ impl SymbolMetadataRegistry {
             }
         }
 
+        error!(target: "SymbolMetadataRegistry", log_type = "module", event_name = "获取品种最终失败", max_retries = MAX_RETRIES, "❌ 获取交易品种列表最终失败，已重试 {} 次", MAX_RETRIES);
         Err(AppError::ApiError(format!("获取交易品种列表失败，已重试 {} 次", MAX_RETRIES)))
     }
     

@@ -51,7 +51,7 @@ impl BufferedKlineStore {
         let total_slots = symbol_registry.get_total_kline_slots();
         tracing::Span::current().record("total_slots", total_slots);
 
-        info!(target: BUFFERED_KLINE_STORE, event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
+        info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "存储初始化开始", total_slots = total_slots, swap_interval_ms = swap_interval_ms, "🔧 初始化双缓冲K线存储: total_slots={}, swap_interval_ms={}", total_slots, swap_interval_ms);
 
         // 创建两个相同大小的缓冲区
         let write_buffer = Self::create_buffer(total_slots);
@@ -69,7 +69,7 @@ impl BufferedKlineStore {
             total_slots,
         };
 
-        info!(target: BUFFERED_KLINE_STORE, event_name = "存储初始化完成", total_slots = total_slots, "双缓冲K线存储初始化完成: total_slots={}", total_slots);
+        info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "存储初始化完成", total_slots = total_slots, "✅ 双缓冲K线存储初始化完成: total_slots={}", total_slots);
         Ok(store)
     }
     
@@ -90,7 +90,7 @@ impl BufferedKlineStore {
             return Ok(());
         }
 
-        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
+        info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "调度器启动", swap_interval_ms = self.swap_interval_ms, "🚀 启动双缓冲调度器: swap_interval_ms={}", self.swap_interval_ms);
         self.scheduler_running.store(true, Ordering::Relaxed);
         
         let write_buffer = self.write_buffer.clone();
@@ -145,14 +145,14 @@ impl BufferedKlineStore {
                         snapshot_ready_notify.notify_waiters();
                     }
                     _ = stop_signal.notified() => {
-                        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止信号", "收到停止信号，调度器退出");
+                        info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "调度器停止信号", "🛑 收到停止信号，调度器退出");
                         break;
                     }
                 }
             }
 
             scheduler_running.store(false, Ordering::Relaxed);
-            info!(target: BUFFERED_KLINE_STORE, event_name = "调度器已停止", "双缓冲调度器已停止");
+            info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "调度器已停止", "✅ 双缓冲调度器已停止");
         }.instrument(tracing::info_span!("buffer_swap_scheduler")));
         
         Ok(())
@@ -166,7 +166,7 @@ impl BufferedKlineStore {
             return Ok(());
         }
 
-        info!(target: BUFFERED_KLINE_STORE, event_name = "调度器停止开始", "停止双缓冲调度器");
+        info!(target: BUFFERED_KLINE_STORE, log_type = "module", event_name = "调度器停止开始", "🛑 停止双缓冲调度器");
         self.scheduler_running.store(false, Ordering::Relaxed);
         self.stop_signal.notify_waiters();
 

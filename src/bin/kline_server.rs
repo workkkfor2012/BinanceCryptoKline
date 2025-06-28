@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
 /// 初始化tracing日志系统
 /// 加载日志配置
 fn load_logging_config() -> Result<String> {
-    use kline_server::klaggregate::config::AggregateConfig;
+    use kline_server::klcommon::AggregateConfig;
 
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/BinanceKlineConfig.toml".to_string());
 

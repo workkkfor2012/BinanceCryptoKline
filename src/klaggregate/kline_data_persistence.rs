@@ -48,7 +48,7 @@ impl KlineDataPersistence {
         buffered_store: Arc<BufferedKlineStore>,
         symbol_registry: Arc<SymbolMetadataRegistry>,
     ) -> Result<Self> {
-        info!(target: "KlineDataPersistence", event_name = "持久化器初始化", batch_size = config.persistence.batch_size, "创建K线数据持久化器: batch_size={}", config.persistence.batch_size);
+        info!(target: "KlineDataPersistence", log_type = "module", event_name = "持久化器初始化", batch_size = config.persistence.batch_size, "🔧 创建K线数据持久化器: batch_size={}", config.persistence.batch_size);
         
         // 创建数据库连接
         let database = Arc::new(Database::new(&config.database.database_path)?);
@@ -77,7 +77,7 @@ impl KlineDataPersistence {
             return Ok(());
         }
 
-        info!(target: "KlineDataPersistence", event_name = "持久化器启动", persistence_interval_ms = self.config.persistence_interval_ms, "启动K线数据持久化器: persistence_interval_ms={}", self.config.persistence_interval_ms);
+        info!(target: "KlineDataPersistence", log_type = "module", event_name = "持久化器启动", persistence_interval_ms = self.config.persistence_interval_ms, "🚀 启动K线数据持久化器: persistence_interval_ms={}", self.config.persistence_interval_ms);
         self.is_running.store(true, Ordering::Relaxed);
 
         // 启动定时持久化任务
@@ -86,7 +86,7 @@ impl KlineDataPersistence {
         // 启动统计输出任务
         self.start_statistics_task().await;
 
-        info!(target: "KlineDataPersistence", event_name = "持久化器启动完成", "K线数据持久化器启动完成");
+        info!(target: "KlineDataPersistence", log_type = "module", event_name = "持久化器启动完成", "✅ K线数据持久化器启动完成");
         Ok(())
     }
     
@@ -97,7 +97,7 @@ impl KlineDataPersistence {
             return Ok(());
         }
         
-        info!(target: "KlineDataPersistence", event_name = "持久化器停止", "停止K线数据持久化器");
+        info!(target: "KlineDataPersistence", log_type = "module", event_name = "持久化器停止", "🛑 停止K线数据持久化器");
         self.is_running.store(false, Ordering::Relaxed);
 
         // 等待所有持久化任务完成
@@ -105,7 +105,7 @@ impl KlineDataPersistence {
         let _permits = self.semaphore.acquire_many(batch_size).await
             .map_err(|e| AppError::DataError(format!("等待持久化任务完成失败: {}", e)))?;
 
-        info!(target: "KlineDataPersistence", event_name = "持久化器停止完成", "K线数据持久化器已停止");
+        info!(target: "KlineDataPersistence", log_type = "module", event_name = "持久化器停止完成", "✅ K线数据持久化器已停止");
         Ok(())
     }
     
