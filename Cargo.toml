@@ -30,55 +30,55 @@ path = "src/bin/test_cerberus.rs"
 
 
 
-# 测试文件配置
-[[test]]
-name = "test_binance_ws"
-path = "tests/test_binance_ws.rs"
-harness = false
+# 测试文件配置 - 暂时注释掉缺失的测试文件
+# [[test]]
+# name = "test_binance_ws"
+# path = "tests/test_binance_ws.rs"
+# harness = false
 
-[[test]]
-name = "test_binance_kline_ws"
-path = "tests/test_binance_kline_ws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_kline_ws"
+# path = "tests/test_binance_kline_ws.rs"
+# harness = false
 
-[[test]]
-name = "test_binance_continuous_kline_ws"
-path = "tests/test_binance_continuous_kline_ws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_continuous_kline_ws"
+# path = "tests/test_binance_continuous_kline_ws.rs"
+# harness = false
 
-[[test]]
-name = "test_binance_ws_multi_libs"
-path = "tests/test_binance_ws_multi_libs.rs"
-harness = false
+# [[test]]
+# name = "test_binance_ws_multi_libs"
+# path = "tests/test_binance_ws_multi_libs.rs"
+# harness = false
 
-[[test]]
-name = "test_binance_async_tungstenite"
-path = "tests/test_binance_async_tungstenite.rs"
-harness = false
+# [[test]]
+# name = "test_binance_async_tungstenite"
+# path = "tests/test_binance_async_tungstenite.rs"
+# harness = false
 
 # 聚合交易测试
-[[test]]
-name = "test_binance_aggtrade_fastws"
-path = "tests/test_binance_aggtrade_fastws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_aggtrade_fastws"
+# path = "tests/test_binance_aggtrade_fastws.rs"
+# harness = false
 
 # fastwebsockets 测试
-[[test]]
-name = "test_binance_fasws"
-path = "tests/test_binance_fasws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_fasws"
+# path = "tests/test_binance_fasws.rs"
+# harness = false
 
-# 服务器时间测试
-[[test]]
-name = "test_server_time"
-path = "tests/test_server_time.rs"
-harness = false
+# 服务器时间测试 - 暂时注释掉缺失的测试文件
+# [[test]]
+# name = "test_server_time"
+# path = "tests/test_server_time.rs"
+# harness = false
 
 # 服务器时间同步测试
-[[test]]
-name = "test_server_time_sync"
-path = "tests/test_server_time_sync.rs"
-harness = false
+# [[test]]
+# name = "test_server_time_sync"
+# path = "tests/test_server_time_sync.rs"
+# harness = false
 
 
 [lib]

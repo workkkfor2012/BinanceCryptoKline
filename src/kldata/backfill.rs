@@ -35,6 +35,7 @@ enum TaskResult {
 }
 
 /// K线数据补齐模块
+#[derive(Debug)]
 pub struct KlineBackfiller {
     db: Arc<Database>,
     api: BinanceApi,
@@ -45,8 +46,10 @@ pub struct KlineBackfiller {
 
 impl KlineBackfiller {
     /// 创建新的K线补齐器实例
+    #[instrument]
     pub fn new(db: Arc<Database>, intervals: Vec<String>) -> Self {
         let api = BinanceApi::new();
+        tracing::debug!(decision = "backfiller_mode", mode = "production", interval_count = intervals.len(), "创建生产模式补齐器");
         Self {
             db,
             api,
@@ -57,8 +60,10 @@ impl KlineBackfiller {
     }
 
     /// 创建测试模式的K线补齐器实例
+    #[instrument]
     pub fn new_test_mode(db: Arc<Database>, intervals: Vec<String>, test_symbols: Vec<String>) -> Self {
         let api = BinanceApi::new();
+        tracing::debug!(decision = "backfiller_mode", mode = "test", interval_count = intervals.len(), test_symbol_count = test_symbols.len(), "创建测试模式补齐器");
         Self {
             db,
             api,
@@ -109,27 +114,30 @@ impl KlineBackfiller {
     }
 
     /// 运行一次性补齐流程
-    #[instrument(name = "backfill_run_once", target = "backfill", skip_all)]
+    #[instrument(name = "backfill_run_once", ret, err)]
     pub async fn run_once(&self) -> Result<()> {
         info!(target: "backfill", log_type = "module", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
         // 步骤 1 & 2: 获取交易对并准备表
         let all_symbols = self.get_symbols().await?;
+        tracing::debug!(decision = "symbols_obtained", symbol_count = all_symbols.len(), test_mode = self.test_mode, "获取交易对列表完成");
+
         info!(target: "backfill", log_type = "module", "🗄️ 开始准备数据库表结构1...");
-      
-        
         self.ensure_all_tables(&all_symbols)?;
         info!(target: "backfill", log_type = "module", "✅ 数据库表结构准备完成");
+        tracing::debug!(decision = "tables_prepared", symbol_count = all_symbols.len(), interval_count = self.intervals.len(), "数据库表准备完成");
 
         // 步骤 3: 创建任务
         info!(target: "backfill", log_type = "module", "📋 开始创建下载任务...");
         let tasks = self.create_all_download_tasks(&all_symbols).await?;
         if tasks.is_empty() {
             info!(target: "backfill", log_type = "module", "✅ 所有数据都是最新的，无需补齐");
+            tracing::debug!(decision = "no_backfill_needed", "所有数据都是最新的，无需补齐");
             return Ok(());
         }
         info!(target: "backfill", log_type = "module", "📋 已创建 {} 个下载任务", tasks.len());
+        tracing::debug!(decision = "tasks_created", task_count = tasks.len(), "下载任务创建完成");
 
         // 步骤 4: 执行第一轮下载
         info!(target: "backfill", log_type = "module", "开始第一轮下载，共 {} 个任务...", tasks.len());
@@ -146,6 +154,8 @@ impl KlineBackfiller {
                 if !final_failed_tasks.is_empty() {
                     tracing::debug!(decision = "final_failures", final_failed_count = final_failed_tasks.len(), "重试后仍有失败任务");
                     self.report_final_failures(final_failed_tasks);
+                } else {
+                    tracing::debug!(decision = "retry_success", "所有重试任务都成功");
                 }
             } else {
                 tracing::debug!(decision = "no_retry", reason = "no_retryable_tasks", "没有可重试的任务");
@@ -154,11 +164,14 @@ impl KlineBackfiller {
             tracing::debug!(decision = "no_retry", reason = "no_failures", "所有任务都成功，无需重试");
         }
 
+        tracing::debug!(decision = "backfill_complete", "补齐流程完成");
+
         self.report_summary(start_time);
         Ok(())
     }
 
     /// 执行一批下载任务，并返回失败的任务列表
+    #[instrument(skip(self, tasks), fields(task_count = tasks.len(), loop_name = %loop_name, concurrency = CONCURRENCY), ret)]
     async fn execute_tasks(&self, tasks: Vec<DownloadTask>, loop_name: &str) -> Vec<(DownloadTask, AppError)> {
         let task_count = tasks.len();
         let start_time = Instant::now();
@@ -177,26 +190,29 @@ impl KlineBackfiller {
         let mut success_count = 0;
         let mut failed_tasks = Vec::new();
 
+        // 为并发循环创建专用的Span - 必须以_loop结尾供TraceDistiller识别
         let processing_span = match loop_name {
             "initial_download_loop" => tracing::info_span!(
                 "initial_download_loop",
-                target = "backfill",
+                iterator_type = "download_task",
                 task_count = task_count,
                 concurrency = CONCURRENCY
             ),
             "retry_download_loop" => tracing::info_span!(
                 "retry_download_loop",
-                target = "backfill",
+                iterator_type = "retry_task",
                 task_count = task_count,
                 concurrency = CONCURRENCY
             ),
             _ => tracing::info_span!(
                 "download_loop",
-                target = "backfill",
+                iterator_type = "download_task",
                 task_count = task_count,
                 concurrency = CONCURRENCY
             ),
         };
+
+        tracing::debug!(decision = "concurrent_execution_start", loop_name = %loop_name, task_count = task_count, concurrency = CONCURRENCY, "开始并发执行任务");
 
         results
             .for_each(|result| {
@@ -220,21 +236,29 @@ impl KlineBackfiller {
             loop_name, success_count, failed_tasks.len(), elapsed
         );
 
+        tracing::debug!(
+            decision = "concurrent_execution_complete",
+            loop_name = %loop_name,
+            success_count = success_count,
+            failed_count = failed_tasks.len(),
+            total_tasks = task_count,
+            elapsed_ms = elapsed.as_millis(),
+            "并发执行完成"
+        );
+
         failed_tasks
     }
 
     /// 处理单个下载任务的核心逻辑
+    #[instrument(name = "download_kline_task", skip_all, fields(symbol = %task.symbol, interval = %task.interval, limit = task.limit, start_time = ?task.start_time, end_time = ?task.end_time), ret)]
     async fn process_single_task(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
         API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
-        let task_span = tracing::info_span!(
-            "download_kline_task",
-            symbol = %task.symbol,
-            interval = %task.interval
-        );
+        tracing::debug!(decision = "download_start", symbol = %task.symbol, interval = %task.interval, "开始下载K线任务");
 
-        let result = async {
+        let result: Result<usize> = async {
             let klines = api.download_continuous_klines(&task).await?;
             API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
+            tracing::debug!(decision = "download_success", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "API下载成功");
 
             if klines.is_empty() {
                 warn!(target: "backfill", "{}/{}: API返回空结果，跳过", task.symbol, task.interval);
@@ -245,8 +269,9 @@ impl KlineBackfiller {
             tracing::debug!(decision = "save_klines", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "开始保存K线数据");
             let count = db.save_klines(&task.symbol, &task.interval, &klines).await?;
             Self::update_backfill_stats(&task.symbol, &task.interval, count);
+            tracing::debug!(decision = "save_success", symbol = %task.symbol, interval = %task.interval, saved_count = count, "K线数据保存成功");
             Ok(count)
-        }.instrument(task_span).await;
+        }.await;
 
         match result {
             Ok(count) => {
@@ -256,13 +281,20 @@ impl KlineBackfiller {
             Err(e) => {
                 API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
                 error!(target: "backfill", "{}/{}: 任务失败: {}", task.symbol, task.interval, e);
-                tracing::error!(message = "下载任务失败", symbol = %task.symbol, interval = %task.interval, error.details = %e);
+                tracing::error!(
+                    message = "下载任务失败",
+                    symbol = %task.symbol,
+                    interval = %task.interval,
+                    error.summary = e.get_error_type_summary(),
+                    error.details = %e
+                );
                 TaskResult::Failure { task, error: e }
             }
         }
     }
 
     /// 从失败任务中筛选出需要重试的任务
+    #[instrument(skip(self, failed_tasks), fields(failed_count = failed_tasks.len()), ret)]
     fn prepare_retry_tasks(&self, failed_tasks: &[(DownloadTask, AppError)]) -> Vec<DownloadTask> {
         let retry_keywords = [
             "HTTP error", "timeout", "429", "Too Many Requests", "handshake", "connection", "network"
@@ -281,14 +313,17 @@ impl KlineBackfiller {
         let non_retry_count = failed_tasks.len() - retry_tasks.len();
         if non_retry_count > 0 {
             warn!(target: "backfill", log_type = "module", "⚠️ {} 个任务因不可重试的错误（如数据库错误、数据解析错误）被永久放弃", non_retry_count);
+            tracing::warn!(decision = "non_retryable_failures", non_retry_count = non_retry_count, total_failed = failed_tasks.len(), "发现不可重试的失败任务");
         }
 
+        tracing::debug!(decision = "retry_tasks_prepared", retry_count = retry_tasks.len(), non_retry_count = non_retry_count, "重试任务准备完成");
         retry_tasks
     }
 
     /// 报告最终无法完成的任务
+    #[instrument(skip(self, final_failures), fields(final_failure_count = final_failures.len()))]
     fn report_final_failures(&self, final_failures: Vec<(DownloadTask, AppError)>) {
-        error!(target: "backfill", log_type = "module", "❌ 重试后仍有 {} 个任务最终失败，需要人工检查", final_failures.len());
+        error!(target: "backfill", log_type = "module", "❌ 重试后仍有 {} 个任务最终失败11，需要人工检查", final_failures.len());
         let mut error_summary: HashMap<String, usize> = HashMap::new();
 
         for (task, error) in final_failures.iter().take(10) { // 只打印前10个的详情
@@ -335,13 +370,19 @@ impl KlineBackfiller {
         let symbols = self.api.get_trading_usdt_perpetual_symbols().await?;
         info!(target: "backfill", log_type = "module", "✅ 获取到 {} 个交易对", symbols.len());
         if symbols.is_empty() {
-            tracing::error!(message = "API返回空交易对列表", "获取交易对失败，无法继续");
-            return Err(AppError::ApiError("没有获取到交易对，无法继续。".to_string()));
+            let empty_error = AppError::ApiError("没有获取到交易对，无法继续。".to_string());
+            tracing::error!(
+                message = "API返回空交易对列表",
+                error.summary = empty_error.get_error_type_summary(),
+                error.details = %empty_error
+            );
+            return Err(empty_error);
         }
         Ok(symbols)
     }
 
     /// 获取数据库中已存在的K线表
+    #[instrument(ret, err)]
     fn get_existing_kline_tables(&self) -> Result<Vec<(String, String)>> {
         let conn = self.db.get_connection()?;
         let mut tables = Vec::new();
@@ -379,6 +420,7 @@ impl KlineBackfiller {
     }
 
     /// 预先创建所有需要的表
+    #[instrument(skip(self, symbols), fields(total_symbols = symbols.len(), total_intervals = self.intervals.len()), ret, err)]
     fn ensure_all_tables(&self, symbols: &[String]) -> Result<()> {
         let total_tables = symbols.len() * self.intervals.len();
         info!(target: "backfill", log_type = "module", "🗄️ 开始预先创建数据库表，共 {} 个交易对 × {} 个周期 = {} 个表",
@@ -420,7 +462,7 @@ impl KlineBackfiller {
     }
 
     /// 创建所有下载任务的主函数
-    /// 注意：移除了#[instrument]注解，因为已被外部的task_creation_loop span追踪
+    #[instrument(skip(self, all_symbols), fields(all_symbols_count = all_symbols.len(), total_intervals = self.intervals.len()), ret, err)]
     async fn create_all_download_tasks(&self, all_symbols: &[String]) -> Result<Vec<DownloadTask>> {
         let mut tasks = Vec::new();
 
@@ -441,6 +483,8 @@ impl KlineBackfiller {
             .cloned()
             .collect();
 
+        tracing::debug!(decision = "task_creation_analysis", existing_symbols = existing_symbol_intervals.len(), new_symbols = new_symbols.len(), "任务创建分析完成");
+
         // 为已存在的品种创建补齐任务
         for (symbol, intervals) in existing_symbol_intervals {
             if !all_symbols.contains(&symbol) {
@@ -457,14 +501,16 @@ impl KlineBackfiller {
             for interval in &self.intervals {
                 let task = self.create_task_for_new_symbol(&symbol, interval).await?;
                 tasks.push(task);
+                tracing::debug!(decision = "full_download_task_created_for_new_symbol", symbol = %symbol, interval = %interval, "为新交易对创建完整下载任务");
             }
         }
 
+        tracing::debug!(decision = "task_creation_complete", total_tasks = tasks.len(), "所有下载任务创建完成");
         Ok(tasks)
     }
 
     /// 为已存在的交易对创建补齐任务
-    // #[instrument] 移除：高频调用函数，在任务创建阶段会被大量调用产生噪音
+    #[instrument(skip(self), fields(symbol = %symbol, interval = %interval), ret, err)]
     async fn create_task_for_existing_symbol(&self, symbol: &str, interval: &str) -> Result<Option<DownloadTask>> {
         let current_time = chrono::Utc::now().timestamp_millis();
 
@@ -477,6 +523,7 @@ impl KlineBackfiller {
             let aligned_end_time = get_aligned_time(current_time, interval);
 
             if aligned_start_time < aligned_end_time {
+                tracing::debug!(decision = "backfill_task_created", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "为现有交易对创建补齐任务");
                 Ok(Some(DownloadTask {
                     symbol: symbol.to_string(),
                     interval: interval.to_string(),
@@ -485,6 +532,7 @@ impl KlineBackfiller {
                     limit: 1000,
                 }))
             } else {
+                tracing::debug!(decision = "no_backfill_needed_for_symbol", symbol = %symbol, interval = %interval, "交易对数据已是最新，无需补齐");
                 Ok(None) // 不需要补齐
             }
         } else {
@@ -493,6 +541,7 @@ impl KlineBackfiller {
             let aligned_start_time = get_aligned_time(start_time, interval);
             let aligned_end_time = get_aligned_time(current_time, interval);
 
+            tracing::debug!(decision = "full_download_task_created_for_empty_table", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "表存在但无数据，创建完整下载任务");
             Ok(Some(DownloadTask {
                 symbol: symbol.to_string(),
                 interval: interval.to_string(),
@@ -504,7 +553,7 @@ impl KlineBackfiller {
     }
 
     /// 为新品种创建完整下载任务
-    // #[instrument] 移除：高频调用函数，在任务创建阶段会被大量调用产生噪音
+    #[instrument(skip(self), fields(symbol = %symbol, interval = %interval), ret, err)]
     async fn create_task_for_new_symbol(&self, symbol: &str, interval: &str) -> Result<DownloadTask> {
         let current_time = chrono::Utc::now().timestamp_millis();
         let start_time = self.calculate_historical_start_time(current_time, interval);
@@ -512,6 +561,7 @@ impl KlineBackfiller {
         let aligned_start_time = get_aligned_time(start_time, interval);
         let aligned_end_time = get_aligned_time(current_time, interval);
 
+        tracing::debug!(decision = "full_download_task_created_for_new_symbol", symbol = %symbol, interval = %interval, start_time = aligned_start_time, end_time = aligned_end_time, "为新交易对创建完整下载任务");
         Ok(DownloadTask {
             symbol: symbol.to_string(),
             interval: interval.to_string(),
