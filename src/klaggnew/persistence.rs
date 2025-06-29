@@ -1,13 +1,16 @@
 // src/persistence.rs
 
 use anyhow::Result;
-use sqlx::{sqlite::{SqlitePool, SqlitePoolOptions}, Row};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use tracing::{error, info, instrument, span, warn, Level, Instrument};
+
+// 使用现有的数据库系统
+use kline_server::klcommon::db::Database;
+use kline_server::klcommon::models::Kline;
 
 // Import the necessary types from the aggregator module
 use super::aggregator::{KlineData, RealtimeAggregator};
@@ -30,10 +33,10 @@ fn get_period_duration_ms(period: &str) -> i64 {
 pub struct PersistenceService {
     is_running: Arc<AtomicBool>,
     shutdown_notify: Arc<Notify>,
-    
+
     // Dependencies
     aggregator: Arc<RealtimeAggregator>,
-    db_pool: SqlitePool,
+    database: Arc<Database>,
 
     // Cloned metadata for convenience
     index_to_symbol: HashMap<u32, String>,
@@ -44,7 +47,7 @@ impl PersistenceService {
     #[instrument(name="persistence_init", skip_all, err)]
     pub async fn new(aggregator: Arc<RealtimeAggregator>, db_path: &str) -> Result<Self> {
         info!(event_name = "PersistenceServiceInitStarted");
-        let db_pool = SqlitePoolOptions::new().connect(db_path).await?;
+        let database = Arc::new(Database::new(db_path)?);
         
         // Get metadata from aggregator instead of managing it itself
         let (index_to_symbol, index_to_period) = aggregator.get_metadata();
@@ -53,7 +56,7 @@ impl PersistenceService {
             is_running: Arc::new(AtomicBool::new(false)),
             shutdown_notify: Arc::new(Notify::new()),
             aggregator,
-            db_pool,
+            database,
             index_to_symbol,
             index_to_period,
         })
@@ -87,7 +90,7 @@ impl PersistenceService {
             is_running: self.is_running.clone(),
             shutdown_notify: self.shutdown_notify.clone(),
             aggregator: self.aggregator.clone(),
-            db_pool: self.db_pool.clone(),
+            database: self.database.clone(),
             index_to_symbol: self.index_to_symbol.clone(),
             index_to_period: self.index_to_period.clone(),
         })
@@ -122,51 +125,30 @@ impl PersistenceService {
         for kline in snapshot.iter().filter(|k| !k.is_empty()) {
             let symbol = self.index_to_symbol.get(&kline.symbol_index).unwrap();
             let period = self.index_to_period.get(&kline.period_index).unwrap();
-            let table_name = format!("kline_{}_{}", symbol.to_lowercase(), period);
 
-            // 构建UPSERT查询
-            let query = format!(
-                r#"
-                INSERT INTO {} (open_time, open, high, low, close, volume, close_time, quote_asset_volume, number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore_field)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(open_time) DO UPDATE SET
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    volume = excluded.volume,
-                    close_time = excluded.close_time,
-                    quote_asset_volume = excluded.quote_asset_volume,
-                    number_of_trades = excluded.number_of_trades,
-                    taker_buy_base_asset_volume = excluded.taker_buy_base_asset_volume,
-                    taker_buy_quote_asset_volume = excluded.taker_buy_quote_asset_volume,
-                    ignore_field = excluded.ignore_field
-                "#,
-                table_name
-            );
-
-            // 执行查询（这里简化处理，实际应该批量执行）
+            // 转换为现有数据库系统的Kline格式
             let close_time = kline.open_time + get_period_duration_ms(period) - 1;
-            let result = sqlx::query(&query)
-                .bind(kline.open_time)
-                .bind(kline.open.to_string())
-                .bind(kline.high.to_string())
-                .bind(kline.low.to_string())
-                .bind(kline.close.to_string())
-                .bind(kline.volume.to_string())
-                .bind(close_time)
-                .bind("0") // quote_asset_volume
-                .bind(0i64) // number_of_trades
-                .bind("0") // taker_buy_base_asset_volume
-                .bind("0") // taker_buy_quote_asset_volume
-                .bind("0") // ignore_field
-                .execute(&self.db_pool)
-                .await;
+            let db_kline = Kline {
+                open_time: kline.open_time,
+                open: kline.open.to_string(),
+                high: kline.high.to_string(),
+                low: kline.low.to_string(),
+                close: kline.close.to_string(),
+                volume: kline.volume.to_string(),
+                close_time,
+                quote_asset_volume: "0".to_string(), // 简化处理
+                number_of_trades: 0,
+                taker_buy_base_asset_volume: "0".to_string(),
+                taker_buy_quote_asset_volume: "0".to_string(),
+                ignore: "0".to_string(),
+            };
 
-            if let Err(e) = result {
+            // 使用现有数据库API保存K线
+            if let Err(e) = self.database.save_kline(symbol, period, &db_kline) {
                 error!("Failed to persist kline: {}", e);
+            } else {
+                persisted_count += 1;
             }
-            persisted_count += 1;
         }
         
         tracing::Span::current().record("persisted_count", persisted_count);

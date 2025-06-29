@@ -1,0 +1,17 @@
+# Log MCP Server 配置文件
+# 为AI模型提供日志查询的MCP协议服务器
+
+[server]
+# MCP查询HTTP端口
+mcp_port = 9001
+
+[logging]
+# Windows命名管道名称（用于接收日志数据）
+# 其他程序可以读取此配置来连接到正确的管道
+pipe_name = "kline_mcp_log_pipe"
+
+# 是否启用调试输出
+enable_debug_output = true
+
+# 日志会话管理
+auto_clear_on_new_session = true

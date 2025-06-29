@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     info!(event_name = "ApplicationStarting", "Kline Aggregate Service is starting up.");
 
     // 2. 加载配置 (为了简化，这里硬编码，实际项目中应从文件加载)
-    let db_path = "kline_data_ai_friendly.db";
+    let db_path = ":memory:"; // 使用内存数据库进行测试
     let symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
     let periods = vec!["1m".to_string(), "5m".to_string()];
     let max_symbols = 10;
