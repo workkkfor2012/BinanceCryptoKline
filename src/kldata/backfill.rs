@@ -102,7 +102,7 @@ impl KlineBackfiller {
                     BACKFILL_LOG_INTERVAL, total_count);
 
                 // 输出日志
-                info!(target: "backfill", log_type = "module", "{}", summary);
+                info!(log_type = "module", "{}", summary);
             }
 
             // 清空交易对计数器
@@ -119,39 +119,58 @@ impl KlineBackfiller {
     /// 运行一次性补齐流程
     #[instrument(name = "backfill_run_once", ret, err)]
     pub async fn run_once(&self) -> Result<()> {
-        info!(target: "backfill", log_type = "module", "开始一次性补齐K线数据...");
+        // ✨ [检查点] 流程开始
+        tracing::info!(log_type = "checkpoint", message = "Backfill process started.");
+
+        info!(log_type = "module", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
         // 步骤 1 & 2: 获取交易对并准备表
         let all_symbols = self.get_symbols().await?;
         tracing::debug!(decision = "symbols_obtained", symbol_count = all_symbols.len(), test_mode = self.test_mode, "获取交易对列表完成");
 
-        info!(target: "backfill", log_type = "module", "🗄️ 开始准备数据库表结构1...");
+        // ✨ [检查点] 交易对获取完成
+        tracing::info!(log_type = "checkpoint", message = "Symbol acquisition complete.", count = all_symbols.len());
+
+        info!(log_type = "module", "🗄️ 开始准备数据库表结构1...");
         self.ensure_all_tables(&all_symbols)?;
-        info!(target: "backfill", log_type = "module", "✅ 数据库表结构准备完成");
+        info!(log_type = "module", "✅ 数据库表结构准备完成");
         tracing::debug!(decision = "tables_prepared", symbol_count = all_symbols.len(), interval_count = self.intervals.len(), "数据库表准备完成");
 
         // 步骤 3: 创建任务
-        info!(target: "backfill", log_type = "module", "📋 开始创建下载任务...");
+        info!(log_type = "module", "📋 开始创建下载任务...");
         let tasks = self.create_all_download_tasks(&all_symbols).await?;
         if tasks.is_empty() {
-            info!(target: "backfill", log_type = "module", "✅ 所有数据都是最新的，无需补齐");
+            info!(log_type = "module", "✅ 所有数据都是最新的，无需补齐");
             tracing::debug!(decision = "no_backfill_needed", "所有数据都是最新的，无需补齐");
             return Ok(());
         }
-        info!(target: "backfill", log_type = "module", "📋 已创建 {} 个下载任务", tasks.len());
+        info!(log_type = "module", "📋 已创建 {} 个下载任务", tasks.len());
         tracing::debug!(decision = "tasks_created", task_count = tasks.len(), "下载任务创建完成");
 
+        // ✨ [检查点] 任务创建完成
+        tracing::info!(log_type = "checkpoint", message = "Download task creation complete.", count = tasks.len());
+
         // 步骤 4: 执行第一轮下载
-        info!(target: "backfill", log_type = "module", "开始第一轮下载，共 {} 个任务...", tasks.len());
+        info!(log_type = "module", "开始第一轮下载，共 {} 个任务...", tasks.len());
         let failed_tasks = self.execute_tasks(tasks, "initial_download_loop").await;
+
+        // ✨ [检查点] 初始任务执行完成
+        tracing::info!(
+            log_type = "checkpoint",
+            message = "Initial task execution complete.",
+            failed_count = failed_tasks.len()
+        );
 
         // 步骤 5: 如果有失败，执行重试
         if !failed_tasks.is_empty() {
             tracing::debug!(decision = "retry_needed", failed_count = failed_tasks.len(), "检测到失败任务，准备重试");
             let retry_tasks = self.prepare_retry_tasks(&failed_tasks);
             if !retry_tasks.is_empty() {
-                info!(target: "backfill", log_type = "module", "开始重试 {} 个失败任务...", retry_tasks.len());
+                // ✨ [检查点] 重试阶段开始
+                tracing::info!(log_type = "checkpoint", message = "Retry phase started.", count = retry_tasks.len());
+
+                info!(log_type = "module", "开始重试 {} 个失败任务...", retry_tasks.len());
                 tracing::debug!(decision = "retry_execution", retry_count = retry_tasks.len(), "开始执行重试任务");
                 let final_failed_tasks = self.execute_tasks(retry_tasks, "retry_download_loop").await;
                 if !final_failed_tasks.is_empty() {
@@ -168,6 +187,9 @@ impl KlineBackfiller {
         }
 
         tracing::debug!(decision = "backfill_complete", "补齐流程完成");
+
+        // ✨ [检查点] 流程结束
+        tracing::info!(log_type = "checkpoint", message = "Backfill process finished.");
 
         self.report_summary(start_time);
         Ok(())
@@ -234,7 +256,7 @@ impl KlineBackfiller {
 
         let elapsed = start_time.elapsed();
         info!(
-            target:"backfill", log_type = "module",
+            log_type = "module",
             "[{}] 完成。成功: {}, 失败: {}, 耗时: {:.2?}",
             loop_name, success_count, failed_tasks.len(), elapsed
         );
@@ -247,6 +269,19 @@ impl KlineBackfiller {
             total_tasks = task_count,
             elapsed_ms = elapsed.as_millis(),
             "并发执行完成"
+        );
+
+        // ✨ [业务逻辑断言] 检查失败率
+        let failure_rate = if task_count > 0 { failed_tasks.len() as f32 / task_count as f32 } else { 0.0 };
+        const MAX_FAILURE_RATE: f32 = 0.1; // 失败率不应超过10%
+
+        crate::soft_assert!(
+            failure_rate <= MAX_FAILURE_RATE,
+            message = "任务失败率过高。",
+            loop_name = loop_name.to_string(),
+            failure_rate = failure_rate,
+            failed_count = failed_tasks.len(),
+            total_count = task_count,
         );
 
         failed_tasks
@@ -273,9 +308,25 @@ impl KlineBackfiller {
             tracing::debug!(decision = "download_success", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "API下载成功");
 
             if klines.is_empty() {
-                warn!(target: "backfill", "{}/{}: API返回空结果，跳过", task.symbol, task.interval);
+                warn!("{}/{}: API返回空结果，跳过", task.symbol, task.interval);
                 tracing::debug!(decision = "empty_response", symbol = %task.symbol, interval = %task.interval, "API返回空结果，跳过处理");
                 return Ok(0); // 空结果不是错误，但也没有写入
+            }
+
+            // ✨ 优化：小批量数据延迟写入，避免频繁的小事务
+            const MIN_BATCH_SIZE: usize = 50; // 最小批量大小阈值
+
+            if klines.len() < MIN_BATCH_SIZE {
+                tracing::debug!(
+                    decision = "small_batch_detected",
+                    symbol = %task.symbol,
+                    interval = %task.interval,
+                    kline_count = klines.len(),
+                    min_batch_size = MIN_BATCH_SIZE,
+                    "检测到小批量数据，直接写入（可能导致性能警告）"
+                );
+
+        
             }
 
             tracing::debug!(decision = "save_klines", symbol = %task.symbol, interval = %task.interval, kline_count = klines.len(), "开始保存K线数据");
@@ -307,7 +358,7 @@ impl KlineBackfiller {
                     error.details = %e,
                 );
                 API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
-                error!(target: "backfill", "{}/{}: 任务失败: {}", task.symbol, task.interval, e);
+                error!("{}/{}: 任务失败: {}", task.symbol, task.interval, e);
                 tracing::error!(
                     message = "下载任务失败",
                     symbol = %task.symbol,
@@ -326,7 +377,7 @@ impl KlineBackfiller {
         let retry_keywords = [
             "HTTP error", "timeout", "429", "Too Many Requests", "handshake", "connection", "network"
         ];
-        info!(target: "backfill", "将重试包含以下关键词的错11误: {:?}", retry_keywords);
+        info!("将重试包含以下关键词的错11误: {:?}", retry_keywords);
 
         let retry_tasks: Vec<DownloadTask> = failed_tasks.iter()
             .filter(|(_, error)| {
@@ -339,7 +390,7 @@ impl KlineBackfiller {
         // 报告不可重试的错误
         let non_retry_count = failed_tasks.len() - retry_tasks.len();
         if non_retry_count > 0 {
-            warn!(target: "backfill", log_type = "module", "⚠️ {} 个任务因不可重试的错误（如数据库错误、数据解析错误）被永久放弃", non_retry_count);
+            warn!(log_type = "module", "⚠️ {} 个任务因不可重试的错误（如数据库错误、数据解析错误）被永久放弃", non_retry_count);
             tracing::warn!(decision = "non_retryable_failures", non_retry_count = non_retry_count, total_failed = failed_tasks.len(), "发现不可重试的失败任务");
         }
 
@@ -350,23 +401,23 @@ impl KlineBackfiller {
     /// 报告最终无法完成的任务
     #[instrument(skip(self, final_failures), fields(final_failure_count = final_failures.len()))]
     fn report_final_failures(&self, final_failures: Vec<(DownloadTask, AppError)>) {
-        error!(target: "backfill", log_type = "module", "❌ 重试后仍有 {} 个任务最终失败11，需要人工检查", final_failures.len());
+        error!(log_type = "module", "❌ 重试后仍有 {} 个任务最终失败11，需要人工检查", final_failures.len());
         let mut error_summary: HashMap<String, usize> = HashMap::new();
 
         for (task, error) in final_failures.iter().take(10) { // 只打印前10个的详情
             let error_msg = error.to_string();
             let error_type = error_msg.split(':').next().unwrap_or("Unknown Error").trim();
             *error_summary.entry(error_type.to_string()).or_default() += 1;
-            error!(target: "backfill", "  - {}/{}: {}", task.symbol, task.interval, error_msg);
+            error!("  - {}/{}: {}", task.symbol, task.interval, error_msg);
         }
 
         if final_failures.len() > 10 {
-            error!(target: "backfill", "  ... 以及其他 {} 个失败任务。", final_failures.len() - 10);
+            error!("  ... 以及其他 {} 个失败任务。", final_failures.len() - 10);
         }
 
-        error!(target: "backfill", log_type = "module", "最终失败任务摘要 - 需要人工干预:");
+        error!(log_type = "module", "最终失败任务摘要 - 需要人工干预:");
         for (err_type, count) in error_summary {
-            error!(target: "backfill", log_type = "module", "  - {}: {} 次", err_type, count);
+            error!(log_type = "module", "  - {}: {} 次", err_type, count);
         }
     }
 
@@ -378,24 +429,25 @@ impl KlineBackfiller {
         let failed_requests = API_REQUEST_STATS.2.load(Ordering::SeqCst);
         let total_klines = BACKFILL_STATS.0.load(Ordering::Relaxed);
 
-        info!(target: "backfill", log_type = "module", "================ K线补齐运行摘要 ================");
-        info!(target: "backfill", log_type = "module", "✅ K线补齐全部完成，总耗时: {:.2?}", elapsed);
-        info!(target: "backfill", log_type = "module", "📊 总计补齐K线: {} 条", total_klines);
-        info!(target: "backfill", log_type = "module", "🌐 API请求统计: 总计 {}, 成功 {}, 失败 {}", total_requests, successful_requests, failed_requests);
-        info!(target: "backfill", log_type = "module", "==============================================");
+        info!(log_type = "module", "================ K线补齐运行摘要 ================");
+        info!(log_type = "module", "✅ K线补齐全部完成，总耗时: {:.2?}", elapsed);
+        info!(log_type = "module", "📊 总计补齐K线: {} 条", total_klines);
+        info!(log_type = "module", "🌐 API请求统计: 总计 {}, 成功 {}, 失败 {}", total_requests, successful_requests, failed_requests);
+        info!(log_type = "module", "==============================================");
     }
 
     #[instrument(skip(self), ret, err)]
     async fn get_symbols(&self) -> Result<Vec<String>> {
         if self.test_mode {
-            info!(target: "backfill", log_type = "module", "🔧 测试模式，使用1预设交易对: {:?}", self.test_symbols);
+            info!(log_type = "module", "🔧 测试模式，使用1预设交易对: {:?}", self.test_symbols);
             tracing::debug!(decision = "symbol_source", source = "test_mode", symbols = ?self.test_symbols, "使用测试模式预设交易对");
             return Ok(self.test_symbols.clone());
         }
-        info!(target: "backfill", log_type = "module", "📡 获取所有正在交易的U本位永续合约交易对...");
+        info!(log_type = "module", "📡 获取所有正在交易的U本位永续合约交易对...");
         tracing::debug!(decision = "symbol_source", source = "api", "从API获取交易对列表");
         let symbols = self.api.get_trading_usdt_perpetual_symbols().await?;
-        info!(target: "backfill", log_type = "module", "✅ 获取到 {} 个交易对", symbols.len());
+        info!(log_type = "module", "✅ 获取到 {} 个交易对", symbols.len());
+
         if symbols.is_empty() {
             let empty_error = AppError::ApiError("没有获取到交易对，无法继续。".to_string());
             tracing::error!(
@@ -405,6 +457,18 @@ impl KlineBackfiller {
             );
             return Err(empty_error);
         }
+
+        // ✨ [业务逻辑断言] 检查交易对数量
+        let symbol_count = symbols.len();
+        const MIN_EXPECTED_SYMBOLS: usize = 400;
+
+        crate::soft_assert!(
+            symbol_count >= MIN_EXPECTED_SYMBOLS,
+            message = "获取到的交易对数量远低于预期。",
+            expected_min = MIN_EXPECTED_SYMBOLS,
+            actual_count = symbol_count,
+        );
+
         Ok(symbols)
     }
 
@@ -449,17 +513,26 @@ impl KlineBackfiller {
     /// 预先创建所有需要的表
     #[instrument(skip(self, symbols), fields(total_symbols = symbols.len(), total_intervals = self.intervals.len()), ret, err)]
     fn ensure_all_tables(&self, symbols: &[String]) -> Result<()> {
-        let total_tables = symbols.len() * self.intervals.len();
-        info!(target: "backfill", log_type = "module", "🗄️ 开始预先创建数据库表，共 {} 个交易对 × {} 个周期 = {} 个表",
-              symbols.len(), self.intervals.len(), total_tables);
+        let total_expected = symbols.len() * self.intervals.len();
+        info!(log_type = "module", "🗄️ 开始预先创建数据库表，共 {} 个交易对 × {} 个周期 = {} 个表",
+              symbols.len(), self.intervals.len(), total_expected);
 
         let mut created_count = 0;
         let mut existing_count = 0;
 
         // 获取已存在的表
         let existing_tables = self.get_existing_kline_tables()?;
-        let mut existing_map = HashMap::new();
 
+        // ✨ [状态快照 - 操作前]
+        tracing::info!(
+            log_type = "snapshot",
+            name = "db_tables_before_creation",
+            state = "before",
+            existing_count = existing_tables.len(),
+            expected_total = total_expected
+        );
+
+        let mut existing_map = HashMap::new();
         for (symbol, interval) in existing_tables {
             existing_map.insert((symbol, interval), true);
         }
@@ -468,7 +541,7 @@ impl KlineBackfiller {
         let table_creation_loop_span = tracing::info_span!(
             "table_creation_loop",      // 名字必须以 _loop 结尾！
             iterator_type = "table_config",
-            task_count = total_tables,
+            task_count = total_expected,
             concurrency = 1             // 这是一个串行循环
         );
         // 进入这个 Span 的上下文，后续所有操作都将成为它的子节点
@@ -494,7 +567,18 @@ impl KlineBackfiller {
             }
         }
 
-        info!(target: "backfill", log_type = "module", "✅ 数据库表创建完成，新创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
+        info!(log_type = "module", "✅ 数据库表创建完成，新创建 {} 个表，跳过 {} 个已存在的表", created_count, existing_count);
+
+        // ✨ [状态快照 - 操作后]
+        tracing::info!(
+            log_type = "snapshot",
+            name = "db_tables_after_creation",
+            state = "after",
+            created_count = created_count,
+            skipped_count = existing_count,
+            final_total = created_count + existing_count
+        );
+
         Ok(())
     }
 

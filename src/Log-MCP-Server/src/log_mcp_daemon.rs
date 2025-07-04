@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex; // 使用tokio的异步Mutex
 
@@ -167,6 +168,8 @@ async fn handle_mcp_clear(State(db_mutex): State<AppState>) -> StatusCode {
 #[cfg(windows)]
 async fn log_receiver_task(pipe_name: &str, db_mutex: Arc<Mutex<InMemoryDb>>, enable_debug: bool) {
     println!("[Log Receiver] Ready to accept new log sessions on named pipe: {}", pipe_name);
+    let mut last_waiting_log = Instant::now();
+    let waiting_log_interval = Duration::from_secs(30); // 每30秒输出一次等待日志
 
     loop {
         // 创建一个新的命名管道服务器实例，并等待客户端连接
@@ -179,8 +182,9 @@ async fn log_receiver_task(pipe_name: &str, db_mutex: Arc<Mutex<InMemoryDb>>, en
             }
         };
 
-        if enable_debug {
+        if enable_debug && last_waiting_log.elapsed() >= waiting_log_interval {
             println!("[Log Receiver] Waiting for a client to connect...");
+            last_waiting_log = Instant::now();
         }
 
         // 等待K线程序连接
@@ -204,38 +208,37 @@ async fn log_receiver_task(pipe_name: &str, db_mutex: Arc<Mutex<InMemoryDb>>, en
             // server 现在就像一个 TcpStream
             let mut reader = BufReader::new(server);
             let mut line = String::new();
+            let mut last_debug_time = Instant::now();
+            let debug_interval = Duration::from_secs(5); // 每5秒最多输出一次调试信息
+            let mut received_count = 0u64;
+            let mut span_count = 0u64;
+
             while let Ok(bytes_read) = reader.read_line(&mut line).await {
                 if bytes_read == 0 { break; } // 连接断开
+                received_count += 1;
 
-                if enable_debug {
-                    println!("[Log Receiver] Received line: {}", line.trim());
+                let should_debug = enable_debug && last_debug_time.elapsed() >= debug_interval;
+                if should_debug {
+                    println!("[Log Receiver] 已接收 {} 条日志记录，其中 {} 条Span", received_count, span_count);
+                    last_debug_time = Instant::now();
                 }
 
                 match serde_json::from_str::<StructuredLog>(&line) {
                     Ok(StructuredLog::Span(span)) => {
-                        if enable_debug {
-                            println!("[Log Receiver] Parsed span: {} (trace: {})", span.id, span.trace_id);
-                        }
+                        span_count += 1;
                         let mut db = db_clone.lock().await;
                         db.insert_span(span);
-                        if enable_debug {
-                            println!("[Log Receiver] Span inserted into database");
-                        }
                     }
                     Ok(_) => {
-                        if enable_debug {
-                            println!("[Log Receiver] Received non-span log entry");
-                        }
+                        // 非span日志条目，静默处理
                     }
-                    Err(e) => {
-                        if enable_debug {
-                            println!("[Log Receiver] Failed to parse JSON: {}", e);
-                        }
+                    Err(_) => {
+                        // JSON解析错误，静默处理
                     }
                 }
                 line.clear();
             }
-            println!("[Log Receiver] Log session ended.");
+            println!("[Log Receiver] Log session ended. 总计处理: {} 条记录, {} 条Span", received_count, span_count);
         });
     }
 }
@@ -269,38 +272,37 @@ async fn log_receiver_task(tcp_addr: &str, db_mutex: Arc<Mutex<InMemoryDb>>, ena
                 tokio::spawn(async move {
                     let mut reader = BufReader::new(stream);
                     let mut line = String::new();
+                    let mut last_debug_time = Instant::now();
+                    let debug_interval = Duration::from_secs(5); // 每5秒最多输出一次调试信息
+                    let mut received_count = 0u64;
+                    let mut span_count = 0u64;
+
                     while let Ok(bytes_read) = reader.read_line(&mut line).await {
                         if bytes_read == 0 { break; }
+                        received_count += 1;
 
-                        if enable_debug {
-                            println!("[Log Receiver] Received line: {}", line.trim());
+                        let should_debug = enable_debug && last_debug_time.elapsed() >= debug_interval;
+                        if should_debug {
+                            println!("[Log Receiver] 已接收 {} 条日志记录，其中 {} 条Span", received_count, span_count);
+                            last_debug_time = Instant::now();
                         }
 
                         match serde_json::from_str::<StructuredLog>(&line) {
                             Ok(StructuredLog::Span(span)) => {
-                                if enable_debug {
-                                    println!("[Log Receiver] Parsed span: {} (trace: {})", span.id, span.trace_id);
-                                }
+                                span_count += 1;
                                 let mut db = db_clone.lock().await;
                                 db.insert_span(span);
-                                if enable_debug {
-                                    println!("[Log Receiver] Span inserted into database");
-                                }
                             }
                             Ok(_) => {
-                                if enable_debug {
-                                    println!("[Log Receiver] Received non-span log entry");
-                                }
+                                // 非span日志条目，静默处理
                             }
-                            Err(e) => {
-                                if enable_debug {
-                                    println!("[Log Receiver] Failed to parse JSON: {}", e);
-                                }
+                            Err(_) => {
+                                // JSON解析错误，静默处理
                             }
                         }
                         line.clear();
                     }
-                    println!("[Log Receiver] Log session from {} ended.", addr);
+                    println!("[Log Receiver] Log session from {} ended. 总计处理: {} 条记录, {} 条Span", addr, received_count, span_count);
                 });
             }
             Err(e) => {
@@ -364,7 +366,7 @@ async fn main() {
     let app = Router::new()
         .route("/query", post(handle_mcp_query))
         .route("/clear", post(handle_mcp_clear))
-        .with_state(db);
+        .with_state(db.clone());
 
     let mcp_addr = format!("127.0.0.1:{}", config.server.mcp_port);
     let mcp_listener = match tokio::net::TcpListener::bind(&mcp_addr).await {
@@ -385,9 +387,25 @@ async fn main() {
     println!("[Daemon] -> Listening for logs on TCP: 127.0.0.1:9000");
     println!("[Daemon] -> Listening for MCP queries on http://{}", mcp_addr);
     println!("[Daemon] -> Each new log connection will start a fresh session");
-    
+
     let mcp_task_handle = tokio::spawn(async move {
         axum::serve(mcp_listener, app).await.unwrap();
+    });
+
+    // 启动状态监控任务 - 每5秒输出一条状态日志
+    let status_db = db.clone();
+    let status_task_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            let db_guard = status_db.lock().await;
+            let span_count = db_guard.spans.len();
+            let trace_count = db_guard.trace_to_spans.len();
+            drop(db_guard); // 释放锁
+
+            println!("[Status] Log MCP Daemon运行中 - 存储Spans: {}, Traces: {}", span_count, trace_count);
+            io::stdout().flush().unwrap();
+        }
     });
 
     // 等待Ctrl+C
@@ -396,4 +414,5 @@ async fn main() {
 
     log_task_handle.abort();
     mcp_task_handle.abort();
+    status_task_handle.abort();
 }

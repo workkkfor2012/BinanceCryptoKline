@@ -29,21 +29,6 @@ class KlineSystemLauncher:
         # 脚本配置
         self.scripts = {
             "生产环境脚本": {
-                "data_weblog.ps1": {
-                    "name": "K线数据+WebLog系统",
-                    "description": "启动K线数据服务和WebLog系统",
-                    "category": "production"
-                },
-                "aggregate_weblog.ps1": {
-                    "name": "WebLog+K线聚合服务",
-                    "description": "启动WebLog和K线聚合服务（双窗口）",
-                    "category": "production"
-                },
-                "all.ps1": {
-                    "name": "一键启动方案",
-                    "description": "自动启动WebLog和K线聚合系统",
-                    "category": "production"
-                },
                 "data.ps1": {
                     "name": "K线数据服务",
                     "description": "启动币安K线数据服务",
@@ -51,37 +36,15 @@ class KlineSystemLauncher:
                 },
                 "aggregate.ps1": {
                     "name": "K线聚合系统",
-                    "description": "启动K线聚合服务（独立窗口）",
+                    "description": "启动K线聚合服务",
                     "category": "production"
                 }
             },
-            "调试脚本": {
-                "debug_kline_aggregate.ps1": {
-                    "name": "K线聚合调试",
-                    "description": "诊断命名管道连接问题",
-                    "category": "debug"
-                },
-                "debug_with_timeout.ps1": {
-                    "name": "超时调试",
-                    "description": "诊断程序卡住问题",
-                    "category": "debug"
-                },
-                "kline_aggregate_with_console.ps1": {
-                    "name": "控制台输出调试",
-                    "description": "带控制台输出的K线聚合服务",
-                    "category": "debug"
-                }
-            },
-            "工具脚本": {
-                "rs-txt.ps1": {
-                    "name": "Rust代码文本提取",
-                    "description": "提取Rust源代码到文本文件",
-                    "category": "tool"
-                },
-                "启动器.ps1": {
-                    "name": "系统启动器",
-                    "description": "PowerShell版本的系统启动器",
-                    "category": "tool"
+            "日志程序": {
+                "start_logmcp.ps1": {
+                    "name": "Log MCP 守护进程",
+                    "description": "启动Log MCP守护进程服务",
+                    "category": "logging"
                 }
             }
         }
@@ -296,7 +259,13 @@ class KlineSystemLauncher:
 
     def create_script_tabs(self):
         """创建脚本分类标签页"""
+        # 只显示生产环境脚本和日志程序，移除调试脚本和工具脚本
+        allowed_categories = ["生产环境脚本", "日志程序"]
+
         for category_name, scripts in self.scripts.items():
+            if category_name not in allowed_categories:
+                continue  # 跳过不需要的分类
+
             # 创建标签页框架
             tab_frame = ttk.Frame(self.notebook)
             self.notebook.add(tab_frame, text=category_name)
@@ -342,20 +311,27 @@ class KlineSystemLauncher:
         button_frame = ttk.Frame(panel)
         button_frame.pack(fill=tk.X)
 
-        # 启动按钮
-        start_btn = ttk.Button(button_frame, text="🚀 启动",
+        # 启动按钮 - 更大更突出
+        start_btn = ttk.Button(button_frame, text="🚀 启动", width=12,
                               command=lambda: self.run_script(script_file))
-        start_btn.pack(side=tk.LEFT, padx=(0, 5))
+        start_btn.pack(side=tk.LEFT, padx=(0, 8), pady=2)
 
         # 编辑按钮
-        edit_btn = ttk.Button(button_frame, text="📝 编辑",
+        edit_btn = ttk.Button(button_frame, text="📝 编辑", width=10,
                              command=lambda: self.edit_script(script_file))
-        edit_btn.pack(side=tk.LEFT, padx=(0, 5))
+        edit_btn.pack(side=tk.LEFT, padx=(0, 8), pady=2)
 
         # 查看按钮
-        view_btn = ttk.Button(button_frame, text="👁 查看",
+        view_btn = ttk.Button(button_frame, text="👁 查看", width=10,
                              command=lambda: self.view_script(script_file))
-        view_btn.pack(side=tk.LEFT, padx=(0, 5))
+        view_btn.pack(side=tk.LEFT, padx=(0, 8), pady=2)
+
+        # 为重要脚本添加额外的启动按钮
+        if script_file == "start_logmcp.ps1":
+            # 添加第二个启动按钮，更突出
+            start_btn2 = ttk.Button(button_frame, text="🔥 快速启动", width=12,
+                                   command=lambda: self.run_script(script_file))
+            start_btn2.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
 
         # 状态标签
         status_label = ttk.Label(button_frame, text="就绪", foreground='green')
@@ -423,10 +399,6 @@ class KlineSystemLauncher:
 
                 process = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding='utf-8',
                     creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
 
@@ -434,7 +406,7 @@ class KlineSystemLauncher:
                 self.running_processes[script_file] = process
 
                 # 等待进程完成
-                stdout, stderr = process.communicate()
+                process.wait()
 
                 # 更新状态
                 if hasattr(self, status_attr):
@@ -445,8 +417,7 @@ class KlineSystemLauncher:
                     else:
                         status_label.config(text="错误", foreground='red')
                         self.log(f"❌ 脚本执行失败: {script_file}")
-                        if stderr:
-                            self.log(f"错误信息: {stderr}")
+                        self.log(f"返回码: {process.returncode}")
 
                 # 移除进程引用
                 if script_file in self.running_processes:

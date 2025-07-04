@@ -9,11 +9,11 @@ use tokio::sync::Notify;
 use tracing::{error, info, instrument, span, warn, Level, Instrument};
 
 // 使用现有的数据库系统
-use kline_server::klcommon::db::Database;
-use kline_server::klcommon::models::Kline;
+use crate::klcommon::db::Database;
+use crate::klcommon::models::Kline;
 
 // Import the necessary types from the aggregator module
-use super::aggregator::{KlineData, RealtimeAggregator};
+use super::aggregator::RealtimeAggregator;
 
 // Helper function for period duration
 fn get_period_duration_ms(period: &str) -> i64 {

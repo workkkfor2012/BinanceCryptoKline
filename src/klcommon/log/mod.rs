@@ -1,52 +1,47 @@
 // 日志处理模块
 //
+// AI日志处理模块
+//
 // 这个模块包含以下功能：
-// 1. observability.rs - 规格验证层、性能监控和命名管道日志管理
-// 2. module_logging.rs - 模块级别的人类可读日志处理
-// 3. trace_visualization.rs - 支持函数执行路径可视化
-// 4. trace_distiller.rs - 为大模型生成简洁的函数执行路径摘要
-// 5. assert - 运行时断言系统，作为日志功能的一部分
+// 1. ai_log.rs - AI日志核心模块 (真相之源)，负责捕获所有tracing事件并发送到log_mcp_daemon
+// 2. ai_problem_summary.rs - AI问题摘要层，只捕获WARN/ERROR生成问题摘要文件
+// 3. observability.rs - 命名管道日志管理 (保留用于向后兼容)
+
+pub mod ai_log;
+
+// 使用 #[macro_use] 来确保 soft_assert! 宏在整个项目中都可用
+#[macro_use]
+pub mod ai_problem_summary;
 
 pub mod observability;
 pub mod module_logging;
-pub mod trace_visualization;
-pub mod trace_distiller;
-pub mod transaction_logging;
-pub mod assert;
 
-// 重新导出常用类型，保持向后兼容
+// 导出AI日志系统核心类型
+pub use ai_log::{
+    McpLayer,
+    init_log_sender,
+    SpanModel,
+    SpanEvent,
+    StructuredLog,
+    JsonVisitor,
+    SpanContext,
+};
+
+pub use ai_problem_summary::{
+    ProblemSummaryLayer,
+    ProblemSummary,
+    init_problem_summary_log,
+    create_problem_summary_layer,
+};
+
+// 保留用于向后兼容
 pub use observability::{
     NamedPipeLogManager,
 };
 
-// 导出模块日志相关类型
 pub use module_logging::{
     ModuleLayer,
+    init_module_log,
 };
 
-// 导出 trace 可视化相关类型
-pub use trace_visualization::{
-    TraceVisualizationLayer,
-    JsonVisitor,
-};
 
-// 导出业务追踪日志相关类型
-pub use transaction_logging::{
-    TransactionLayer,
-    TransactionLogManager,
-};
-
-// 导出 trace 提炼器相关类型（为大模型分析设计）
-pub use trace_distiller::{
-    TraceDistillerStore,
-    TraceDistillerLayer,
-    distill_trace_to_text,
-    distill_all_completed_traces_to_text,
-};
-
-// 导出运行时断言系统相关类型
-pub use assert::{
-    AssertEngine,
-    AssertLayer,
-    create_default_assert_layer,
-};

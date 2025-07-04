@@ -15,6 +15,7 @@ use tokio::task;
 
 // ✨ 1. [修改] 导入 Tokio 的 mpsc 和 oneshot
 use tokio::sync::{mpsc, oneshot};
+use dashmap::DashSet;
 
 // Global counters for tracking insert and update operations
 // Format: (insert_count, update_count, last_log_time)
@@ -25,6 +26,9 @@ static DB_OPERATIONS: Lazy<(AtomicUsize, AtomicUsize, std::sync::Mutex<Instant>)
 // Log interval in seconds
 // Output database operation statistics every 10 seconds
 const DB_LOG_INTERVAL: u64 = 10;
+
+// ✨ 表创建状态缓存，避免重复的 CREATE TABLE IF NOT EXISTS 查询
+static CREATED_TABLES: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 
 // 数据库连接池类型
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -73,7 +77,7 @@ impl DbWriteQueueProcessor {
         // ✨ 关键修复：使用 tokio::spawn 而不是 std::thread::spawn
         // 这样可以保持 tracing 上下文，避免 ensure_symbol_table 变成孤儿 Span
         tokio::spawn(async move {
-            info!(target: "db", log_type = "module", "数据库写入队列处理器已启动 (串行模式)"); // 提示已是串行
+            info!(log_type = "module", "数据库写入队列处理器已启动 (串行模式)"); // 提示已是串行
 
             // ✨ 4. [修改] 使用异步的 recv().await
             while let Some(task) = self.receiver.recv().await {
@@ -96,7 +100,7 @@ impl DbWriteQueueProcessor {
                 TraceContext::instrument(&task.context, processing_future).await;
             }
 
-            info!(target: "db", log_type = "module", "数据库写入队列处理器已停止");
+            info!(log_type = "module", "数据库写入队列处理器已停止");
         });
 
         is_running
@@ -182,6 +186,8 @@ impl DbWriteQueueProcessor {
     /// 静态版本的写入任务处理函数，用于在 spawn_blocking 中执行
     #[instrument(skip_all, ret, err)]
     fn process_write_task_static(pool: &DbPool, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
+        let start_time = std::time::Instant::now();
+
         if klines.is_empty() {
             tracing::debug!(decision = "empty_klines", symbol = %symbol, interval = %interval, "K线数据为空，跳过处理");
             return Ok(0);
@@ -208,8 +214,16 @@ impl DbWriteQueueProcessor {
                 conn_error
             })?;
 
-        // 确保表存在
-        Self::ensure_symbol_table_static(&conn, symbol, interval, &table_name)?;
+        // ✨ 优化：使用缓存避免重复的表创建检查
+        if !CREATED_TABLES.contains(&table_name) {
+            Self::ensure_symbol_table_static(&conn, symbol, interval, &table_name)?;
+            CREATED_TABLES.insert(table_name.clone());
+            tracing::debug!(
+                decision = "table_created_and_cached",
+                table_name = %table_name,
+                "表创建完成并加入缓存"
+            );
+        }
 
         // 开始事务
         let tx = conn.transaction()
@@ -227,133 +241,103 @@ impl DbWriteQueueProcessor {
             })?;
 
         let mut count = 0;
-        let mut updated = 0;
 
         // ✨ [修复循环聚合] ✨
         // 1. 字段名从total_klines改为task_count以匹配distiller的期望
         // 2. 增加iterator_type字段，让日志更易读
         // 3. 添加concurrency字段标明这是串行处理
+        // ✨ 性能优化：使用 UPSERT 语句替代 SELECT + INSERT/UPDATE 双重操作
+        let upsert_sql = format!(
+            "INSERT INTO {} (open_time, open, high, low, close, volume, close_time, quote_asset_volume)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(open_time) DO UPDATE SET
+                 open = excluded.open,
+                 high = excluded.high,
+                 low = excluded.low,
+                 close = excluded.close,
+                 volume = excluded.volume,
+                 close_time = excluded.close_time,
+                 quote_asset_volume = excluded.quote_asset_volume",
+            table_name
+        );
+
         let kline_processing_loop_span = tracing::info_span!(
-            "kline_processing_loop",
+            "kline_upsert_loop",
             iterator_type = "kline",
             task_count = klines.len(),
-            concurrency = 1
+            concurrency = 1,
+            operation = "upsert"
         );
 
         let _enter = kline_processing_loop_span.enter();
 
-        // 处理每个K线
+        // 准备UPSERT语句
+        let mut stmt = tx.prepare(&upsert_sql)
+            .map_err(|e| {
+                let prepare_error = AppError::DatabaseError(format!("准备UPSERT语句失败: {}", e));
+                tracing::error!(
+                    message = "准备UPSERT语句失败",
+                    symbol = %symbol,
+                    interval = %interval,
+                    table_name = %table_name,
+                    sql = %upsert_sql,
+                    error.summary = prepare_error.get_error_type_summary(),
+                    error.details = %prepare_error
+                );
+                prepare_error
+            })?;
+
+        // 批量执行UPSERT操作
         for (index, kline) in klines.iter().enumerate() {
-            // ✨ [修复循环聚合] ✨
-            // 3. 为每一次循环迭代创建一个子Span
+            // ✨ 为每一次UPSERT操作创建一个子Span
             let iteration_span = tracing::info_span!(
-                "db_kline_op",
+                "db_kline_upsert",
                 kline_index = index,
                 open_time = kline.open_time
             );
             let _iteration_enter = iteration_span.enter();
 
-            // 检查是否存在
-            let exists: bool = tx.query_row(
-                &format!("SELECT 1 FROM {} WHERE open_time = ?", table_name),
-                params![kline.open_time],
-                |_| Ok(true)
-            ).optional().map_err(|e| {
-                let query_error = AppError::DatabaseError(format!("查询K线失败: {}", e));
-                tracing::error!(
-                    message = "查询K线失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    kline_index = index,
-                    error.summary = query_error.get_error_type_summary(),
-                    error.details = %query_error
-                );
-                query_error
-            })?.is_some();
-
-            if exists {
-                tracing::debug!(decision = "kline_update", "更新现有K线");
-                // 更新现有K线
-                let result = tx.execute(
-                    &format!("UPDATE {} SET
-                        open = ?, high = ?, low = ?, close = ?, volume = ?,
-                        close_time = ?, quote_asset_volume = ?
-                    WHERE open_time = ?", table_name),
-                    params![
-                        kline.open,
-                        kline.high,
-                        kline.low,
-                        kline.close,
-                        kline.volume,
-                        kline.close_time,
-                        kline.quote_asset_volume,
-                        kline.open_time,
-                    ],
-                );
-
-                match result {
-                    Ok(_) => {
-                        updated += 1;
-                        count += 1;
-                    },
-                    Err(e) => {
-                        // 回滚事务
-                        let _ = tx.rollback();
-                        let update_error = AppError::DatabaseError(format!("更新K线失败: {}", e));
-                        error!(target: "db", log_type = "module", "❌ 数据库更新失败，需要检查数据库状态: 表={}, 错误={}", table_name, e);
-                        tracing::error!(
-                            message = "更新K线失败",
-                            symbol = %symbol,
-                            interval = %interval,
-                            kline_index = index,
-                            table_name = %table_name,
-                            error.summary = update_error.get_error_type_summary(),
-                            error.details = %update_error
-                        );
-                        return Err(update_error);
-                    }
-                }
-            } else {
-                tracing::debug!(decision = "kline_insert", "插入新K线");
-                // 插入新K线
-                let result = tx.execute(
-                    &format!("INSERT INTO {} (
-                        open_time, open, high, low, close, volume,
-                        close_time, quote_asset_volume
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", table_name),
-                    params![
-                        kline.open_time,
-                        kline.open,
-                        kline.high,
-                        kline.low,
-                        kline.close,
-                        kline.volume,
-                        kline.close_time,
-                        kline.quote_asset_volume,
-                    ],
-                );
-
-                match result {
-                    Ok(_) => count += 1,
-                    Err(e) => {
-                        let _ = tx.rollback();
-                        let insert_error = AppError::DatabaseError(format!("插入K线失败: {}", e));
-                        // ✨ [错误记录]: 在返回错误前，记录更详细的上下文
-                        error!(target: "db", log_type = "module", "❌ 数据库写入失败，需要检查数据库状态: 表={}, K线索引={}, 错误={}", table_name, count, e);
-                        tracing::error!(
-                            message = "插入K线失败",
-                            symbol = %symbol,
-                            interval = %interval,
-                            kline_index = index,
-                            table_name = %table_name,
-                            error.summary = insert_error.get_error_type_summary(),
-                            error.details = %insert_error
-                        );
-                        return Err(insert_error);
-                    }
+            match stmt.execute(params![
+                kline.open_time,
+                kline.open,
+                kline.high,
+                kline.low,
+                kline.close,
+                kline.volume,
+                kline.close_time,
+                kline.quote_asset_volume,
+            ]) {
+                Ok(changed_rows) => {
+                    count += changed_rows; // 每次UPSERT操作影响一行
+                    tracing::debug!(
+                        decision = "kline_upsert_success",
+                        changed_rows = changed_rows,
+                        "K线UPSERT操作成功"
+                    );
+                },
+                Err(e) => {
+                    // 先释放stmt，然后回滚事务
+                    drop(stmt);
+                    let _ = tx.rollback();
+                    let upsert_error = AppError::DatabaseError(format!("UPSERT K线失败: {}", e));
+                    error!(log_type = "module", "❌ 数据库UPSERT失败，需要检查数据库状态: 表={}, K线索引={}, 错误={}", table_name, index, e);
+                    tracing::error!(
+                        message = "UPSERT K线失败",
+                        symbol = %symbol,
+                        interval = %interval,
+                        kline_index = index,
+                        table_name = %table_name,
+                        open_time = kline.open_time,
+                        error.summary = upsert_error.get_error_type_summary(),
+                        error.details = %upsert_error
+                    );
+                    return Err(upsert_error);
                 }
             }
         }
+
+        // 释放stmt，然后提交事务
+        drop(stmt);
 
         // 提交事务
         tx.commit()
@@ -370,7 +354,60 @@ impl DbWriteQueueProcessor {
                 commit_error
             })?;
 
-        tracing::debug!(decision = "db_transaction_complete", symbol = %symbol, interval = %interval, total_processed = count, updated_count = updated, inserted_count = count - updated, "数据库事务成功完成");
+        let duration_ms = start_time.elapsed().as_millis();
+
+        // ✨ [性能断言] 检查数据库写入性能 - 考虑批处理大小的影响
+        if !klines.is_empty() {
+            let avg_time_per_kline_ms = duration_ms as f64 / klines.len() as f64;
+            let batch_size = klines.len();
+
+            // 根据批处理大小动态调整性能阈值
+            // 小批量（<50）允许更高的平均耗时，因为固定开销被分摊到少量记录上
+            let max_avg_write_time_ms = if batch_size < 50 {
+                100.0 // 小批量允许100ms平均耗时
+            } else if batch_size < 200 {
+                20.0  // 中等批量允许20ms平均耗时
+            } else {
+                10.0  // 大批量要求10ms平均耗时
+            };
+
+            crate::soft_assert!(
+                avg_time_per_kline_ms <= max_avg_write_time_ms,
+                message = "数据库单条K线平均写入耗时过长。",
+                expected_max_avg_ms = max_avg_write_time_ms,
+                actual_avg_ms = avg_time_per_kline_ms,
+                batch_size = batch_size,
+                symbol = symbol.to_string(),
+                condition = "avg_time_per_kline_ms <= MAX_AVG_WRITE_TIME_MS",
+            );
+        }
+
+        // ✨ 更新全局统计信息 - UPSERT操作统一计为插入操作
+        DB_OPERATIONS.0.fetch_add(count, Ordering::SeqCst);
+
+        // 记录统计信息（每10秒输出一次）
+        let (insert_count, update_count, last_log_time) = &*DB_OPERATIONS;
+        let mut last_time = last_log_time.lock().unwrap();
+        let now = Instant::now();
+
+        if now.duration_since(*last_time).as_secs() >= DB_LOG_INTERVAL {
+            let total_inserts = insert_count.load(Ordering::SeqCst);
+            let total_updates = update_count.load(Ordering::SeqCst);
+            info!(log_type = "module",
+                "📊 数据库操作统计: 插入={}, 更新={}, 总计={}",
+                total_inserts, total_updates, total_inserts + total_updates
+            );
+            *last_time = now;
+        }
+
+        tracing::debug!(
+            decision = "db_transaction_complete",
+            symbol = %symbol,
+            interval = %interval,
+            total_processed = count,
+            operation = "upsert",
+            "数据库UPSERT事务成功完成"
+        );
         Ok(count)
     }
 
@@ -567,7 +604,7 @@ impl Database {
             }
         }
 
-        info!(target: "db", log_type = "module", "Using SQLite database with optimized performance settings at {}", db_path.display());
+        info!(log_type = "module", "Using SQLite database with optimized performance settings at {}", db_path.display());
 
         // Create database connection manager with WAL mode and performance optimizations
         let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
@@ -617,11 +654,11 @@ impl Database {
         // Initialize database tables
         match db.init_db() {
             Ok(_) => {
-                info!(target: "db", log_type = "module", "✅ SQLite数据库初始化成功，已启用写入队列和性能优化");
+                info!(log_type = "module", "✅ SQLite数据库初始化成功，已启用写入队列和性能优化");
                 tracing::debug!(decision = "db_init_success", "数据库初始化成功");
             },
             Err(e) => {
-                error!(target: "db", log_type = "module", "❌ 数据库初始化失败，程序无法继续: {}", e);
+                error!(log_type = "module", "❌ 数据库初始化失败，程序无法继续: {}", e);
                 tracing::error!(
                     message = "数据库初始化失败",
                     db_path = %db_path.display(),
@@ -1025,7 +1062,7 @@ impl Database {
     #[instrument(target = "Database", skip_all, err)]
     pub fn trim_klines(&self, symbol: &str, interval: &str, _max_count: i64) -> Result<usize> {
         // No longer limiting kline count, just return 0
-        debug!(target: "db", "K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
+        debug!("K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
         Ok(0)
     }
 
@@ -1084,7 +1121,7 @@ impl Database {
         if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
             let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
             let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-            debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+            debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
             *last_log_time = now;
         }
 
@@ -1164,7 +1201,7 @@ impl Database {
         if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
             let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
             let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-            debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+            debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
             *last_log_time = now;
         }
 
@@ -1227,7 +1264,7 @@ impl Database {
             if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
                 let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
                 let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-                debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+                debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
                 *last_log_time = now;
             }
         } else {
@@ -1258,7 +1295,7 @@ impl Database {
             if now.duration_since(*last_log_time).as_secs() >= DB_LOG_INTERVAL {
                 let insert_count = DB_OPERATIONS.0.load(Ordering::Relaxed);
                 let update_count = DB_OPERATIONS.1.load(Ordering::Relaxed);
-                debug!(target: "db", "数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
+                debug!("数据库操作统计: 插入={}, 更新={}", insert_count, update_count);
                 *last_log_time = now;
             }
         }

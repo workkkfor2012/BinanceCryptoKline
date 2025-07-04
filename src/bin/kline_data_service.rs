@@ -4,17 +4,16 @@ use kline_server::kldata::KlineBackfiller;
 
 use std::sync::Arc;
 use std::path::Path;
-use std::time::Duration;
-use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{info, error, instrument, info_span, Instrument};
 
-// 导入轨迹提炼器组件
+// 导入新的AI日志组件
 use kline_server::klcommon::log::{
-    TraceDistillerStore,
-    TraceDistillerLayer,
-    distill_all_completed_traces_to_text,
-    TransactionLayer,
-    TransactionLogManager
+    init_log_sender,
+    McpLayer,
+    init_problem_summary_log,
+    ProblemSummaryLayer,
+    init_module_log,
+    ModuleLayer,
 };
 
 /// 默认配置文件路径
@@ -29,15 +28,13 @@ const TEST_MODE: bool = false;
 /// 测试模式下使用的交易对
 const TEST_SYMBOLS: &[&str] = &["BTCUSDT"];
 
-/// 程序运行期间的快照计数器，用于生成有序的文件名
-static SNAPSHOT_COUNTER: AtomicU32 = AtomicU32::new(1);
+
 // ========================================
 
 #[tokio::main]
-#[instrument(name = "main", ret, err)]
 async fn main() -> Result<()> {
-    // ✨ [修改] 接收 TransactionLogManager 实例
-    let (distiller_store, transaction_manager) = init_logging_with_distiller();
+    // 初始化AI日志系统
+    init_ai_logging().await?;
 
     // 创建应用程序的根Span，代表整个应用生命周期
     let root_span = info_span!(
@@ -65,21 +62,14 @@ async fn main() -> Result<()> {
         Err(e) => {
             tracing::error!(
                 message = "应用程序异常退出",
-                error.summary = e.get_error_type_summary(),
-                error.details = %e
+                error_summary = e.get_error_type_summary(),
+                error_details = %e
             );
         }
     }
 
-    // 程序退出时生成最终快照
-    generate_final_snapshot(&distiller_store).await;
-
-    // ✨ [新增] 在程序完全退出前，优雅地关闭业务追踪日志
-    if let Some(mut manager) = transaction_manager {
-        info!(target: "kline_data_service", log_type = "module", "正在关闭业务追踪日志，确保所有日志已写入...");
-        manager.shutdown().await;
-        info!(target: "kline_data_service", log_type = "module", "业务追踪日志已关闭。");
-    }
+    // 在程序结束前等待，确保日志发送完成
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     result
 }
@@ -97,8 +87,8 @@ async fn run_app() -> Result<()> {
         interval_count = interval_list.len()
     );
 
-    info!(target: "kline_data_service", log_type = "module", "启动K线数据补齐服务");
-    info!(target: "kline_data_service", log_type = "module", "使用周期: {}", intervals);
+    info!(log_type = "module", "启动K线数据补齐服务");
+    info!(log_type = "module", "使用周期: {}", intervals);
 
     // 创建数据库连接
     let db_path = std::path::PathBuf::from("./data/klines.db");
@@ -124,11 +114,11 @@ async fn run_app() -> Result<()> {
     };
 
     // 执行K线数据补齐
-    info!(target: "kline_data_service", log_type = "module", "开始补齐K线数据...");
+    info!(log_type = "module", "开始补齐K线数据...");
 
     // 创建补齐器实例 - 决策点：测试模式vs生产模式
     let backfiller = if TEST_MODE {
-        info!(target: "kline_data_service", log_type = "module", "🔧 启用测试模式，限制交易对为: {:?}", TEST_SYMBOLS);
+        info!(log_type = "module", "🔧 启用测试模式，限制交易对为: {:?}", TEST_SYMBOLS);
         tracing::debug!(
             decision = "backfiller_mode",
             mode = "test",
@@ -142,7 +132,7 @@ async fn run_app() -> Result<()> {
             TEST_SYMBOLS.iter().map(|s| s.to_string()).collect()
         )
     } else {
-        info!(target: "kline_data_service", log_type = "module", "📡 生产模式，将获取所有交易对");
+        info!(log_type = "module", "📡 生产模式，将获取所有交易对");
         tracing::debug!(
             decision = "backfiller_mode",
             mode = "production",
@@ -156,7 +146,7 @@ async fn run_app() -> Result<()> {
     // 运行一次性补齐流程 - 决策点：补齐成功vs失败
     match backfiller.run_once().await {
         Ok(_) => {
-            info!(target: "kline_data_service", log_type = "module", "历史K线补齐完成");
+            info!(log_type = "module", "历史K线补齐完成");
             tracing::debug!(
                 decision = "backfill_result",
                 result = "success",
@@ -164,7 +154,7 @@ async fn run_app() -> Result<()> {
             );
         },
         Err(e) => {
-            error!(target: "kline_data_service", log_type = "module", "历史K线补齐失败: {}", e);
+            error!(log_type = "module", "历史K线补齐失败: {}", e);
             tracing::error!(
                 message = "K线补齐流程失败",
                 error.summary = e.get_error_type_summary(),
@@ -174,21 +164,14 @@ async fn run_app() -> Result<()> {
         }
     }
 
-    info!(target: "kline_data_service", log_type = "module", "K线数据补齐服务完成");
+    info!(log_type = "module", "K线数据补齐服务完成");
     tracing::info!(message = "应用程序核心业务流程完成");
 
     Ok(())
 }
 
-/// ✨ [修改] 让日志初始化函数返回 TransactionLogManager 实例
-#[instrument(name = "init_logging_with_distiller", skip_all)]
-fn init_logging_with_distiller() -> (TraceDistillerStore, Option<TransactionLogManager>) {
-    use kline_server::klcommon::log::{
-        ModuleLayer,
-        NamedPipeLogManager,
-        TraceVisualizationLayer,
-    };
-    use std::sync::Arc;
+/// 初始化AI日志系统 - 异步批量处理架构
+async fn init_ai_logging() -> Result<()> {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
     // 确保日志目录存在
@@ -197,20 +180,17 @@ fn init_logging_with_distiller() -> (TraceDistillerStore, Option<TransactionLogM
     }
 
     // 获取日志配置 - 优先从配置文件读取，回退到环境变量
-    let (log_level, log_transport, pipe_name, enable_full_tracing) = match load_logging_config() {
+    let (log_level, _log_transport, pipe_name, enable_full_tracing) = match load_logging_config() {
         Ok(config) => {
-            // 注意：此时日志系统还未完全初始化，使用println!而非tracing宏
             println!("✅ 从配置文件加载日志设置成功");
             config
         },
         Err(e) => {
-            // 配置文件读取失败，回退到环境变量
             println!("⚠️ 配置文件读取失败，使用环境变量: {}", e);
             let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-            let log_transport = std::env::var("LOG_TRANSPORT").unwrap_or_else(|_| "file".to_string());
-            let pipe_name = std::env::var("PIPE_NAME").unwrap_or_else(|_| r"\\.\pipe\kline_log_pipe".to_string());
+            let pipe_name = std::env::var("PIPE_NAME").unwrap_or_else(|_| "kline_mcp_log_pipe".to_string());
             let enable_full_tracing = std::env::var("ENABLE_FULL_TRACING").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true);
-            (log_level, log_transport, pipe_name, enable_full_tracing)
+            (log_level, "named_pipe".to_string(), pipe_name, enable_full_tracing)
         }
     };
 
@@ -220,109 +200,40 @@ fn init_logging_with_distiller() -> (TraceDistillerStore, Option<TransactionLogM
 
     println!("追踪配置初始化完成，完全追踪: {}", enable_full_tracing);
 
-    // 创建TraceDistillerStore用于轨迹提炼
-    let distiller_store = TraceDistillerStore::default();
-    let distiller_layer = TraceDistillerLayer::new(distiller_store.clone());
+    // 1. 初始化异步批量日志发送器（所有复杂逻辑都在ai_log模块内部处理）
+    println!("初始化AI日志发送器 (异步批量模式)，管道名称: {}", pipe_name);
+    init_log_sender(&pipe_name);
 
-    // 根据传输方式初始化日志 - 决策点：日志传输模式选择
-    match log_transport.as_str() {
-        "named_pipe" => {
-            println!("选择命名管道日志传输模式: {}", pipe_name);
-            // 命名管道模式 - 使用三层架构
-            let log_manager = Arc::new(NamedPipeLogManager::new(pipe_name.clone()));
-            // 注意：NamedPipeLogManager::new() 现在会自动启动后台任务
-
-            let module_layer = ModuleLayer::new(log_manager.clone());
-            let trace_layer = TraceVisualizationLayer::new(log_manager.clone());
-
-            // ✨ [修改] 创建 TransactionLayer 并准备返回
-            match TransactionLayer::new() {
-                Ok((transaction_layer, transaction_manager)) => {
-                    Registry::default()
-                        .with(module_layer)         // 处理 log_type="module"
-                        .with(transaction_layer)    // 处理 log_type="transaction"
-                        .with(trace_layer)          // 处理 span 日志用于路径可视化
-                        .with(distiller_layer)      // 处理轨迹提炼用于调试快照
-                        .with(create_env_filter(&log_level))
-                        .init();
-
-                    info!(target: "kline_data_service", log_type = "module", "🎯 四重日志系统已初始化（命名管道模式 + 轨迹提炼）");
-                    info!(target: "kline_data_service", log_type = "module", "📊 模块日志: 只处理顶层日志，log_type=module");
-                    info!(target: "kline_data_service", log_type = "module", "🔖 业务追踪: 保存到 logs/transaction_log，log_type=transaction");
-                    info!(target: "kline_data_service", log_type = "module", "🔍 Trace可视化: 只处理Span内日志，log_type=trace");
-                    info!(target: "kline_data_service", log_type = "module", "🔬 轨迹提炼: 构建调用树用于调试快照");
-                    info!(target: "kline_data_service", log_type = "module", "🔗 共享管道: {}", pipe_name);
-
-                    if enable_full_tracing {
-                        info!(target: "kline_data_service", log_type = "module", "🔍 完全追踪功能已启用");
-                    } else {
-                        info!(target: "kline_data_service", log_type = "module", "⚡ 完全追踪功能已禁用（高性能模式）");
-                    }
-
-                    // ✨ [修改] 返回 distiller_store 和 transaction_manager
-                    return (distiller_store, Some(transaction_manager));
-                },
-                Err(e) => {
-                    eprintln!("严重错误：无法创建业务追踪日志文件层: {}", e);
-                    // 如果失败，只初始化其他层
-                    Registry::default()
-                        .with(module_layer)         // 处理 log_type="module"
-                        .with(trace_layer)          // 处理 span 日志用于路径可视化
-                        .with(distiller_layer)      // 处理轨迹提炼用于调试快照
-                        .with(create_env_filter(&log_level))
-                        .init();
-
-                    info!(target: "kline_data_service", log_type = "module", "🎯 三重日志系统已初始化（命名管道模式 + 轨迹提炼，业务追踪层创建失败）");
-                    info!(target: "kline_data_service", log_type = "module", "📊 模块日志: log_type=module");
-                    info!(target: "kline_data_service", log_type = "module", "🔍 Trace可视化: log_type=trace");
-
-                    return (distiller_store, None);
-                }
-            }
-        }
-        "websocket" => {
-            println!("WebSocket模式已不再支持，回退到文件模式");
-            // WebSocket模式已不再支持，回退到文件模式 + 轨迹提炼
-            Registry::default()
-                .with(tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_level(true)
-                    .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()))
-                .with(distiller_layer)      // 添加轨迹提炼层
-                .with(create_env_filter(&log_level))
-                .init();
-
-            info!(target: "kline_data_service", log_type = "module", "⚠️  WebSocket模式已不再支持，已回退到文件模式 + 轨迹提炼");
-            info!(target: "kline_data_service", log_type = "module", "💡 请使用 LOG_TRANSPORT=named_pipe 启用日志传输");
-        }
-        _ => {
-            println!("选择文件日志传输模式（默认）");
-            // 文件模式（默认）+ 轨迹提炼
-            Registry::default()
-                .with(tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_level(true)
-                    .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()))
-                .with(distiller_layer)      // 添加轨迹提炼层
-                .with(create_env_filter(&log_level))
-                .init();
-
-            info!(target: "kline_data_service", log_type = "module", "日志系统已初始化（文件模式 + 轨迹提炼）");
-        }
+    // 2. 初始化本地的问题摘要日志文件
+    if let Err(e) = init_problem_summary_log("logs/problem_summary.log") {
+        eprintln!("[Init] Failed to create problem summary log: {}", e);
     }
 
-    info!(target: "kline_data_service", log_type = "module", "日志级别: {}", log_level);
+    // 3. 初始化模块日志文件
+    if let Err(e) = init_module_log("logs/module.log") {
+        eprintln!("[Init] Failed to create module log: {}", e);
+    }
 
-    // 记录日志系统初始化完成
-    tracing::info!(
-        message = "日志系统初始化完成",
-        log_level = %log_level,
-        log_transport = %log_transport,
-        enable_full_tracing = enable_full_tracing
-    );
+    // 4. 设置包含三个核心Layer的tracing订阅者
+    Registry::default()
+        .with(McpLayer)                    // Layer 1: 异步批量发送所有详细日志到daemon
+        .with(ProblemSummaryLayer)         // Layer 2: 将WARN/ERROR写入本地问题文件
+        .with(ModuleLayer::new())          // Layer 3: 将模块日志写入本地文件
+        .with(create_env_filter(&log_level)) // 使用配置的日志级别
+        .init();
 
-    // ✨ [修改] 其他日志模式返回 None，因为没有 TransactionLayer
-    (distiller_store, None)
+    println!("AI Log System Initialized (Async Batch Mode).");
+    println!("-> Detailed logs: 异步批量保存到 logs/ai_detailed.log + 发送到管道: {}", pipe_name);
+    println!("-> Problem summary: saved to logs/problem_summary.log");
+    println!("-> Module logs: saved to logs/module.log");
+
+    if enable_full_tracing {
+        println!("-> Full tracing enabled");
+    } else {
+        println!("-> Full tracing disabled (high performance mode)");
+    }
+
+    Ok(())
 }
 
 /// 创建环境过滤器，始终过滤掉第三方库的调试日志
@@ -397,86 +308,4 @@ fn load_logging_config() -> Result<(String, String, String, bool)> {
     }
 }
 
-/// 生成程序退出时的最终快照
-#[instrument(name = "generate_final_snapshot", skip_all)]
-async fn generate_final_snapshot(store: &TraceDistillerStore) {
-    info!(target: "kline_data_service", log_type = "module", "🔬 程序退出，生成最终Trace快照...");
 
-    tracing::info!(message = "开始生成最终快照");
-
-    // 等待一小段时间，确保所有正在进行的span都能完成
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let log_dir = "logs/debug_snapshots";
-
-    // 确保目录存在
-    if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
-        error!(target: "kline_data_service", log_type = "module", "无法创建调试快照目录: {}", e);
-        tracing::error!(
-            message = "创建调试快照目录失败",
-            error.summary = "io_operation_failed",
-            error.details = %e,
-            log_dir = log_dir
-        );
-        return;
-    }
-
-    // 生成并写入快照
-    tracing::debug!(message = "开始提炼trace数据");
-    let report_text = distill_all_completed_traces_to_text(store);
-    let report_size = report_text.len();
-
-    tracing::debug!(
-        message = "trace数据提炼完成",
-        report_size_bytes = report_size,
-        report_size_kb = report_size / 1024
-    );
-
-    // 获取下一个序号（程序运行期间递增）
-    let sequence = SNAPSHOT_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("{}/final_snapshot_{}_{}.log", log_dir, sequence, timestamp);
-
-    tracing::debug!(
-        message = "准备写入快照文件",
-        filename = %filename,
-        sequence = sequence
-    );
-
-    match tokio::fs::File::create(&filename).await {
-        Ok(mut file) => {
-            use tokio::io::AsyncWriteExt;
-            match file.write_all(report_text.as_bytes()).await {
-                Ok(_) => {
-                    info!(target: "kline_data_service", log_type = "module", "✅ 已生成最终Trace快照: {}", filename);
-                    tracing::info!(
-                        message = "快照文件写入成功",
-                        filename = %filename,
-                        size_bytes = report_size
-                    );
-                },
-                Err(e) => {
-                    error!(target: "kline_data_service", log_type = "module", "写入快照文件 {} 失败", filename);
-                    tracing::error!(
-                        message = "快照文件写入失败",
-                        error.summary = "io_operation_failed",
-                        error.details = %e,
-                        filename = %filename
-                    );
-                }
-            }
-        },
-        Err(e) => {
-            error!(target: "kline_data_service", log_type = "module", "创建快照文件 {} 失败: {}", filename, e);
-            tracing::error!(
-                message = "快照文件创建失败",
-                error.summary = "io_operation_failed",
-                error.details = %e,
-                filename = %filename
-            );
-        }
-    }
-
-    info!(target: "kline_data_service", log_type = "module", "✅ 最终快照生成完成");
-    tracing::info!(message = "最终快照生成流程完成");
-}

@@ -8,42 +8,14 @@
 # 目标文件夹名称
 $targetFolderName = "tempfold"
 
-# 定义要复制的源文件列表（按功能分组）
-
-# 公共组件
-$commonFiles = @(
-    "src\klcommon\api.rs",
-    "src\klcommon\context.rs",
-    "src\klcommon\db.rs",
-    "src\klcommon\websocket.rs"
+# 定义要排除的文件夹
+$excludedFolders = @(
+    "src\Log-MCP-Server",
+    "src\weblog"
 )
 
-# K线下载相关
-$klineDownloadFiles = @(
-    "src\bin\kline_data_service.rs",
-    "src\kldata\backfill.rs"
-)
-
-# K线合成相关
-$klineAggregateFiles = @(
-    "src\bin\kline_aggregate_service.rs",
-    "src\klaggregate\buffered_kline_store.rs",
-    "src\klaggregate\kline_data_persistence.rs",
-    "src\klaggregate\market_data_ingestor.rs",
-    "src\klaggregate\symbol_kline_aggregator.rs",
-    "src\klaggregate\symbol_metadata_registry.rs",
-    "src\klaggregate\trade_event_router.rs"
-)
-
-# 日志和观测性组件
-$observabilityFiles = @(
-    "src\klcommon\log\trace_distiller.rs",
-    "src\klcommon\log\trace_visualization.rs",
-    "src\klcommon\log\module_logging.rs",
-    "src\klcommon\log\transaction_logging.rs",
-   
-    "src\klcommon\log\observability.rs"
-)
+# 源目录
+$sourceDir = "src"
 # 单独定义HTML文件
 $htmlFilePath = "src\weblog\static\index.html"
 
@@ -52,6 +24,76 @@ $logSnapshotDir = "logs\debug_snapshots"
 
 # 定义事务日志目录
 $transactionLogDir = "logs\transaction_log"
+
+# 获取所有.rs文件的函数，排除指定文件夹
+function Get-RustFilesWithExclusions {
+    param(
+        [string]$SourcePath,
+        [string[]]$ExcludedFolders
+    )
+
+    if (-not (Test-Path -Path $SourcePath -PathType Container)) {
+        return @()
+    }
+
+    # 获取所有.rs文件
+    $allRustFiles = Get-ChildItem -Path $SourcePath -Filter "*.rs" -Recurse -File
+
+    # 过滤掉排除文件夹中的文件
+    $filteredFiles = $allRustFiles | Where-Object {
+        $filePath = $_.FullName
+        $shouldExclude = $false
+
+        foreach ($excludedFolder in $ExcludedFolders) {
+            $excludedPath = Join-Path -Path (Get-Location) -ChildPath $excludedFolder
+            if ($filePath.StartsWith($excludedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $shouldExclude = $true
+                break
+            }
+        }
+
+        return -not $shouldExclude
+    }
+
+    return $filteredFiles
+}
+
+# 复制文件并保持目录结构的函数
+function Copy-FileWithStructure {
+    param(
+        [System.IO.FileInfo]$SourceFile,
+        [string]$SourceRoot,
+        [string]$TargetRoot
+    )
+
+    # 计算相对路径
+    $relativePath = $SourceFile.FullName.Substring($SourceRoot.Length + 1)
+
+    # 构建目标路径
+    $targetPath = Join-Path -Path $TargetRoot -ChildPath $relativePath
+
+    # 将.rs扩展名改为.txt
+    if ($targetPath.EndsWith(".rs")) {
+        $targetPath = $targetPath.Substring(0, $targetPath.Length - 3) + ".txt"
+    }
+
+    # 确保目标目录存在
+    $targetDir = Split-Path -Path $targetPath -Parent
+    if (-not (Test-Path -Path $targetDir -PathType Container)) {
+        New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+    }
+
+    # 复制文件
+    try {
+        Copy-Item -Path $SourceFile.FullName -Destination $targetPath -Force -ErrorAction Stop
+        $timestamp = Get-Date -Format "HH:mm:ss"
+        $displayPath = $relativePath -replace "\.rs$", ".txt"
+        Write-Host "  ✅ 已同步: $relativePath -> $displayPath [$timestamp]" -ForegroundColor Green
+    } catch {
+        $timestamp = Get-Date -Format "HH:mm:ss"
+        Write-Host "  ❌ 复制失败: $relativePath -> $($_.Exception.Message) [$timestamp]" -ForegroundColor Red
+    }
+}
 
 # --- 核心逻辑 ---
 
@@ -151,30 +193,34 @@ if (-not (Test-Path -Path $targetFolderPath -PathType Container)) {
     New-Item -Path $targetFolderPath -ItemType Directory | Out-Null
 }
 
-Write-Host "📁 开始按功能分组复制文件到子文件夹..." -ForegroundColor Cyan
+Write-Host "📁 开始复制src目录下的所有.rs文件，保持目录结构..." -ForegroundColor Cyan
 
-# 复制公共组件文件到 common 子文件夹
-Write-Host "📂 复制公共组件文件..." -ForegroundColor Yellow
-foreach ($file in $commonFiles) {
-    Copy-FileToTxt -SourcePath $file -TargetFolder $targetFolderPath -SubFolder "common"
-}
+# 获取源目录的完整路径
+$sourceRootPath = Join-Path -Path (Get-Location) -ChildPath $sourceDir
+$targetSrcPath = Join-Path -Path $targetFolderPath -ChildPath "src"
 
-# 复制K线下载文件到 kline_download 子文件夹（可选）
-# Write-Host "📂 复制K线下载文件..." -ForegroundColor Yellow
-foreach ($file in $klineDownloadFiles) {
-    Copy-FileToTxt -SourcePath $file -TargetFolder $targetFolderPath -SubFolder "kline_download"
-}
+if (Test-Path -Path $sourceRootPath -PathType Container) {
+    Write-Host "📂 复制 $sourceDir 下的所有.rs文件（排除指定文件夹）..." -ForegroundColor Yellow
 
-# 复制K线合成文件到 kline_aggregate 子文件夹
-Write-Host "📂 复制K线合成文件..." -ForegroundColor Yellow
-foreach ($file in $klineAggregateFiles) {
-    Copy-FileToTxt -SourcePath $file -TargetFolder $targetFolderPath -SubFolder "kline_aggregate"
-}
+    # 获取所有.rs文件，排除指定文件夹
+    $rustFiles = Get-RustFilesWithExclusions -SourcePath $sourceRootPath -ExcludedFolders $excludedFolders
 
-# 复制日志和观测性文件到 observability 子文件夹
-Write-Host "📂 复制日志和观测性文件..." -ForegroundColor Yellow
-foreach ($file in $observabilityFiles) {
-    Copy-FileToTxt -SourcePath $file -TargetFolder $targetFolderPath -SubFolder "observability"
+    if ($rustFiles.Count -gt 0) {
+        foreach ($file in $rustFiles) {
+            Copy-FileWithStructure -SourceFile $file -SourceRoot $sourceRootPath -TargetRoot $targetSrcPath
+        }
+        Write-Host "  ✨ 已处理 $($rustFiles.Count) 个.rs文件" -ForegroundColor Cyan
+
+        # 显示排除的文件夹信息
+        Write-Host "  📋 已排除的文件夹:" -ForegroundColor Cyan
+        foreach ($excluded in $excludedFolders) {
+            Write-Host "    - $excluded" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "  ⚠️ 未找到.rs文件" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ⚠️ 源目录不存在: $sourceRootPath" -ForegroundColor Yellow
 }
 
 # 复制HTML文件到 web 子文件夹（可选）

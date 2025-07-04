@@ -8,3 +8,6 @@ pub mod klaggnew;
 
 // Re-export error types
 pub use klcommon::error::AppError;
+
+// The soft_assert! macro is automatically available at crate root due to #[macro_export]
+// No need to re-export it explicitly

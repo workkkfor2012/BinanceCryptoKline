@@ -16,18 +16,32 @@ if (-not (Test-Path "Cargo.toml")) {
 if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
 if (-not (Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" -Force | Out-Null }
 
-# 选择日志传输方式
-Write-Host "选择日志模式: 1=文件 2=命名管道" -ForegroundColor Cyan
-$choice = Read-Host "请选择 (1-2)"
-$useNamedPipe = ($choice -eq "2")
+# 清理日志文件，确保干净的启动环境
+Write-Host "🧹 清理日志文件..." -ForegroundColor Cyan
+$logFiles = @(
+    "logs\ai_detailed.log",
+    "logs\module.log",
+    "logs\problem_summary.log"
+)
 
-# 设置环境变量
-Set-LoggingEnvironment
-if ($useNamedPipe) {
-    $env:LOG_TRANSPORT = "named_pipe"
-} else {
-    $env:LOG_TRANSPORT = "file"
+foreach ($logFile in $logFiles) {
+    if (Test-Path $logFile) {
+        try {
+            Remove-Item $logFile -Force
+            Write-Host "  ✅ 已删除: $logFile" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  ⚠️ 删除失败: $logFile - $_" -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "  ℹ️ 文件不存在: $logFile" -ForegroundColor Gray
+    }
 }
+
+# 设置环境变量 - 使用命名管道传输到Log MCP
+Set-LoggingEnvironment
+$env:LOG_TRANSPORT = "named_pipe"
 
 $buildMode = Get-BuildMode
 Write-Host "🚀 启动K线数据服务 ($buildMode)" -ForegroundColor Yellow

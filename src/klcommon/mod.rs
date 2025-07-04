@@ -32,14 +32,18 @@ pub use server_time_sync::ServerTimeSyncManager; // 导出服务器时间同步�
 //     KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME
 // };
 pub use proxy::{ProxyConfig, get_proxy_url, PROXY_HOST, PROXY_PORT};
-// 导出日志相关类型，保持向后兼容
+// 导出AI日志系统相关类型
 pub use log::{
-    ModuleLayer,
+    // AI日志系统核心
+    McpLayer,
+    init_log_sender,
+    ProblemSummaryLayer,
+    init_problem_summary_log,
+    SpanModel,
+    SpanEvent,
+    StructuredLog,
+    // 向后兼容
     NamedPipeLogManager,
-    TraceVisualizationLayer,
-    AssertEngine,
-    AssertLayer,
-    create_default_assert_layer,
 };
 // 导出配置相关类型
 pub use config::{
