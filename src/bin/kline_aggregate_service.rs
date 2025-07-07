@@ -4,8 +4,9 @@
 
 use kline_server::klaggregate::KlineAggregateSystem;
 use kline_server::klcommon::AggregateConfig;
+use kline_server::klcommon::context::init_tracing_config;
 use kline_server::klcommon::log::{
-    ModuleLayer, NamedPipeLogManager, TraceVisualizationLayer,
+    LowFreqLogLayer, NamedPipeLogManager, TraceVisualizationLayer,
     TraceDistillerStore, TraceDistillerLayer, distill_all_completed_traces_to_text
 };
 use std::sync::Arc;
@@ -68,12 +69,12 @@ async fn run_app(
 ) -> Result<()> {
     // 首先打印当前的日志级别配置
     let current_log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "未设置".to_string());
-    info!(target: LOG_TARGET, log_type = "module", event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
+    info!(target: LOG_TARGET, log_type = "low_freq", event_name = "日志级别确认", current_rust_log = %current_log_level, "📊 当前日志级别: {}", current_log_level);
 
     // 如果测试模式开启，设置环境变量并打印警告
     if ENABLE_TEST_MODE {
         std::env::set_var("KLINE_TEST_MODE", "true");
-        warn!(target: LOG_TARGET, log_type = "module", event_name = "运行模式确认", "🚀 服务以【测试模式】启动，将只订阅 'btcusdt'");
+        warn!(target: LOG_TARGET, log_type = "low_freq", event_name = "运行模式确认", "🚀 服务以【测试模式】启动，将只订阅 'btcusdt'");
     }
 
     trace!(target: LOG_TARGET, event_name = "服务启动", message = "启动K线聚合服务");
@@ -90,27 +91,27 @@ async fn run_app(
 
     // 加载配置
     let config = load_config().await?;
-    info!(target: LOG_TARGET, log_type = "module", event_name = "配置加载完成", "✅ 配置文件加载成功");
+    info!(target: LOG_TARGET, log_type = "low_freq", event_name = "配置加载完成", "✅ 配置文件加载成功");
 
     // 创建K线聚合系统
     let system = match KlineAggregateSystem::new(config).await {
         Ok(system) => {
-            info!(target: LOG_TARGET, log_type = "module", event_name = "系统创建成功", "✅ K线聚合系统创建成功");
+            info!(target: LOG_TARGET, log_type = "low_freq", event_name = "系统创建成功", "✅ K线聚合系统创建成功");
             system
         }
         Err(e) => {
-            error!(target: LOG_TARGET, log_type = "module", event_name = "系统创建失败", error = %e, "❌ 创建K线聚合系统失败: {}", e);
+            error!(target: LOG_TARGET, log_type = "low_freq", event_name = "系统创建失败", error = %e, "❌ 创建K线聚合系统失败: {}", e);
             return Err(e);
         }
     };
 
     // 启动系统
     if let Err(e) = system.start().await {
-        error!(target: LOG_TARGET, log_type = "module", event_name = "系统启动失败", error = %e, "❌ 启动K线聚合系统失败: {}", e);
+        error!(target: LOG_TARGET, log_type = "low_freq", event_name = "系统启动失败", error = %e, "❌ 启动K线聚合系统失败: {}", e);
         return Err(e);
     }
 
-    info!(target: LOG_TARGET, log_type = "module", event_name = "服务启动完成", "🚀 K线聚合服务启动完成");
+    info!(target: LOG_TARGET, log_type = "low_freq", event_name = "服务启动完成", "🚀 K线聚合服务启动完成");
 
     // 启动状态监控任务
     start_status_monitor(system.clone()).await;
@@ -211,7 +212,7 @@ fn init_observability_system_inner() -> Result<(kline_server::klcommon::AssertEn
     // --- 3. 创建所有并行的 Layer ---
 
     // a) 人类可读的扁平化日志层
-    let module_layer = ModuleLayer::new(log_manager.clone());
+    let low_freq_layer = LowFreqLogLayer::new();
 
     // b) 给前端的实时可视化JSON层
     let trace_viz_layer = TraceVisualizationLayer::new(log_manager.clone());
@@ -228,7 +229,7 @@ fn init_observability_system_inner() -> Result<(kline_server::klcommon::AssertEn
             // 命名管道模式：使用三层并行架构，职责分离
             Registry::default()
                 .with(assert_layer)      // 运行时断言验证层
-                .with(module_layer)      // 模块日志层（程序员可读）
+                .with(low_freq_layer)    // 低频日志层（程序员可读）
                 .with(trace_viz_layer)   // Trace 可视化层（程序员交互）
                 .with(distiller_layer)   // Trace 提炼层（大模型分析）
                 .with(create_env_filter(&log_level))
@@ -238,7 +239,7 @@ fn init_observability_system_inner() -> Result<(kline_server::klcommon::AssertEn
             // 其他模式：回退到三层架构 + 控制台输出
             Registry::default()
                 .with(assert_layer)      // 运行时断言验证层
-                .with(module_layer)      // 模块日志层
+                .with(low_freq_layer)    // 低频日志层
                 .with(trace_viz_layer)   // Trace 可视化层
                 .with(distiller_layer)   // Trace 提炼层
                 .with(

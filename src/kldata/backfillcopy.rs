@@ -83,7 +83,7 @@ impl KlineBackfiller {
                     BACKFILL_LOG_INTERVAL, total_count);
 
                 // 输出日志
-                info!(log_type = "module", target = "backfill", "{}", summary);
+                info!(log_type = "low_freq", target = "backfill", "{}", summary);
             }
 
             // 清空交易对计数器
@@ -100,7 +100,7 @@ impl KlineBackfiller {
     /// 运行一次性补齐流程
     #[instrument(name = "backfill_run_once", target = "backfill", skip_all)]
     pub async fn run_once(&self) -> Result<()> {
-        info!(log_type = "module", target = "backfill", "开始一次性补齐K线数据...");
+        info!(log_type = "low_freq", target = "backfill", "开始一次性补齐K线数据...");
         let start_time = Instant::now();
 
         // 1. 获取交易对列表

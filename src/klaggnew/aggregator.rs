@@ -39,6 +39,7 @@ pub struct KlineData {
 }
 
 // --- Helper Functions (internal to the module) ---
+#[allow(dead_code)]
 fn get_period_duration_ms(period: &str) -> i64 {
     let last_char = period.chars().last().unwrap_or('m');
     let value: i64 = period[..period.len() - 1].parse().unwrap_or(1);
@@ -52,6 +53,7 @@ fn get_period_duration_ms(period: &str) -> i64 {
     }
 }
 
+#[allow(dead_code)]
 fn get_aligned_time(timestamp: i64, duration: i64) -> i64 {
     // 简化版本：直接按duration对齐
     (timestamp / duration) * duration
@@ -73,11 +75,14 @@ pub struct RealtimeAggregator {
 
 // Configuration struct for better organization
 struct AggregatorConfig {
+    #[allow(dead_code)]
     symbol_to_index: HashMap<String, u32>,
     pub(crate) index_to_symbol: HashMap<u32, String>,
+    #[allow(dead_code)]
     period_to_index: HashMap<String, u32>,
     pub(crate) index_to_period: HashMap<u32, String>,
     num_periods: usize,
+    #[allow(dead_code)]
     websocket_url: String,
 }
 

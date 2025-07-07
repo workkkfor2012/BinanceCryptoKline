@@ -14,12 +14,13 @@ pub mod ai_log;
 pub mod ai_problem_summary;
 
 pub mod observability;
-pub mod module_logging;
+pub mod low_freq_log;
 
 // 导出AI日志系统核心类型
 pub use ai_log::{
     McpLayer,
     init_log_sender,
+    shutdown_log_sender, // 导出关闭函数
     SpanModel,
     SpanEvent,
     StructuredLog,
@@ -39,9 +40,9 @@ pub use observability::{
     NamedPipeLogManager,
 };
 
-pub use module_logging::{
-    ModuleLayer,
-    init_module_log,
+pub use low_freq_log::{
+    LowFreqLogLayer,
+    init_low_freq_log,
 };
 
 

@@ -73,46 +73,79 @@ impl AppError {
     /// 获取错误类型的简洁摘要，用于追踪系统的错误分类
     ///
     /// 返回一个稳定的错误类别字符串，便于TraceDistiller进行错误聚合和分析
+    /// ✨ 优化为业务导向的错误分类，便于AI诊断系统理解业务影响
     pub fn get_error_type_summary(&self) -> &'static str {
         match self {
-            // API相关错误
-            AppError::ApiError(_) => "api_request_failed",
-            AppError::HttpError(_) => "http_request_failed",
-            AppError::HttpRequestError(_) => "http_request_malformed",
+            // ✨ K线数据获取相关的业务错误
+            AppError::ApiError(_) => "kline_data_acquisition_failed",
+            AppError::HttpError(_) => "market_data_connection_failed",
+            AppError::HttpRequestError(_) => "market_data_request_malformed",
 
-            // 数据处理错误
-            AppError::JsonError(_) => "json_parsing_failed",
-            AppError::CsvError(_) => "csv_parsing_failed",
-            AppError::ParseError(_) => "data_parsing_failed",
-            AppError::DataError(_) => "data_validation_failed",
+            // ✨ K线数据处理相关的业务错误
+            AppError::JsonError(_) => "kline_data_parsing_failed",
+            AppError::CsvError(_) => "kline_export_failed",
+            AppError::ParseError(_) => "market_data_format_invalid",
+            AppError::DataError(_) => "kline_data_validation_failed",
 
-            // 数据库相关错误
-            AppError::DatabaseError(_) => "database_operation_failed",
-            AppError::SqliteError(_) => "sqlite_operation_failed",
+            // ✨ K线数据存储相关的业务错误
+            AppError::DatabaseError(_) => "kline_data_persistence_failed",
+            AppError::SqliteError(_) => "kline_storage_operation_failed",
 
-            // 网络和连接错误
-            AppError::WebSocketError(_) => "websocket_connection_failed",
-            AppError::WebSocketProtocolError(_) => "websocket_protocol_failed",
-            AppError::UrlParseError(_) => "url_parsing_failed",
-            AppError::AddrParseError(_) => "address_parsing_failed",
+            // ✨ 市场数据连接相关的业务错误
+            AppError::WebSocketError(_) => "realtime_market_data_failed",
+            AppError::WebSocketProtocolError(_) => "market_data_stream_failed",
+            AppError::UrlParseError(_) => "market_endpoint_invalid",
+            AppError::AddrParseError(_) => "market_server_address_invalid",
 
-            // 系统资源错误
-            AppError::IoError(_) => "io_operation_failed",
-            AppError::ChannelError(_) => "channel_communication_failed",
+            // ✨ 系统资源相关的业务错误
+            AppError::IoError(_) => "kline_file_operation_failed",
+            AppError::ChannelError(_) => "kline_processing_pipeline_failed",
 
-            // 时间处理错误
-            AppError::TimeParseError(_) => "time_parsing_failed",
+            // ✨ 时间处理相关的业务错误
+            AppError::TimeParseError(_) => "kline_timestamp_invalid",
 
-            // 配置和初始化错误
-            AppError::ConfigError(_) => "configuration_error",
+            // ✨ 配置相关的业务错误
+            AppError::ConfigError(_) => "kline_service_configuration_invalid",
 
-            // 业务逻辑错误
-            AppError::AggregationError(_) => "aggregation_logic_failed",
-            AppError::ActorError(_) => "actor_system_failed",
-            AppError::WebServerError(_) => "web_server_failed",
+            // ✨ 业务逻辑相关的错误
+            AppError::AggregationError(_) => "kline_aggregation_logic_failed",
+            AppError::ActorError(_) => "kline_processing_actor_failed",
+            AppError::WebServerError(_) => "kline_api_server_failed",
 
             // 未分类错误
-            AppError::Unknown(_) => "unknown_error",
+            AppError::Unknown(_) => "kline_service_unknown_error",
+        }
+    }
+
+    /// ✨ [新增] 获取业务影响级别，用于AI诊断系统评估错误的业务严重性
+    pub fn get_business_impact_level(&self) -> &'static str {
+        match self {
+            // 高影响：直接影响核心K线数据业务
+            AppError::DatabaseError(_) |
+            AppError::SqliteError(_) => "high", // 数据持久化失败影响数据完整性
+
+            AppError::ApiError(_) |
+            AppError::HttpError(_) => "high", // 无法获取市场数据
+
+            // 中等影响：影响数据质量或处理效率
+            AppError::JsonError(_) |
+            AppError::DataError(_) => "medium", // 数据解析失败可能导致数据丢失
+
+            AppError::WebSocketError(_) |
+            AppError::WebSocketProtocolError(_) => "medium", // 实时数据流中断
+
+            // 低影响：不直接影响核心业务功能
+            AppError::ConfigError(_) => "low", // 配置问题通常可以修复
+            AppError::TimeParseError(_) => "low", // 时间解析问题影响有限
+            AppError::UrlParseError(_) |
+            AppError::AddrParseError(_) => "low", // 地址解析问题
+
+            // 系统级影响：可能影响整个服务
+            AppError::IoError(_) |
+            AppError::ChannelError(_) => "medium", // 系统资源问题
+
+            // 其他错误
+            _ => "medium", // 默认中等影响
         }
     }
 

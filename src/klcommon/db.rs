@@ -1,8 +1,6 @@
 use crate::klcommon::error::{AppError, Result};
 use crate::klcommon::models::Kline;
-// ✨ 导入我们的新抽象
-use crate::klcommon::context::{AppTraceContext, TraceContext};
-use tracing::{debug, info, error, instrument};
+use crate::klcommon::context::instrument_if_enabled;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
@@ -12,8 +10,9 @@ use std::time::Instant;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tokio::task;
+use tracing::{Span, instrument, debug, error};
+use kline_macros::perf_profile;
 
-// ✨ 1. [修改] 导入 Tokio 的 mpsc 和 oneshot
 use tokio::sync::{mpsc, oneshot};
 use dashmap::DashSet;
 
@@ -36,13 +35,13 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 /// 写入任务结构体，表示一个待执行的数据库写入操作
 #[derive(Debug)]
 struct WriteTask {
-    transaction_id: u64,  // ✨ [新增] 事务ID，用于业务追踪
+    transaction_id: u64,
     symbol: String,
     interval: String,
     klines: Vec<Kline>,
     result_sender: oneshot::Sender<Result<usize>>,
-    // ✨ 字段类型变为抽象的 AppTraceContext
-    context: AppTraceContext,
+    // ✨ [修改] 直接使用标准的 tracing::Span
+    span: Span,
 }
 
 
@@ -58,9 +57,7 @@ struct DbWriteQueueProcessor {
 
 impl DbWriteQueueProcessor {
     /// 创建新的写入队列处理器
-    #[instrument(ret)]
     fn new(receiver: mpsc::Receiver<WriteTask>, pool: DbPool) -> Self {
-        tracing::debug!(decision = "queue_processor_init", "数据库写入队列处理器初始化");
         Self {
             receiver,
             pool,
@@ -69,131 +66,60 @@ impl DbWriteQueueProcessor {
     }
 
     /// 启动写入队列处理线程
-    #[instrument(ret)]
-    fn start(mut self) -> Arc<Mutex<bool>> { // ✨ 3. [修改] self 需要是 mut
+    fn start(mut self) -> Arc<Mutex<bool>> {
         let is_running = self.is_running.clone();
-        tracing::debug!(decision = "queue_processor_start", "启动数据库写入队列处理器");
 
-        // ✨ 关键修复：使用 tokio::spawn 而不是 std::thread::spawn
-        // 这样可以保持 tracing 上下文，避免 ensure_symbol_table 变成孤儿 Span
         tokio::spawn(async move {
-            info!(log_type = "module", "数据库写入队列处理器已启动 (串行模式)"); // 提示已是串行
-
-            // ✨ 4. [修改] 使用异步的 recv().await
             while let Some(task) = self.receiver.recv().await {
                 if !*self.is_running.lock().unwrap() {
                     break;
                 }
 
-                // ✨ 关键修复：直接在父 Span 的上下文中 .await 任务 ✨
-                // 1. 进入从 `WriteTask` 带来的 `parent_span`。
-                // 2. 在这个上下文中，调用并 .await 数据库写入函数。
-                // 3. 这样，`db_write_task` 就会被正确地记录为 `parent_span` 的子节点。
                 let pool_clone = self.pool.clone();
 
-                // ✨ 现在调用的是 Trait 方法，业务逻辑完全解耦！
                 let processing_future = async move {
                     let db_result = Self::process_write_task_wrapper(pool_clone, task.transaction_id, task.symbol, task.interval, task.klines).await;
                     let _ = task.result_sender.send(db_result);
                 };
 
-                TraceContext::instrument(&task.context, processing_future).await;
+                // ✨ [修改] 使用零成本抽象的条件化追踪
+                instrument_if_enabled(processing_future, task.span).await;
             }
-
-            info!(log_type = "module", "数据库写入队列处理器已停止");
         });
 
         is_running
     }
 
-    /// ✨ [新增] 包裹函数，用于创建顶层Span并调用阻塞任务
-    #[instrument(
-        name = "db_write_task",
-        skip_all,
-        fields(symbol = %symbol, interval = %interval, kline_count = klines.len(), transaction_id = transaction_id)
-    )]
-    async fn process_write_task_wrapper(pool: DbPool, transaction_id: u64, symbol: String, interval: String, klines: Vec<Kline>) -> Result<usize> {
-        // 埋点：DB写入开始
-        tracing::info!(
-            log_type = "transaction",
-            transaction_id,
-            event_name = "db_write_start",
-            kline_count_to_write = klines.len(),
-        );
-        tracing::debug!(decision = "db_write_start", symbol = %symbol, interval = %interval, kline_count = klines.len(), "开始处理数据库写入任务");
-
-        // 为日志记录克隆变量
-        let symbol_for_log = symbol.clone();
-        let interval_for_log = interval.clone();
-
-        // ✨ [根本性修复] 在进入阻塞任务前，捕获当前的 span 上下文
+    /// 包裹函数，用于创建顶层Span并调用阻塞任务
+    async fn process_write_task_wrapper(pool: DbPool, _transaction_id: u64, symbol: String, interval: String, klines: Vec<Kline>) -> Result<usize> {
         let parent_span = tracing::Span::current();
 
         let result = task::spawn_blocking(move || {
-            // ✨ 在新的阻塞线程中，使用 `in_scope` 方法恢复父 span 的上下文，
-            // ✨ 这样 process_write_task_static 就能正确地链接到其父节点
             parent_span.in_scope(|| Self::process_write_task_static(&pool, &symbol, &interval, &klines))
         }).await;
 
         match result {
             Ok(Ok(count)) => {
-                // 埋点：DB写入成功
-                tracing::info!(
-                    log_type = "transaction",
-                    transaction_id,
-                    event_name = "db_write_success",
-                    saved_kline_count = count,
-                );
-                tracing::debug!(decision = "db_write_complete", symbol = %symbol_for_log, interval = %interval_for_log, result = ?count, "数据库写入任务完成");
                 Ok(count)
             },
             Ok(Err(e)) => {
-                // 埋点：DB写入失败 (事务内错误)
-                tracing::info!(
-                    log_type = "transaction",
-                    transaction_id,
-                    event_name = "db_write_failure",
-                    reason = "database_operation_error",
-                    error.summary = e.get_error_type_summary(),
-                    error.details = %e,
-                );
-                tracing::debug!(decision = "db_write_complete", symbol = %symbol_for_log, interval = %interval_for_log, result = ?e, "数据库写入任务完成");
                 Err(e)
             },
             Err(join_error) => {
-                let panic_error = AppError::DatabaseError(format!("数据库写入任务 panic: {:?}", join_error));
-                // 埋点：DB写入失败 (任务Panic)
-                tracing::info!(
-                    log_type = "transaction",
-                    transaction_id,
-                    event_name = "db_write_failure",
-                    reason = "task_panic",
-                    error.summary = panic_error.get_error_type_summary(),
-                    error.details = %panic_error,
-                );
-                tracing::error!(
-                    message = "数据库写入任务panic",
-                    symbol = %symbol_for_log,
-                    interval = %interval_for_log,
-                    error.summary = panic_error.get_error_type_summary(),
-                    error.details = %panic_error
-                );
+                let panic_error = AppError::DatabaseError(format!("K线数据持久化任务 panic: {:?}", join_error));
                 Err(panic_error)
             }
         }
     }
 
     /// 静态版本的写入任务处理函数，用于在 spawn_blocking 中执行
-    #[instrument(skip_all, ret, err)]
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval, kline_count = klines.len()))]
     fn process_write_task_static(pool: &DbPool, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
-        let start_time = std::time::Instant::now();
+        let _start_time = std::time::Instant::now();
 
         if klines.is_empty() {
-            tracing::debug!(decision = "empty_klines", symbol = %symbol, interval = %interval, "K线数据为空，跳过处理");
             return Ok(0);
         }
-
-        tracing::debug!(decision = "db_transaction_start", symbol = %symbol, interval = %interval, kline_count = klines.len(), "开始数据库事务处理");
 
         // 创建表名
         let symbol_lower = symbol.to_lowercase().replace("usdt", "");
@@ -202,51 +128,20 @@ impl DbWriteQueueProcessor {
 
         // 获取数据库连接
         let mut conn = pool.get()
-            .map_err(|e| {
-                let conn_error = AppError::DatabaseError(format!("获取数据库连接失败: {}", e));
-                tracing::error!(
-                    message = "获取数据库连接失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    error.summary = conn_error.get_error_type_summary(),
-                    error.details = %conn_error
-                );
-                conn_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("获取数据库连接失败: {}", e)))?;
 
-        // ✨ 优化：使用缓存避免重复的表创建检查
+        // 使用缓存避免重复的表创建检查
         if !CREATED_TABLES.contains(&table_name) {
             Self::ensure_symbol_table_static(&conn, symbol, interval, &table_name)?;
             CREATED_TABLES.insert(table_name.clone());
-            tracing::debug!(
-                decision = "table_created_and_cached",
-                table_name = %table_name,
-                "表创建完成并加入缓存"
-            );
         }
 
         // 开始事务
         let tx = conn.transaction()
-            .map_err(|e| {
-                let tx_error = AppError::DatabaseError(format!("开始事务失败: {}", e));
-                tracing::error!(
-                    message = "开始事务失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    table_name = %table_name,
-                    error.summary = tx_error.get_error_type_summary(),
-                    error.details = %tx_error
-                );
-                tx_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("开始事务失败: {}", e)))?;
 
         let mut count = 0;
 
-        // ✨ [修复循环聚合] ✨
-        // 1. 字段名从total_klines改为task_count以匹配distiller的期望
-        // 2. 增加iterator_type字段，让日志更易读
-        // 3. 添加concurrency字段标明这是串行处理
-        // ✨ 性能优化：使用 UPSERT 语句替代 SELECT + INSERT/UPDATE 双重操作
         let upsert_sql = format!(
             "INSERT INTO {} (open_time, open, high, low, close, volume, close_time, quote_asset_volume)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -261,42 +156,12 @@ impl DbWriteQueueProcessor {
             table_name
         );
 
-        let kline_processing_loop_span = tracing::info_span!(
-            "kline_upsert_loop",
-            iterator_type = "kline",
-            task_count = klines.len(),
-            concurrency = 1,
-            operation = "upsert"
-        );
-
-        let _enter = kline_processing_loop_span.enter();
-
         // 准备UPSERT语句
         let mut stmt = tx.prepare(&upsert_sql)
-            .map_err(|e| {
-                let prepare_error = AppError::DatabaseError(format!("准备UPSERT语句失败: {}", e));
-                tracing::error!(
-                    message = "准备UPSERT语句失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    table_name = %table_name,
-                    sql = %upsert_sql,
-                    error.summary = prepare_error.get_error_type_summary(),
-                    error.details = %prepare_error
-                );
-                prepare_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("准备UPSERT语句失败: {}", e)))?;
 
         // 批量执行UPSERT操作
-        for (index, kline) in klines.iter().enumerate() {
-            // ✨ 为每一次UPSERT操作创建一个子Span
-            let iteration_span = tracing::info_span!(
-                "db_kline_upsert",
-                kline_index = index,
-                open_time = kline.open_time
-            );
-            let _iteration_enter = iteration_span.enter();
-
+        for kline in klines.iter() {
             match stmt.execute(params![
                 kline.open_time,
                 kline.open,
@@ -308,29 +173,18 @@ impl DbWriteQueueProcessor {
                 kline.quote_asset_volume,
             ]) {
                 Ok(changed_rows) => {
-                    count += changed_rows; // 每次UPSERT操作影响一行
-                    tracing::debug!(
-                        decision = "kline_upsert_success",
-                        changed_rows = changed_rows,
-                        "K线UPSERT操作成功"
-                    );
+                    count += changed_rows;
                 },
                 Err(e) => {
-                    // 先释放stmt，然后回滚事务
+                    // 添加详细错误日志
+                    error!(
+                        table_name = %table_name,
+                        error_chain = format!("{:#}", e),
+                        message = "批量UPSERT操作中，单条K线执行失败"
+                    );
                     drop(stmt);
                     let _ = tx.rollback();
                     let upsert_error = AppError::DatabaseError(format!("UPSERT K线失败: {}", e));
-                    error!(log_type = "module", "❌ 数据库UPSERT失败，需要检查数据库状态: 表={}, K线索引={}, 错误={}", table_name, index, e);
-                    tracing::error!(
-                        message = "UPSERT K线失败",
-                        symbol = %symbol,
-                        interval = %interval,
-                        kline_index = index,
-                        table_name = %table_name,
-                        open_time = kline.open_time,
-                        error.summary = upsert_error.get_error_type_summary(),
-                        error.details = %upsert_error
-                    );
                     return Err(upsert_error);
                 }
             }
@@ -340,50 +194,22 @@ impl DbWriteQueueProcessor {
         drop(stmt);
 
         // 提交事务
-        tx.commit()
-            .map_err(|e| {
-                let commit_error = AppError::DatabaseError(format!("提交事务失败: {}", e));
-                tracing::error!(
-                    message = "提交事务失败",
-                    symbol = %symbol,
-                    interval = %interval,
+        match tx.commit() {
+            Ok(_) => {
+                DB_OPERATIONS.0.fetch_add(count, Ordering::SeqCst);
+            }
+            Err(e) => {
+                error!(
+                    // log_type 会从父Span继承
                     table_name = %table_name,
-                    error.summary = commit_error.get_error_type_summary(),
-                    error.details = %commit_error
+                    kline_count = klines.len(),
+                    error_chain = format!("{:#}", e),
+                    message = "数据库事务提交失败"
                 );
-                commit_error
-            })?;
-
-        let duration_ms = start_time.elapsed().as_millis();
-
-        // ✨ [性能断言] 检查数据库写入性能 - 考虑批处理大小的影响
-        if !klines.is_empty() {
-            let avg_time_per_kline_ms = duration_ms as f64 / klines.len() as f64;
-            let batch_size = klines.len();
-
-            // 根据批处理大小动态调整性能阈值
-            // 小批量（<50）允许更高的平均耗时，因为固定开销被分摊到少量记录上
-            let max_avg_write_time_ms = if batch_size < 50 {
-                100.0 // 小批量允许100ms平均耗时
-            } else if batch_size < 200 {
-                20.0  // 中等批量允许20ms平均耗时
-            } else {
-                10.0  // 大批量要求10ms平均耗时
-            };
-
-            crate::soft_assert!(
-                avg_time_per_kline_ms <= max_avg_write_time_ms,
-                message = "数据库单条K线平均写入耗时过长。",
-                expected_max_avg_ms = max_avg_write_time_ms,
-                actual_avg_ms = avg_time_per_kline_ms,
-                batch_size = batch_size,
-                symbol = symbol.to_string(),
-                condition = "avg_time_per_kline_ms <= MAX_AVG_WRITE_TIME_MS",
-            );
+                let commit_error = AppError::DatabaseError(format!("提交事务失败: {}", e));
+                return Err(commit_error);
+            }
         }
-
-        // ✨ 更新全局统计信息 - UPSERT操作统一计为插入操作
-        DB_OPERATIONS.0.fetch_add(count, Ordering::SeqCst);
 
         // 记录统计信息（每10秒输出一次）
         let (insert_count, update_count, last_log_time) = &*DB_OPERATIONS;
@@ -391,23 +217,11 @@ impl DbWriteQueueProcessor {
         let now = Instant::now();
 
         if now.duration_since(*last_time).as_secs() >= DB_LOG_INTERVAL {
-            let total_inserts = insert_count.load(Ordering::SeqCst);
-            let total_updates = update_count.load(Ordering::SeqCst);
-            info!(log_type = "module",
-                "📊 数据库操作统计: 插入={}, 更新={}, 总计={}",
-                total_inserts, total_updates, total_inserts + total_updates
-            );
+            let _total_inserts = insert_count.load(Ordering::SeqCst);
+            let _total_updates = update_count.load(Ordering::SeqCst);
             *last_time = now;
         }
 
-        tracing::debug!(
-            decision = "db_transaction_complete",
-            symbol = %symbol,
-            interval = %interval,
-            total_processed = count,
-            operation = "upsert",
-            "数据库UPSERT事务成功完成"
-        );
         Ok(count)
     }
 
@@ -435,7 +249,6 @@ impl DbWriteQueueProcessor {
             .map_err(|e| AppError::DatabaseError(format!("开始事务失败: {}", e)))?;
 
         let mut count = 0;
-        let mut _updated = 0;
 
         // 处理每个K线
         for kline in klines {
@@ -467,11 +280,9 @@ impl DbWriteQueueProcessor {
 
                 match result {
                     Ok(_) => {
-                        _updated += 1;
                         count += 1;
                     },
                     Err(e) => {
-                        // 回滚事务
                         let _ = tx.rollback();
                         return Err(AppError::DatabaseError(format!("更新K线失败: {}", e)));
                     }
@@ -499,13 +310,6 @@ impl DbWriteQueueProcessor {
                     Ok(_) => count += 1,
                     Err(e) => {
                         let _ = tx.rollback();
-                        // ✨ [错误记录]: 在返回错误前，记录更详细的上下文
-                        tracing::error!(
-                            message = %format!("数据库写入失败: {}", e),
-                            error.type = "DatabaseError",
-                            table_name = %table_name,
-                            failed_at_kline_index = count // 当前处理的K线索引
-                        );
                         return Err(AppError::DatabaseError(format!("插入K线失败: {}", e)));
                     }
                 }
@@ -516,13 +320,17 @@ impl DbWriteQueueProcessor {
         tx.commit()
             .map_err(|e| AppError::DatabaseError(format!("提交事务失败: {}", e)))?;
 
-        //debug!("成功保存 {} 条K线数据到表 {} (更新: {})", count, table_name, updated);
         Ok(count)
     }
 
     /// 静态版本的确保表存在函数，用于在 spawn_blocking 中执行
-    #[instrument(skip(conn), fields(table_name = %table_name), ret, err)]
     fn ensure_symbol_table_static(conn: &rusqlite::Connection, _symbol: &str, _interval: &str, table_name: &str) -> Result<()> {
+        // ✨ [新增] 低频日志：记录表的首次创建动作
+        // debug!(
+        //     log_type = "low_freq",
+        //     table_name = %table_name,
+        //     message = "确保K线表存在 (CREATE TABLE IF NOT EXISTS)"
+        // );
         // 创建表
         let create_table_sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (
@@ -539,18 +347,7 @@ impl DbWriteQueueProcessor {
         );
 
         conn.execute(&create_table_sql, [])
-            .map_err(|e| {
-                let table_error = AppError::DatabaseError(format!("创建表 {} 失败: {}", table_name, e));
-                tracing::error!(
-                    message = "创建表失败",
-                    table_name = %table_name,
-                    error.summary = table_error.get_error_type_summary(),
-                    error.details = %table_error
-                );
-                table_error
-            })?;
-
-        tracing::debug!(decision = "table_created", table_name = %table_name, "数据库表创建或确认存在");
+            .map_err(|e| AppError::DatabaseError(format!("创建表 {} 失败: {}", table_name, e)))?;
         Ok(())
     }
 
@@ -592,10 +389,8 @@ pub struct Database {
 
 impl Database {
     /// Create a new database connection with WAL mode and optimized settings
-    #[instrument(skip(db_path), fields(db_path = %db_path.as_ref().display()), ret, err)]
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let db_path = db_path.as_ref();
-        tracing::debug!(decision = "db_init_start", db_path = %db_path.display(), "开始初始化数据库");
 
         // Ensure parent directory exists for database
         if let Some(parent) = db_path.parent() {
@@ -603,8 +398,6 @@ impl Database {
                 std::fs::create_dir_all(parent)?;
             }
         }
-
-        info!(log_type = "module", "Using SQLite database with optimized performance settings at {}", db_path.display());
 
         // Create database connection manager with WAL mode and performance optimizations
         let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
@@ -624,18 +417,9 @@ impl Database {
         let pool = Pool::builder()
             .max_size(10) // 减少到10个并发连接，减少锁竞争
             .build(manager)
-            .map_err(|e| {
-                let pool_error = AppError::DatabaseError(format!("Failed to create connection pool: {}", e));
-                tracing::error!(
-                    message = "创建连接池失败",
-                    db_path = %db_path.display(),
-                    error.summary = pool_error.get_error_type_summary(),
-                    error.details = %pool_error
-                );
-                pool_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to create connection pool: {}", e)))?;
 
-        // ✨ 6. [修改] 创建 Tokio 的 mpsc 写入队列通道
+        // 创建 Tokio 的 mpsc 写入队列通道
         let (sender, receiver) = mpsc::channel(5000); // 队列最多容纳5000个写入任务
 
         // 创建写入队列处理器
@@ -652,41 +436,15 @@ impl Database {
         };
 
         // Initialize database tables
-        match db.init_db() {
-            Ok(_) => {
-                info!(log_type = "module", "✅ SQLite数据库初始化成功，已启用写入队列和性能优化");
-                tracing::debug!(decision = "db_init_success", "数据库初始化成功");
-            },
-            Err(e) => {
-                error!(log_type = "module", "❌ 数据库初始化失败，程序无法继续: {}", e);
-                tracing::error!(
-                    message = "数据库初始化失败",
-                    db_path = %db_path.display(),
-                    error.summary = e.get_error_type_summary(),
-                    error.details = %e
-                );
-                return Err(e);
-            }
-        }
+        db.init_db()?;
 
         Ok(db)
     }
 
     /// Initialize database tables
-    #[instrument(ret, err)]
     fn init_db(&self) -> Result<()> {
-        tracing::debug!(decision = "init_db_start", "开始初始化数据库表");
-
         let conn = self.pool.get()
-            .map_err(|e| {
-                let conn_error = AppError::DatabaseError(format!("Failed to get connection: {}", e));
-                tracing::error!(
-                    message = "获取数据库连接失败",
-                    error.summary = conn_error.get_error_type_summary(),
-                    error.details = %conn_error
-                );
-                conn_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
         // Create symbols table
         conn.execute(
@@ -698,35 +456,15 @@ impl Database {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
             [],
-        ).map_err(|e| {
-            let table_error = AppError::DatabaseError(format!("Failed to create symbols table: {}", e));
-            tracing::error!(
-                message = "创建symbols表失败",
-                error.summary = table_error.get_error_type_summary(),
-                error.details = %table_error
-            );
-            table_error
-        })?;
+        ).map_err(|e| AppError::DatabaseError(format!("Failed to create symbols table: {}", e)))?;
 
-        tracing::debug!(decision = "init_db_complete", "数据库表初始化完成");
         Ok(())
     }
 
     /// Ensure table exists for a specific symbol and interval
-    #[instrument(skip(self, symbol, interval), fields(symbol = %symbol, interval = %interval), ret, err)]
     pub fn ensure_symbol_table(&self, symbol: &str, interval: &str) -> Result<()> {
         let conn = self.pool.get()
-            .map_err(|e| {
-                let conn_error = AppError::DatabaseError(format!("Failed to get connection: {}", e));
-                tracing::error!(
-                    message = "获取数据库连接失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    error.summary = conn_error.get_error_type_summary(),
-                    error.details = %conn_error
-                );
-                conn_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
         // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // Remove "USDT" suffix from symbol name
@@ -752,65 +490,29 @@ impl Database {
         );
 
         conn.execute(&create_table_sql, [])
-            .map_err(|e| {
-                let table_error = AppError::DatabaseError(format!("Failed to create table {}: {}", table_name, e));
-                tracing::error!(
-                    message = "创建表失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    table_name = %table_name,
-                    error.summary = table_error.get_error_type_summary(),
-                    error.details = %table_error
-                );
-                table_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to create table {}: {}", table_name, e)))?;
 
-        tracing::debug!(decision = "table_ensured", symbol = %symbol, interval = %interval, table_name = %table_name, "数据库表创建或确认存在");
         Ok(())
     }
 
     /// Save a symbol to the database
-    #[instrument(skip(self, symbol, base_asset, quote_asset, status), fields(symbol = %symbol, base_asset = %base_asset, quote_asset = %quote_asset, status = %status), ret, err)]
     pub fn save_symbol(&self, symbol: &str, base_asset: &str, quote_asset: &str, status: &str) -> Result<()> {
         let conn = self.pool.get()
-            .map_err(|e| {
-                let conn_error = AppError::DatabaseError(format!("Failed to get connection: {}", e));
-                tracing::error!(
-                    message = "获取数据库连接失败",
-                    symbol = %symbol,
-                    error.summary = conn_error.get_error_type_summary(),
-                    error.details = %conn_error
-                );
-                conn_error
-            })?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
         conn.execute(
             "INSERT OR REPLACE INTO symbols (symbol, base_asset, quote_asset, status) VALUES (?, ?, ?, ?)",
             params![symbol, base_asset, quote_asset, status],
-        ).map_err(|e| {
-            let save_error = AppError::DatabaseError(format!("Failed to save symbol: {}", e));
-            tracing::error!(
-                message = "保存符号失败",
-                symbol = %symbol,
-                error.summary = save_error.get_error_type_summary(),
-                error.details = %save_error
-            );
-            save_error
-        })?;
+        ).map_err(|e| AppError::DatabaseError(format!("Failed to save symbol: {}", e)))?;
 
-        tracing::debug!(decision = "symbol_saved", symbol = %symbol, "符号保存成功");
         Ok(())
     }
 
     /// Save klines to the database using the write queue (Async)
-    #[instrument(skip(self, klines), fields(symbol = %symbol, interval = %interval, kline_count = klines.len(), transaction_id = transaction_id), ret, err)]
     pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline], transaction_id: u64) -> Result<usize> {
         if klines.is_empty() {
-            tracing::debug!(decision = "empty_klines", symbol = %symbol, interval = %interval, "K线数据为空，跳过保存");
             return Ok(0);
         }
-
-        tracing::debug!(decision = "save_klines_start", symbol = %symbol, interval = %interval, kline_count = klines.len(), "开始保存K线数据到写入队列");
 
         // 确保表存在（这一步仍然需要，因为可能会有其他地方需要查询这个表）
         self.ensure_symbol_table(symbol, interval)?;
@@ -828,40 +530,21 @@ impl Database {
             interval: interval.to_string(),
             klines: klines_copy,
             result_sender,
-            // ✨ 调用 AppTraceContext::new()，它会根据编译特性选择正确的实现
-            context: AppTraceContext::new(),
+            // ✨ [修改] 直接捕获当前的 Span
+            span: Span::current(),
         };
 
-        // ✨ 7. [修改] 使用异步的 send().await
+        // 使用异步的 send().await
         if let Err(e) = self.write_queue_sender.send(task).await {
             let queue_error = AppError::DatabaseError(format!("无法将写入任务添加到队列: {}", e));
-            tracing::error!(
-                message = "写入任务队列发送失败",
-                symbol = %symbol,
-                interval = %interval,
-                error.summary = queue_error.get_error_type_summary(),
-                error.details = %queue_error
-            );
             return Err(queue_error);
         }
 
-        tracing::debug!(decision = "queue_task_sent", symbol = %symbol, interval = %interval, "写入任务已发送到队列，等待处理结果");
-
         // 异步等待写入操作完成并获取结果
         match result_receiver.await {
-            Ok(result) => {
-                tracing::debug!(decision = "save_result", symbol = %symbol, interval = %interval, result = ?result, "写入操作完成");
-                result
-            },
+            Ok(result) => result,
             Err(e) => {
                 let wait_error = AppError::DatabaseError(format!("等待写入操作结果时出错: {}", e));
-                tracing::error!(
-                    message = "等待写入操作结果失败",
-                    symbol = %symbol,
-                    interval = %interval,
-                    error.summary = wait_error.get_error_type_summary(),
-                    error.details = %wait_error
-                );
                 Err(wait_error)
             }
         }

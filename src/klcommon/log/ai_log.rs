@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use tracing::{Id, Subscriber};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
@@ -81,6 +81,10 @@ type LogStream = TcpStream;
 static LOG_CHANNEL_SENDER: Lazy<Mutex<Option<Sender<StructuredLog>>>> =
     Lazy::new(|| Mutex::new(None));
 
+// ✨ [新增] 全局后台线程句柄
+static AI_LOG_WORKER_HANDLE: Lazy<Mutex<Option<JoinHandle<()>>>> =
+    Lazy::new(|| Mutex::new(None));
+
 /// 初始化异步日志发送器，启动后台工作线程处理批量日志。
 /// 在`main`函数开始时调用一次。
 pub fn init_log_sender(pipe_name: &str) {
@@ -94,18 +98,38 @@ pub fn init_log_sender(pipe_name: &str) {
     let pipe_name_clone = pipe_name.to_string();
 
     // 4. 启动专用的OS线程来处理日志I/O
-    thread::Builder::new()
+    // ✨ [修改] 捕获线程句柄
+    let handle = thread::Builder::new()
         .name("ai_log_worker".into())
         .spawn(move || {
             log_worker_loop(rx, &pipe_name_clone);
         })
         .expect("无法启动AI日志工作线程");
 
+    // ✨ [新增] 保存句柄
+    *AI_LOG_WORKER_HANDLE.lock().unwrap() = Some(handle);
+
     println!("[Log Sender] AI日志异步批量处理系统已启动，管道: {}", pipe_name);
 }
 
+// ✨ [新增] 关闭函数
+pub fn shutdown_log_sender() {
+    println!("[Log Sender] 正在关闭AI日志系统...");
+
+    if let Some(sender) = LOG_CHANNEL_SENDER.lock().unwrap().take() {
+        drop(sender);
+    }
+
+    if let Some(handle) = AI_LOG_WORKER_HANDLE.lock().unwrap().take() {
+        match handle.join() {
+            Ok(_) => println!("[Log Sender] AI日志工作线程已成功关闭。"),
+            Err(e) => eprintln!("[Log Sender] 等待AI日志工作线程关闭时发生错误: {:?}", e),
+        }
+    }
+}
+
 /// 后台工作线程的主循环，负责批量处理日志
-/// 严格按照"1000条或5秒"的规则进行批量传输
+/// 采用简化的生产者-消费者模型，严格执行 "BATCH_SIZE条 或 BATCH_TIMEOUT" 规则
 fn log_worker_loop(rx: Receiver<StructuredLog>, pipe_name: &str) {
     // 初始化连接和文件句柄
     let mut daemon_stream = init_daemon_connection(pipe_name);
@@ -114,82 +138,61 @@ fn log_worker_loop(rx: Receiver<StructuredLog>, pipe_name: &str) {
     // 批量缓冲区
     let mut batch_buffer = Vec::with_capacity(BATCH_SIZE);
 
-    println!("[Log Worker] 后台日志工作线程已启动 (批量规则: {}条或{}秒)", BATCH_SIZE, BATCH_TIMEOUT.as_secs());
+    println!(
+        "[Log Worker] 后台日志工作线程已启动 (批量规则: {}条或{}秒)",
+        BATCH_SIZE,
+        BATCH_TIMEOUT.as_secs()
+    );
 
-    loop {
-        // 如果缓冲区为空，等待第一条日志（可能超时）
-        if batch_buffer.is_empty() {
-            match rx.recv_timeout(BATCH_TIMEOUT) {
+    // 主循环：通过阻塞式recv等待一个新批次的开始。
+    // 当通道关闭时，rx.recv()会返回Err，循环自然终止。
+    while let Ok(first_log) = rx.recv() {
+        batch_buffer.push(first_log);
+        let batch_start_time = Instant::now();
+
+        // 内部循环：贪婪地收集更多日志，直到批次满或超时。
+        while batch_buffer.len() < BATCH_SIZE {
+            // 计算距离上次批次开始已经过了多长时间
+            let elapsed = batch_start_time.elapsed();
+
+            // 如果已经超时，立即跳出内部循环去处理批次
+            if elapsed >= BATCH_TIMEOUT {
+                break;
+            }
+
+            // 计算剩余的等待时间
+            let remaining_timeout = BATCH_TIMEOUT - elapsed;
+
+            // 在剩余时间内等待新日志
+            match rx.recv_timeout(remaining_timeout) {
                 Ok(log) => {
                     batch_buffer.push(log);
-                    // 继续收集更多日志，但不超过BATCH_SIZE
-                    collect_more_logs(&rx, &mut batch_buffer);
-                    // 如果达到BATCH_SIZE，立即处理
-                    if batch_buffer.len() >= BATCH_SIZE {
-                        process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
-                        continue;
-                    }
                 }
+                // Err意味着超时或通道关闭，两种情况都应结束当前批次的收集
                 Err(_) => {
-                    // 超时但缓冲区为空，继续等待
-                    continue;
+                    break;
                 }
             }
         }
 
-        // 缓冲区不为空，等待更多日志或超时
-        match rx.recv_timeout(BATCH_TIMEOUT) {
-            Ok(log) => {
-                batch_buffer.push(log);
-                // 继续收集更多日志
-                collect_more_logs(&rx, &mut batch_buffer);
-                // 检查是否达到批量大小
-                if batch_buffer.len() >= BATCH_SIZE {
-                    process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
-                }
-            }
-            Err(_) => {
-                // 超时，处理当前批次（如果有的话）
-                if !batch_buffer.is_empty() {
-                    process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
-                }
-            }
-        }
-
-        // 检查通道是否已关闭
-        if rx.is_empty() && rx.len() == 0 {
-            // 尝试一次非阻塞接收来检查通道状态
-            match rx.try_recv() {
-                Err(TryRecvError::Disconnected) => {
-                    // 通道关闭，处理剩余日志后退出
-                    if !batch_buffer.is_empty() {
-                        process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
-                    }
-                    println!("[Log Worker] 通道已关闭，工作线程退出");
-                    return;
-                }
-                Ok(log) => {
-                    // 还有日志，加入缓冲区
-                    batch_buffer.push(log);
-                }
-                Err(TryRecvError::Empty) => {
-                    // 通道为空但未关闭，继续循环
-                }
-            }
-        }
+        // 处理当前收集到的批次
+        // 无论是因为缓冲区满了、超时了还是通道关闭了，都把现有的日志处理掉
+        process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
+        // process_batch 内部会清空 buffer，为下一个批次做准备
     }
+
+    // 当 rx.recv() 返回 Err (意味着通道已关闭), 循环会结束。
+    // 在退出前，最后检查一次缓冲区，以防万一有未处理的日志。
+    // (虽然在上面的逻辑中，每次循环都会清空，但这是一个好的健壮性实践)
+    if !batch_buffer.is_empty() {
+        println!("[Log Worker] 处理关闭前的最后一批日志...");
+        process_batch(&mut batch_buffer, &mut daemon_stream, &mut local_writer);
+    }
+
+    println!("[Log Worker] 通道已关闭，工作线程优雅退出");
 }
 
-/// 收集更多日志到缓冲区，但不超过BATCH_SIZE
-fn collect_more_logs(rx: &Receiver<StructuredLog>, batch_buffer: &mut Vec<StructuredLog>) {
-    while batch_buffer.len() < BATCH_SIZE {
-        match rx.try_recv() {
-            Ok(log) => batch_buffer.push(log),
-            Err(TryRecvError::Empty) => break, // 没有更多日志
-            Err(TryRecvError::Disconnected) => break, // 通道关闭
-        }
-    }
-}
+
 
 /// 初始化到daemon的连接
 fn init_daemon_connection(pipe_name: &str) -> Option<LogStream> {

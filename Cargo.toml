@@ -24,13 +24,14 @@ path = "src/bin/kline_data_service.rs"
 name = "kline_aggregate_service"
 path = "src/bin/kline_aggregate_service.rs"
 
-[[bin]]
-name = "test_cerberus"
-path = "src/bin/test_cerberus.rs"
+# 暂时注释掉缺失的测试二进制文件
+# [[bin]]
+# name = "test_cerberus"
+# path = "src/bin/test_cerberus.rs"
 
-[[bin]]
-name = "test_soft_assert"
-path = "src/bin/test_soft_assert.rs"
+# [[bin]]
+# name = "test_soft_assert"
+# path = "src/bin/test_soft_assert.rs"
 
 
 
@@ -111,6 +112,9 @@ tracing-appender = "0.2"
 tracing-log = "0.2"
 # 追踪上下文传递支持
 tracing-futures = "0.2"
+# 性能分析支持
+tracing-flame = "0.2"
+kline-macros = { path = "macros" }
 rusqlite = { version = "0.29", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.22"

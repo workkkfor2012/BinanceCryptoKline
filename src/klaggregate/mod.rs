@@ -188,7 +188,7 @@ impl KlineAggregateSystem {
         let symbols = self.symbol_registry.get_all_symbols().await?;
         let mut aggregators = self.aggregators.write().await;
 
-        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "module", event_name = "聚合器初始化开始", symbols_count = symbols.len(), "🔧 开始初始化 {} 个品种的K线聚合器", symbols.len());
+        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "low_freq", event_name = "聚合器初始化开始", symbols_count = symbols.len(), "🔧 开始初始化 {} 个品种的K线聚合器", symbols.len());
 
         for (symbol, symbol_index) in symbols {
             let aggregator = Arc::new(SymbolKlineAggregator::new(
@@ -205,14 +205,14 @@ impl KlineAggregateSystem {
             aggregators.push(aggregator);
         }
 
-        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "module", event_name = "聚合器初始化完成", aggregators_count = aggregators.len(), "✅ 已初始化 {} 个品种的K线聚合器", aggregators.len());
+        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "low_freq", event_name = "聚合器初始化完成", aggregators_count = aggregators.len(), "✅ 已初始化 {} 个品种的K线聚合器", aggregators.len());
         Ok(())
     }
 
     /// 停止系统
     #[instrument(target = KLINE_AGGREGATE_SYSTEM, skip(self), err)]
     pub async fn stop(&self) -> Result<()> {
-        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "module", event_name = "系统停止开始", "🛑 停止K线聚合系统...");
+        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "low_freq", event_name = "系统停止开始", "🛑 停止K线聚合系统...");
 
         // 停止市场数据接入
         self.market_ingestor.stop().await?;
@@ -223,7 +223,7 @@ impl KlineAggregateSystem {
         // 停止双缓冲存储调度器
         self.buffered_store.stop_scheduler().await?;
 
-        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "module", event_name = "系统停止完成", "✅ K线聚合系统已停止");
+        info!(target: KLINE_AGGREGATE_SYSTEM, log_type = "low_freq", event_name = "系统停止完成", "✅ K线聚合系统已停止");
         Ok(())
     }
     

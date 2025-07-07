@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry
 
 // 使用库中的模块
 use kline_server::klcommon::Database;
+use kline_server::klcommon::context::init_tracing_config;
 use kline_server::klserver::web;
 
 // 硬编码参数
@@ -17,6 +18,9 @@ const SKIP_CHECK: bool = false;
 async fn main() -> Result<()> {
     // 使用硬编码参数
     let verbose = VERBOSE;
+
+    // Initialize tracing configuration
+    init_tracing_config(cfg!(debug_assertions)); // 调试模式启用，发布模式禁用
 
     // Initialize logging
     init_logging(verbose);

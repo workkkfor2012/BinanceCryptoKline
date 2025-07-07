@@ -1,8 +1,10 @@
 //! src/klcommon/context.rs
-//! 追踪上下文的抽象层
+//! 追踪上下文的零成本抽象
 
 use tracing::Span;
 use std::sync::OnceLock;
+use tracing_futures::Instrument;
+use std::future::Future;
 
 /// 全局配置：是否启用完全追踪
 static ENABLE_FULL_TRACING: OnceLock<bool> = OnceLock::new();
@@ -12,45 +14,23 @@ pub fn init_tracing_config(enable_full_tracing: bool) {
     ENABLE_FULL_TRACING.set(enable_full_tracing).ok();
 }
 
-/// 检查是否启用完全追踪
-pub fn is_full_tracing_enabled() -> bool {
-    *ENABLE_FULL_TRACING.get().unwrap_or(&true)
+/// 检查是否启用完全追踪（内部使用，默认禁用更安全）
+fn is_full_tracing_enabled() -> bool {
+    *ENABLE_FULL_TRACING.get().unwrap_or(&false)
 }
 
-/// 定义一个可被克隆的、可跨线程传递的上下文对象 Trait
-pub trait TraceContext: Clone + Send + Sync + 'static {
-    /// 在当前上下文中创建一个新的上下文实例
-    fn new() -> Self where Self: Sized;
-
-    /// 使用此上下文来包裹一个 Future
-    #[allow(async_fn_in_trait)]
-    async fn instrument<F: std::future::Future>(&self, future: F) -> F::Output;
-}
-
-//--- 运行时配置的实现 ---//
-
-#[derive(Clone, Debug)]
-pub struct AppTraceContext {
-    span: Option<Span>,
-}
-
-impl TraceContext for AppTraceContext {
-    fn new() -> Self {
-        if is_full_tracing_enabled() {
-            Self { span: Some(Span::current()) }
-        } else {
-            Self { span: None }
-        }
-    }
-
-    async fn instrument<F: std::future::Future>(&self, future: F) -> F::Output {
-        if let Some(ref span) = self.span {
-            // 启用完全追踪时，使用tracing-futures
-            use tracing_futures::Instrument;
-            future.instrument(span.clone()).await
-        } else {
-            // 禁用追踪时，直接执行future
-            future.await
-        }
+/// 根据运行时配置，条件化地包裹一个 Future。
+///
+/// 这是推荐的方式，因为它比自定义 Trait 和 Struct 更直接、开销更低，
+/// 并且通过 `futures::future::Either` 实现了真正的零成本抽象。
+/// 当追踪被禁用时，此函数在编译后几乎没有额外开销。
+pub fn instrument_if_enabled<F>(future: F, span: Span) -> impl Future<Output = F::Output>
+where
+    F: Future,
+{
+    if is_full_tracing_enabled() {
+        futures::future::Either::Left(future.instrument(span))
+    } else {
+        futures::future::Either::Right(future)
     }
 }

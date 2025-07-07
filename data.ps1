@@ -20,7 +20,7 @@ if (-not (Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" -Force 
 Write-Host "🧹 清理日志文件..." -ForegroundColor Cyan
 $logFiles = @(
     "logs\ai_detailed.log",
-    "logs\module.log",
+    "logs\low_freq.log",
     "logs\problem_summary.log"
 )
 

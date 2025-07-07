@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
+use kline_macros::perf_profile;
 
 // Global counters for tracking insert and update operations
 // Format: (insert_count, update_count, last_log_time)
