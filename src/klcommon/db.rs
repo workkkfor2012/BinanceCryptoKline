@@ -10,7 +10,7 @@ use std::time::Instant;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 use tokio::task;
-use tracing::{Span, instrument, debug, error};
+use tracing::{Span, debug, error};
 use kline_macros::perf_profile;
 
 use tokio::sync::{mpsc, oneshot};
@@ -509,6 +509,7 @@ impl Database {
     }
 
     /// Save klines to the database using the write queue (Async)
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval, kline_count = klines.len()))]
     pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline], transaction_id: u64) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);
@@ -553,7 +554,7 @@ impl Database {
 
 
     /// Get the latest kline timestamp for a symbol and interval
-    // #[instrument] 移除：重复的数据库查询，在大循环中成为噪音，更高层的业务逻辑已隐含其耗时
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval))]
     pub fn get_latest_kline_timestamp(&self, symbol: &str, interval: &str) -> Result<Option<i64>> {
         // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // Remove "USDT" suffix from symbol name
@@ -602,7 +603,7 @@ impl Database {
     }
 
     /// 批量获取多个品种的最早K线时间戳（性能优化）
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn batch_get_earliest_kline_timestamps(&self, symbols: &[String], interval: &str) -> Result<Vec<(String, Option<i64>)>> {
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -656,7 +657,7 @@ impl Database {
     }
 
     /// Get the earliest kline timestamp for a symbol and interval
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_earliest_kline_timestamp(&self, symbol: &str, interval: &str) -> Result<Option<i64>> {
         // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // Remove "USDT" suffix from symbol name
@@ -705,7 +706,7 @@ impl Database {
     }
 
     /// Get the count of klines for a symbol and interval
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_kline_count(&self, symbol: &str, interval: &str) -> Result<i64> {
         // Create table name: k_symbol_interval (e.g., k_btc_1m)
         // Remove "USDT" suffix from symbol name
@@ -742,7 +743,7 @@ impl Database {
     // 注意：我们移除了异步方法，改为在KlineProcessor中使用tokio::task::spawn_blocking
 
     /// No longer limiting kline count, keep all data
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn trim_klines(&self, symbol: &str, interval: &str, _max_count: i64) -> Result<usize> {
         // No longer limiting kline count, just return 0
         debug!("K-line trimming disabled, keeping all data for {}/{}", symbol, interval);
@@ -812,7 +813,7 @@ impl Database {
     }
 
     /// Update existing kline data (called when is_closed=false)
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn update_kline(&self, symbol: &str, interval: &str, kline: &Kline) -> Result<()> {
         // Ensure table exists
         self.ensure_symbol_table(symbol, interval)?;
@@ -989,7 +990,7 @@ impl Database {
 
 
     /// Get all symbols from the database
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_all_symbols(&self) -> Result<Vec<String>> {
         let conn = self.pool.get()
             .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
@@ -1031,7 +1032,7 @@ impl Database {
     }
 
     /// Get the latest klines
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_latest_klines(&self, symbol: &str, interval: &str, limit: usize) -> Result<Vec<Kline>> {
         // Ensure table exists
         self.ensure_symbol_table(symbol, interval)?;
@@ -1081,7 +1082,7 @@ impl Database {
     }
 
     /// 获取指定时间范围内的K线数据
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_klines_in_range(&self, symbol: &str, interval: &str, start_time: i64, end_time: i64) -> Result<Vec<Kline>> {
         // 确保表存在
         self.ensure_symbol_table(symbol, interval)?;
@@ -1128,7 +1129,7 @@ impl Database {
     }
 
     /// 根据开始时间获取K线
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_kline_by_time(&self, symbol: &str, interval: &str, open_time: i64) -> Result<Option<Kline>> {
         // 确保表存在
         self.ensure_symbol_table(symbol, interval)?;
@@ -1170,7 +1171,7 @@ impl Database {
     }
 
     /// 获取指定时间之前的最后一根K线
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_last_kline_before(&self, symbol: &str, interval: &str, open_time: i64) -> Result<Option<Kline>> {
         // 确保表存在
         self.ensure_symbol_table(symbol, interval)?;
@@ -1212,7 +1213,7 @@ impl Database {
     }
 
     /// 获取倒数第二根K线
-    #[instrument(target = "Database", skip_all, err)]
+    #[perf_profile(skip_all, err)]
     pub fn get_second_last_kline(&self, symbol: &str, interval: &str) -> Result<Option<Kline>> {
         // 确保表存在
         self.ensure_symbol_table(symbol, interval)?;

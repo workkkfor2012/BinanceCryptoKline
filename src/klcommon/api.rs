@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::{warn, error}; // 导入 warn 和 error 宏
+use kline_macros::perf_profile;
 
 /// 将时间间隔转换为毫秒数
 /// 例如: "1m" -> 60000, "1h" -> 3600000
@@ -114,6 +115,7 @@ impl BinanceApi {
     }
 
     /// 获取交易所信息
+    #[perf_profile]
     pub async fn get_exchange_info(&self) -> Result<ExchangeInfo> {
         let fapi_url = format!("{}/fapi/v1/exchangeInfo", self.api_url);
         let client = self.create_client()?;
@@ -141,6 +143,7 @@ impl BinanceApi {
     }
 
     /// 获取正在交易的U本位永续合约
+    #[perf_profile]
     pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
         const MAX_RETRIES: usize = 5;
         const RETRY_INTERVAL: u64 = 1;
@@ -191,6 +194,7 @@ impl BinanceApi {
     }
 
     /// 下载连续合约K线数据
+    #[perf_profile(skip_all, fields(symbol = %task.symbol, interval = %task.interval))]
     pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
         // 构建URL参数
         let mut url_params = format!(
@@ -264,6 +268,7 @@ impl BinanceApi {
     }
 
     /// 获取币安服务器时间
+    #[perf_profile]
     pub async fn get_server_time(&self) -> Result<ServerTime> {
         let fapi_url = format!("{}/fapi/v1/time", self.api_url);
         const MAX_RETRIES: usize = 5;

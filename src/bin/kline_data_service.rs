@@ -1,6 +1,7 @@
 // K线数据服务主程序 - 专注于K线补齐功能
 use kline_server::klcommon::{Database, Result, AppError, AggregateConfig};
 use kline_server::kldata::KlineBackfiller;
+use kline_macros::perf_profile;
 
 use std::sync::Arc;
 use std::path::Path;
@@ -59,6 +60,7 @@ async fn main() -> Result<()> {
 }
 
 /// 应用程序的核心业务逻辑
+#[perf_profile]
 async fn run_app() -> Result<()> {
     // 在 run_app 开始时增加低频日志，标记核心业务逻辑的开始
     info!(log_type = "low_freq", message = "核心应用逻辑开始执行");
@@ -112,56 +114,51 @@ async fn init_ai_logging() -> Result<Box<dyn Drop + Send + Sync>> {
     use kline_server::klcommon::context::init_tracing_config;
     init_tracing_config(enable_full_tracing);
 
-    // 1. 初始化异步批量日志发送器（所有复杂逻辑都在ai_log模块内部处理）
+    // [恢复] 初始化所有自定义日志组件
     init_log_sender(&pipe_name);
-
-    // 2. 初始化本地的问题摘要日志文件
-    if let Err(e) = init_problem_summary_log("logs/problem_summary.log") {
-        eprintln!("[Init] Failed to create problem summary log: {}", e);
-    }
-
-    // 3. 初始化低频日志文件
-    if let Err(e) = init_low_freq_log("logs/low_freq.log") {
-        eprintln!("[Init] Failed to create low frequency log: {}", e);
-    }
+    init_problem_summary_log("logs/problem_summary.log").ok();
+    init_low_freq_log("logs/low_freq.log").ok();
 
     // --- 日志订阅者设置核心逻辑 ---
 
-    // 1. 创建业务日志过滤器字符串
+    // 1. [恢复] 创建分离的业务日志过滤器字符串
     let business_filter_str = format!(
         "{},perf=off,hyper=warn,reqwest=warn,sqlx=warn,rusqlite=warn",
         log_level
     );
 
-    // 2. 初始化订阅者注册表，为每个层创建独立的过滤器
+    // 2. 初始化订阅者注册表，并为业务层应用业务过滤器
     let registry = Registry::default()
         .with(McpLayer.with_filter(EnvFilter::new(&business_filter_str)))
         .with(ProblemSummaryLayer.with_filter(EnvFilter::new(&business_filter_str)))
         .with(LowFreqLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)));
 
-    // 3. 条件性地添加性能分析层组
+    // 3. 条件性地准备性能分析层和其 guard
     let enable_perf_log = std::env::var("ENABLE_PERF_LOG").is_ok();
-    let final_guard: Box<dyn Drop + Send + Sync> = if enable_perf_log {
-        // 创建只关心 `target = "perf"` 的过滤器
+
+    // [最终方案] 使用 Option<Layer> 的惯用模式来处理条件层
+    let (perf_layer, final_guard): (Option<_>, Box<dyn Drop + Send + Sync>) = if enable_perf_log {
+        // [恢复] 创建只关心 `target = "perf"` 的性能过滤器
         let perf_filter = EnvFilter::new("perf=trace");
 
         // 创建 FlameLayer，并获得它的 guard
         let (flame_layer, flame_guard) = FlameLayer::with_file("logs/performance.folded")
             .map_err(|e| AppError::ConfigError(format!("Failed to create flamegraph file: {}", e)))?;
 
-        registry
-            .with(flame_layer.with_filter(perf_filter))
-            .init();
-
         eprintln!("性能日志系统已激活，日志将写入 logs/performance.folded");
 
-        // 返回真实的 guard
-        Box::new(flame_guard)
+        // 将 flame_layer 和真实的 guard 打包
+        (Some(flame_layer.with_filter(perf_filter)), Box::new(flame_guard))
     } else {
-        registry.init();
-        // 返回一个什么都不做的 "dummy guard"
-        Box::new(DummyGuard)
+        // 如果未启用，则层为 None，guard 为空实现
+        (None, Box::new(DummyGuard))
     };
+
+    // 4. 组装最终的订阅者并 **只初始化一次**
+    //    .with(perf_layer) 在 perf_layer 为 None 时是无操作的
+    registry
+        .with(perf_layer)
+        .init();
 
     eprintln!("统一日志系统初始化完成");
 

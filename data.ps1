@@ -21,7 +21,8 @@ Write-Host "🧹 清理日志文件..." -ForegroundColor Cyan
 $logFiles = @(
     "logs\ai_detailed.log",
     "logs\low_freq.log",
-    "logs\problem_summary.log"
+    "logs\problem_summary.log",
+    "logs\performance.folded"
 )
 
 foreach ($logFile in $logFiles) {
@@ -42,6 +43,10 @@ foreach ($logFile in $logFiles) {
 # 设置环境变量 - 使用命名管道传输到Log MCP
 Set-LoggingEnvironment
 $env:LOG_TRANSPORT = "named_pipe"
+
+# 启用性能日志分析
+$env:ENABLE_PERF_LOG = "1"
+Write-Host "🔥 性能日志分析已启用，将生成 logs\performance.folded" -ForegroundColor Magenta
 
 $buildMode = Get-BuildMode
 Write-Host "🚀 启动K线数据服务 ($buildMode)" -ForegroundColor Yellow

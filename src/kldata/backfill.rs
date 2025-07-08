@@ -125,6 +125,7 @@ impl KlineBackfiller {
     }
 
     /// 运行一次性补齐流程
+    #[perf_profile]
     pub async fn run_once(&self) -> Result<()> {
         let start_time = Instant::now();
 
@@ -344,6 +345,7 @@ impl KlineBackfiller {
         // 清理后的简化版本
     }
 
+    #[perf_profile]
     async fn get_symbols(&self) -> Result<Vec<String>> {
         if self.test_mode {
             return Ok(self.test_symbols.clone());
@@ -359,6 +361,7 @@ impl KlineBackfiller {
     }
 
     /// 获取数据库中已存在的K线表
+    #[perf_profile]
     fn get_existing_kline_tables(&self) -> Result<Vec<(String, String)>> {
         let conn = self.db.get_connection()?;
         let mut tables = Vec::new();
@@ -396,6 +399,7 @@ impl KlineBackfiller {
     }
 
     /// 预先创建所有需要的表
+    #[perf_profile]
     fn ensure_all_tables(&self, symbols: &[String]) -> Result<()> {
         // --- 新增逻辑 (2.1) ---
         // 逻辑：添加计数器以统计新创建和已存在的表的数量。
@@ -438,6 +442,7 @@ impl KlineBackfiller {
     }
 
     /// 创建所有下载任务的主函数
+    #[perf_profile]
     async fn create_all_download_tasks(&self, all_symbols: &[String]) -> Result<Vec<DownloadTask>> {
         let mut tasks = Vec::new();
 
@@ -481,6 +486,7 @@ impl KlineBackfiller {
     }
 
     /// 为已存在的交易对创建补齐任务
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval))]
     async fn create_task_for_existing_symbol(&self, symbol: &str, interval: &str) -> Result<Option<DownloadTask>> {
         let current_time = chrono::Utc::now().timestamp_millis();
 
@@ -526,6 +532,7 @@ impl KlineBackfiller {
     }
 
     /// 为新品种创建完整下载任务
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval))]
     async fn create_task_for_new_symbol(&self, symbol: &str, interval: &str) -> Result<DownloadTask> {
         let current_time = chrono::Utc::now().timestamp_millis();
         let start_time = self.calculate_historical_start_time(current_time, interval);
