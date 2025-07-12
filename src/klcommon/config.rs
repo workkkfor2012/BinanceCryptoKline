@@ -1,8 +1,27 @@
 //! K线聚合系统配置模块
 
 use serde::{Deserialize, Serialize};
-use crate::klaggregate::types::constants::*;
 use crate::klcommon::Result;
+
+/// 系统配置常量
+pub mod constants {
+    /// 默认缓冲区切换间隔（毫秒）
+    pub const DEFAULT_BUFFER_SWAP_INTERVAL_MS: u64 = 1000;
+
+    /// 默认持久化间隔（毫秒）
+    pub const DEFAULT_PERSISTENCE_INTERVAL_MS: u64 = 5000;
+
+    /// 默认支持的最大品种数
+    pub const DEFAULT_MAX_SYMBOLS: usize = 10000;
+
+    /// 默认支持的时间周期
+    pub const DEFAULT_INTERVALS: &[&str] = &["1m", "5m", "30m", "1h", "4h", "1d", "1w"];
+
+    /// CPU缓存行大小
+    pub const CACHE_LINE_SIZE: usize = 64;
+}
+
+use constants::*;
 
 /// 默认启用完全追踪功能
 fn default_enable_full_tracing() -> bool {
@@ -38,6 +57,18 @@ pub struct AggregateConfig {
 
     /// 持久化间隔（毫秒）
     pub persistence_interval_ms: u64,
+
+    /// Actor心跳间隔（秒）
+    pub actor_heartbeat_interval_s: Option<u64>,
+
+    /// Watchdog检查间隔（秒）
+    pub watchdog_check_interval_s: Option<u64>,
+
+    /// Watchdog Actor超时阈值（秒）
+    pub watchdog_actor_timeout_s: Option<u64>,
+
+    /// Actor通道容量（有界通道的缓冲区大小）
+    pub channel_capacity: Option<usize>,
 }
 
 /// 数据库配置

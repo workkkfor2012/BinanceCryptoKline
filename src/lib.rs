@@ -3,8 +3,8 @@ pub mod klcommon;
 pub mod kldata;
 pub mod klserver;
 pub mod models;
-pub mod klaggregate;
-pub mod klaggnew;
+// pub mod klagg_simple; // 老版本，已被 klagg_sub_threads 替代
+pub mod klagg_sub_threads;
 
 // Re-export error types
 pub use klcommon::error::AppError;

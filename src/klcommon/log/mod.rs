@@ -5,7 +5,6 @@
 // 这个模块包含以下功能：
 // 1. ai_log.rs - AI日志核心模块 (真相之源)，负责捕获所有tracing事件并发送到log_mcp_daemon
 // 2. ai_problem_summary.rs - AI问题摘要层，只捕获WARN/ERROR生成问题摘要文件
-// 3. observability.rs - 命名管道日志管理 (保留用于向后兼容)
 
 pub mod ai_log;
 
@@ -13,8 +12,8 @@ pub mod ai_log;
 #[macro_use]
 pub mod ai_problem_summary;
 
-pub mod observability;
 pub mod low_freq_log;
+pub mod beacon_log;
 
 // 导出AI日志系统核心类型
 pub use ai_log::{
@@ -35,14 +34,16 @@ pub use ai_problem_summary::{
     create_problem_summary_layer,
 };
 
-// 保留用于向后兼容
-pub use observability::{
-    NamedPipeLogManager,
-};
+
 
 pub use low_freq_log::{
     LowFreqLogLayer,
     init_low_freq_log,
+};
+
+pub use beacon_log::{
+    BeaconLogLayer,
+    init_beacon_log,
 };
 
 

@@ -34,9 +34,14 @@ class KlineSystemLauncher:
                     "description": "启动币安K线数据服务",
                     "category": "production"
                 },
-                "aggregate.ps1": {
-                    "name": "K线聚合系统",
-                    "description": "启动K线聚合服务",
+                "klagg_sub.ps1": {
+                    "name": "K线聚合系统 (分区聚合版-测试)",
+                    "description": "启动K线聚合服务 - 分区聚合版架构 (测试模式：8个主流品种)",
+                    "category": "development"
+                },
+                "klagg_sub_prod.ps1": {
+                    "name": "K线聚合系统 (分区聚合版-生产)",
+                    "description": "启动K线聚合服务 - 分区聚合版架构 (生产模式：所有活跃品种)",
                     "category": "production"
                 }
             },

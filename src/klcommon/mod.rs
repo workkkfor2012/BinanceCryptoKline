@@ -7,7 +7,8 @@ pub mod websocket;
 pub mod server_time_sync; // 服务器时间同步模块
 // pub mod aggkline; // 归集交易K线模块 - 暂时注释掉
 pub mod proxy; // 代理配置模块
-pub mod log; // 日志处理模块（包含observability和trace_visualization）
+pub mod log;
+pub mod logging_setup; // 日志处理模块（包含observability和trace_visualization）
 pub mod context; // 追踪上下文抽象层
 pub mod config; // 配置模块
 
@@ -18,8 +19,8 @@ pub use error::{Result, AppError};
 pub use api::BinanceApi;
 pub use websocket::{
     WebSocketClient, WebSocketConnection,
-    ContinuousKlineClient, ContinuousKlineConfig,
-    AggTradeClient, AggTradeConfig,
+    AggTradeClient, AggTradeConfig, AggTradeData,
+    MiniTickerClient, MiniTickerConfig, MiniTickerData, MiniTickerMessageHandler,
     BINANCE_WS_URL, WEBSOCKET_CONNECTION_COUNT
 };
 pub use server_time_sync::ServerTimeSyncManager; // 导出服务器时间同步管理器
@@ -42,8 +43,6 @@ pub use log::{
     SpanModel,
     SpanEvent,
     StructuredLog,
-    // 向后兼容
-    NamedPipeLogManager,
 };
 // 导出配置相关类型
 pub use config::{
@@ -54,3 +53,9 @@ pub use config::{
     PersistenceConfig,
     LoggingConfig,
 };
+
+// 测试模块
+#[cfg(test)]
+mod tests {
+    pub mod mini_ticker_tests;
+}

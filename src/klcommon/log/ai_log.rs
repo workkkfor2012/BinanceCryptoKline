@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::thread::{self, JoinHandle};
 use tracing::{Id, Subscriber};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
-use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use once_cell::sync::Lazy;
 
 // --- 1. 数据模型 (与 daemon 端完全一致) ---

@@ -64,6 +64,18 @@ pub enum AppError {
     #[error("Actor error: {0}")]
     ActorError(String),
 
+    #[error("Channel closed: {0}")]
+    ChannelClosed(String),
+
+    #[error("Operation timeout: {0}")]
+    Timeout(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Initialization error: {0}")]
+    InitializationError(String),
+
     #[error("Unknown error: {0}")]
     #[allow(dead_code)]
     Unknown(String),
@@ -111,6 +123,10 @@ impl AppError {
             AppError::AggregationError(_) => "kline_aggregation_logic_failed",
             AppError::ActorError(_) => "kline_processing_actor_failed",
             AppError::WebServerError(_) => "kline_api_server_failed",
+            AppError::ChannelClosed(_) => "kline_processing_channel_closed",
+            AppError::Timeout(_) => "kline_operation_timeout",
+            AppError::InvalidInput(_) => "kline_input_validation_failed",
+            AppError::InitializationError(_) => "kline_service_initialization_failed",
 
             // 未分类错误
             AppError::Unknown(_) => "kline_service_unknown_error",
@@ -142,7 +158,12 @@ impl AppError {
 
             // 系统级影响：可能影响整个服务
             AppError::IoError(_) |
-            AppError::ChannelError(_) => "medium", // 系统资源问题
+            AppError::ChannelError(_) |
+            AppError::ChannelClosed(_) => "medium", // 系统资源问题
+
+            AppError::Timeout(_) => "medium", // 超时问题
+            AppError::InvalidInput(_) => "low", // 输入验证问题
+            AppError::InitializationError(_) => "high", // 初始化失败影响服务启动
 
             // 其他错误
             _ => "medium", // 默认中等影响
@@ -163,6 +184,12 @@ impl AppError {
             AppError::IoError(_) |
             AppError::ChannelError(_) => true,
 
+            // 通道关闭通常不可重试（需要重新建立连接）
+            AppError::ChannelClosed(_) => false,
+
+            // 超时错误可重试
+            AppError::Timeout(_) => true,
+
             // 数据库锁争用等可重试
             AppError::DatabaseError(msg) => {
                 // 检查是否为锁争用或临时性错误
@@ -181,7 +208,9 @@ impl AppError {
             AppError::TimeParseError(_) |
             AppError::ConfigError(_) |
             AppError::UrlParseError(_) |
-            AppError::AddrParseError(_) => false,
+            AppError::AddrParseError(_) |
+            AppError::InvalidInput(_) |
+            AppError::InitializationError(_) => false,
 
             // 业务逻辑错误需要具体分析
             AppError::AggregationError(_) |

@@ -11,6 +11,7 @@ use chrono::Utc;
 /// 负责两个主要任务：
 /// 1. 每分钟的第30秒与服务器通信，获取服务器时间，计算时间差值
 /// 2. 测量获取服务器时间的延迟
+#[derive(Debug)]
 pub struct ServerTimeSyncManager {
     /// 币安API客户端
     api: BinanceApi,

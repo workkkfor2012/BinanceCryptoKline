@@ -162,13 +162,30 @@ impl KlineBackfiller {
         let mut final_failed_tasks_count = 0;
 
         if !failed_tasks.is_empty() {
-            let retry_tasks = self.prepare_retry_tasks(&failed_tasks);
-            if !retry_tasks.is_empty() {
-                let final_failed_tasks = self.execute_tasks(retry_tasks, "retry_download_loop").await;
-                final_failed_tasks_count = final_failed_tasks.len();
-                if !final_failed_tasks.is_empty() {
-                    self.report_final_failures(final_failed_tasks);
+            // 第一次重试
+            let retry_tasks_1 = self.prepare_retry_tasks_with_round(&failed_tasks, Some(1));
+            if !retry_tasks_1.is_empty() {
+                let failed_tasks_after_retry_1 = self.execute_tasks(retry_tasks_1, "retry_download_loop_1").await;
+
+                if !failed_tasks_after_retry_1.is_empty() {
+                    // 第二次重试
+                    let retry_tasks_2 = self.prepare_retry_tasks_with_round(&failed_tasks_after_retry_1, Some(2));
+                    if !retry_tasks_2.is_empty() {
+                        let final_failed_tasks = self.execute_tasks(retry_tasks_2, "retry_download_loop_2").await;
+                        final_failed_tasks_count = final_failed_tasks.len();
+                        if !final_failed_tasks.is_empty() {
+                            self.report_final_failures(final_failed_tasks);
+                        }
+                    } else {
+                        // 第二次重试没有可重试的任务，直接报告失败
+                        final_failed_tasks_count = failed_tasks_after_retry_1.len();
+                        self.report_final_failures(failed_tasks_after_retry_1);
+                    }
                 }
+            } else {
+                // 第一次重试没有可重试的任务，直接报告失败
+                final_failed_tasks_count = failed_tasks.len();
+                self.report_final_failures(failed_tasks);
             }
         }
 
@@ -293,8 +310,8 @@ impl KlineBackfiller {
         }
     }
 
-    /// 从失败任务中筛选出需要重试的任务
-    fn prepare_retry_tasks(&self, failed_tasks: &[(DownloadTask, AppError)]) -> Vec<DownloadTask> {
+    /// 从失败任务中筛选出需要重试的任务（带重试轮次信息）
+    fn prepare_retry_tasks_with_round(&self, failed_tasks: &[(DownloadTask, AppError)], retry_round: Option<u32>) -> Vec<DownloadTask> {
         let retry_keywords = [
             "HTTP error", "timeout", "429", "Too Many Requests", "handshake", "connection", "network"
         ];
@@ -308,9 +325,15 @@ impl KlineBackfiller {
             .collect();
 
         // ✨ [新增] 低频日志：记录关键决策的结果
+        let message = match retry_round {
+            Some(round) => format!("第{}次重试任务筛选完成", round),
+            None => "重试任务筛选完成".to_string(),
+        };
+
         info!(
             log_type = "low_freq",
-            message = "重试任务筛选完成",
+            message = message,
+            retry_round = retry_round.unwrap_or(0),
             total_failed_tasks = failed_tasks.len(),
             retryable_tasks_count = retry_tasks.len(),
         );

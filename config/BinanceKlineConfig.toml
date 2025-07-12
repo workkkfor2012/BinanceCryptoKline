@@ -13,6 +13,18 @@ buffer_swap_interval_ms = 1000
 # 持久化间隔（毫秒）
 persistence_interval_ms = 5000
 
+# Actor心跳间隔（秒）
+actor_heartbeat_interval_s = 5
+
+# Watchdog检查间隔（秒）
+watchdog_check_interval_s = 15
+
+# Watchdog Actor超时阈值（秒）
+watchdog_actor_timeout_s = 60
+
+# Actor通道容量（有界通道的缓冲区大小）
+channel_capacity = 100
+
 [database]
 database_path = "data/klines.db"
 pool_size = 10

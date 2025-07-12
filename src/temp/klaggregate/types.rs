@@ -5,45 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
-/// 归集交易数据 - 从WebSocket接收的原始数据解析后的结构
-/// 
-/// 使用 #[repr(C)] 确保内存布局的可预测性，提高缓存效率
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct AggTradeData {
-    /// 交易品种
-    pub symbol: String,
-    /// 成交价格
-    pub price: f64,
-    /// 成交数量
-    pub quantity: f64,
-    /// 成交时间戳（毫秒）
-    pub timestamp_ms: i64,
-    /// 买方是否为做市商
-    pub is_buyer_maker: bool,
-    /// 归集交易ID
-    pub agg_trade_id: i64,
-    /// 首个交易ID
-    pub first_trade_id: i64,
-    /// 最后交易ID
-    pub last_trade_id: i64,
-}
 
-impl AggTradeData {
-    /// 从币安原始归集交易数据创建
-    pub fn from_binance_raw(raw: &crate::klcommon::websocket::BinanceRawAggTrade) -> Self {
-        Self {
-            symbol: raw.symbol.clone(),
-            price: raw.price.parse().unwrap_or(0.0),
-            quantity: raw.quantity.parse().unwrap_or(0.0),
-            timestamp_ms: raw.trade_time as i64,
-            is_buyer_maker: raw.is_buyer_maker,
-            agg_trade_id: raw.aggregate_trade_id as i64,
-            first_trade_id: raw.first_trade_id as i64,
-            last_trade_id: raw.last_trade_id as i64,
-        }
-    }
-}
 
 /// K线数据 - 内存对齐优化的K线结构
 /// 

@@ -195,23 +195,30 @@ pub fn create_problem_summary_layer() -> ProblemSummaryLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use tracing::{error, warn, info};
+    use tracing_subscriber::prelude::*;
 
     #[test]
     fn test_problem_summary_initialization() {
-        let temp_dir = tempdir().unwrap();
-        let log_path = temp_dir.path().join("test_problems.log");
-        
+        let log_path = std::path::PathBuf::from("test_problems.log");
+
+        // 清理可能存在的测试文件
+        let _ = std::fs::remove_file(&log_path);
+
         assert!(init_problem_summary_log(&log_path).is_ok());
         assert!(log_path.exists());
+
+        // 清理测试文件
+        let _ = std::fs::remove_file(&log_path);
     }
 
     #[tokio::test]
     async fn test_problem_summary_layer() {
-        let temp_dir = tempdir().unwrap();
-        let log_path = temp_dir.path().join("test_problems.log");
-        
+        let log_path = std::path::PathBuf::from("test_problems_layer.log");
+
+        // 清理可能存在的测试文件
+        let _ = std::fs::remove_file(&log_path);
+
         // 初始化问题摘要日志
         init_problem_summary_log(&log_path).unwrap();
         
@@ -241,5 +248,8 @@ mod tests {
         let error: ProblemSummary = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(error.level, "ERROR");
         assert_eq!(error.message, "This is an error");
+
+        // 清理测试文件
+        let _ = std::fs::remove_file(&log_path);
     }
 }

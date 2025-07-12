@@ -16,13 +16,15 @@ path = "src/bin/kline_server.rs"
 name = "kline_data_service"
 path = "src/bin/kline_data_service.rs"
 
-
-
-
-
 [[bin]]
-name = "kline_aggregate_service"
-path = "src/bin/kline_aggregate_service.rs"
+name = "klagg_sub_threads"
+path = "src/bin/klagg_sub_threads.rs"
+
+
+
+
+
+
 
 # 暂时注释掉缺失的测试二进制文件
 # [[bin]]
@@ -96,6 +98,7 @@ reqwest = { version = "0.11", features = ["json", "socks"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
+core_affinity = "0.8"
 clap = { version = "4.3", features = ["derive"] }
 log = "0.4"
 env_logger = "0.10"
@@ -153,5 +156,6 @@ toml = "0.8"
 dashmap = "5.5"
 uuid = { version = "1.0", features = ["v4"] }
 md5 = "0.7"
+async-trait = "0.1.88"
 
 
