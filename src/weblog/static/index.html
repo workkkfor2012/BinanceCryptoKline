@@ -701,7 +701,8 @@
 
                 // 立即增量更新 - 无需节流，直接追加到终端
                 // 注意：这里只处理动态模块，实时原始日志已在上面处理
-                if (this.isHistoryLoaded && terminalManager) {
+                // [修改] 移除 isHistoryLoaded 的判断，确保新会话的实时日志也能创建模块
+                if (terminalManager) {
                     // 立即追加到对应模块终端
                     terminalManager.appendLogToTerminal(moduleName, logEntry);
 
@@ -804,7 +805,8 @@
 
             // 更新单个动态模块 - 增量更新（用于实时日志）
             updateDynamicModule(moduleName, moduleInfo) {
-                if (terminalManager && this.isHistoryLoaded) {
+                // [修改] 移除 isHistoryLoaded 的判断，确保新会话的实时日志也能更新模块
+                if (terminalManager) {
                     terminalManager.updateModuleTerminal(moduleName, moduleInfo);
                 }
             }
@@ -824,7 +826,16 @@
                 // 重置高频聚合器
                 this.highFreqAggregator = new HighFreqAggregator();
 
-                // 清空所有终端
+                // 重置节流更新状态
+                this.isUiUpdateScheduled = false;
+                this.pendingUpdates = {
+                    moduleNames: false,
+                    realtimeLogs: false,
+                    highFreqCollapsed: false,
+                    dynamicModules: new Set()
+                };
+
+                // 清空所有终端和动态模块
                 if (terminalManager) {
                     // 清空实时日志终端
                     const realtimeTerminal = terminalManager.terminals.get('realtime-logs');
@@ -840,13 +851,8 @@
                         terminalManager.logBuffers.set('raw-logs', []);
                     }
 
-                    // 清空所有动态模块终端
-                    for (const [moduleName, terminal] of terminalManager.terminals) {
-                        if (moduleName !== 'realtime-logs' && moduleName !== 'raw-logs') {
-                            terminal.clear();
-                            terminalManager.logBuffers.set(moduleName, []);
-                        }
-                    }
+                    // 彻底清理所有动态模块
+                    terminalManager.clearAllDynamicModules();
                 }
 
                 // 清空UI显示
@@ -1322,7 +1328,7 @@
                 terminal.write(command);
             }
 
-            // 格式化日志条目 - 用于模块终端和高频折叠
+            // 格式化日志条目 - 用于高频折叠终端（显示模块名）
             formatLogEntry(logEntry) {
                 const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
                 const level = logEntry.level.padEnd(5);
@@ -1354,6 +1360,58 @@
                 // 格式: [时间] LEVEL   [缩进]TARGET: message
                 const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
                 return `${color}[${timestamp}] ${level}${reset} ${indent}\x1b[33m${target.padEnd(25 - indent.length)}\x1b[0m: ${aggregatedPrefix}${message}`;
+            }
+
+            // 格式化模块内日志条目 - 用于模块终端（不显示模块名，简化日志级别）
+            formatModuleLogEntry(logEntry) {
+                const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
+
+                // 1. 根据日志级别设置颜色和简化显示
+                let color = '';
+                let levelChar = '';
+                switch (logEntry.level.toUpperCase()) {
+                    case 'ERROR':
+                        color = '\x1b[31m';
+                        levelChar = 'E';
+                        break; // 红色
+                    case 'WARN':
+                        color = '\x1b[33m';
+                        levelChar = 'W';
+                        break; // 黄色
+                    case 'INFO':
+                        color = '\x1b[32m';
+                        levelChar = 'I';
+                        break; // 绿色
+                    case 'DEBUG':
+                        color = '\x1b[36m';
+                        levelChar = 'D';
+                        break; // 青色
+                    case 'TRACE':
+                        color = '\x1b[37m';
+                        levelChar = 'T';
+                        break; // 白色
+                    default:
+                        color = '\x1b[37m';
+                        levelChar = logEntry.level.charAt(0).toUpperCase();
+                        break; // 白色
+                }
+                const reset = '\x1b[0m';
+
+                // 2. 【核心增强】检查并根据 span.hierarchy 生成缩进
+                let indent = '';
+                if (logEntry.span && logEntry.span.hierarchy && logEntry.span.hierarchy.length > 1) {
+                    const depth = logEntry.span.hierarchy.length - 1;
+                    // 使用空格和连接符创建视觉上的树状结构
+                    indent = '  '.repeat(depth - 1) + '└─ ';
+                }
+
+                // 3. 提取消息内容
+                const message = logEntry.message || JSON.stringify(logEntry.fields);
+
+                // 4. 组合成最终的、带缩进的日志行（不显示模块名）
+                // 格式: [时间] L [缩进]message
+                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
+                return `${color}[${timestamp}] ${levelChar}${reset} ${indent}${aggregatedPrefix}${message}`;
             }
 
             // 格式化原始日志条目 - 用于实时原始日志，显示完整JSON格式
@@ -1408,7 +1466,8 @@
                 }
 
                 if (terminal) {
-                    const formattedLog = this.formatLogEntry(logEntry);
+                    // 使用模块内日志格式化方法（不显示模块名，简化日志级别）
+                    const formattedLog = this.formatModuleLogEntry(logEntry);
 
                     // 获取日志缓冲区
                     let logBuffer = this.logBuffers.get(moduleName);
@@ -1520,7 +1579,8 @@
                     const displayLogs = moduleInfo.logs.slice(-50); // 显示最近50条
                     const logBuffer = [];
                     displayLogs.forEach(log => {
-                        const formattedLog = this.formatLogEntry(log);
+                        // 使用模块内日志格式化方法（不显示模块名，简化日志级别）
+                        const formattedLog = this.formatModuleLogEntry(log);
                         logBuffer.push(formattedLog);
                         terminal.write(formattedLog + '\r\n');
                     });
@@ -1590,6 +1650,46 @@
             updateModuleStats(moduleName, moduleInfo) {
                 const totalEl = document.getElementById(`stats-${moduleName}-total`);
                 if (totalEl) totalEl.textContent = moduleInfo.totalLogs;
+            }
+
+            // 彻底清理所有动态模块 - 用于新会话开始时重置
+            clearAllDynamicModules() {
+                console.log('🧹 开始清理所有动态模块');
+
+                // 1. 清理所有动态模块的终端和相关数据
+                const dynamicModulesToRemove = [];
+                for (const [moduleName, terminal] of this.terminals) {
+                    if (moduleName !== 'realtime-logs' && moduleName !== 'raw-logs') {
+                        dynamicModulesToRemove.push(moduleName);
+                        // 清理终端
+                        terminal.dispose();
+                        // 清理相关的插件和缓冲区
+                        this.fitAddons.delete(moduleName);
+                        this.searchAddons.delete(moduleName);
+                        this.logBuffers.delete(moduleName);
+                        this.searchManagers.delete(moduleName);
+                    }
+                }
+
+                // 2. 从terminals Map中移除动态模块
+                dynamicModulesToRemove.forEach(moduleName => {
+                    this.terminals.delete(moduleName);
+                });
+
+                // 3. 清理DOM元素 - 移除所有动态模块的DOM节点
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+                if (dynamicContainer) {
+                    dynamicContainer.innerHTML = '';
+                }
+
+                // 4. 重置扩展状态
+                this.expandedModule = null;
+                const dynamicModulesArea = document.querySelector('.dynamic-modules-area');
+                if (dynamicModulesArea) {
+                    dynamicModulesArea.classList.remove('has-expanded-module');
+                }
+
+                console.log(`✅ 已清理 ${dynamicModulesToRemove.length} 个动态模块:`, dynamicModulesToRemove);
             }
 
             // 切换模块扩展状态

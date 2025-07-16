@@ -37,7 +37,7 @@ pub struct SpanInfo {
 }
 
 /// WebSocket消息协议 - 极简版本
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum WebSocketMessage {
     /// 新的日志条目
@@ -59,21 +59,25 @@ pub struct AppState {
     pub log_sender: tokio::sync::broadcast::Sender<LogEntry>,
     /// 当前会话ID
     pub session_id: std::sync::Arc<std::sync::Mutex<String>>,
+    /// WebSocket消息广播发送器 - 用于发送SessionStart等控制消息
+    pub websocket_sender: tokio::sync::broadcast::Sender<WebSocketMessage>,
 }
 
 impl AppState {
     /// 创建新的应用状态
-    pub fn new() -> (Self, tokio::sync::broadcast::Receiver<LogEntry>) {
+    pub fn new() -> (Self, tokio::sync::broadcast::Receiver<LogEntry>, tokio::sync::broadcast::Receiver<WebSocketMessage>) {
         let (log_sender, log_receiver) = tokio::sync::broadcast::channel(10000000);
+        let (websocket_sender, websocket_receiver) = tokio::sync::broadcast::channel(1000);
 
         let state = Self {
             start_time: SystemTime::now(),
             recent_logs: std::sync::Arc::new(std::sync::Mutex::new(VecDeque::new())),
             log_sender,
             session_id: std::sync::Arc::new(std::sync::Mutex::new(Self::generate_session_id())),
+            websocket_sender,
         };
 
-        (state, log_receiver)
+        (state, log_receiver, websocket_receiver)
     }
 
     /// 生成新的会话ID
@@ -113,7 +117,7 @@ impl AppState {
         self.recent_logs.lock().unwrap().clone()
     }
 
-    /// 开始新会话 - 清空历史日志并生成新的会话ID
+    /// 开始新会话 - 清空历史日志并生成新的会话ID，同时广播SessionStart消息
     pub fn start_new_session(&self) -> String {
         // 清空历史日志
         {
@@ -127,6 +131,12 @@ impl AppState {
             let mut session_id = self.session_id.lock().unwrap();
             *session_id = new_session_id.clone();
         }
+
+        // 广播SessionStart消息给所有已连接的WebSocket客户端
+        let session_start_message = WebSocketMessage::SessionStart {
+            session_id: new_session_id.clone()
+        };
+        let _ = self.websocket_sender.send(session_start_message);
 
         new_session_id
     }

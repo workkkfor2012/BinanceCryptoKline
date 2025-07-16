@@ -5,7 +5,7 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 基础配置
-$LogServerUrl = "http://127.0.0.1:9002"
+$LogServerUrl = "http://127.0.0.1:9001"
 
 Write-Host "=== Log MCP Server 查询命令集合 ===" -ForegroundColor Green
 Write-Host "服务器地址: $LogServerUrl" -ForegroundColor Cyan

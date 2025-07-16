@@ -4,7 +4,7 @@
 
 use kline_server::klaggregate::KlineAggregateSystem;
 use kline_server::klcommon::AggregateConfig;
-use kline_server::klcommon::context::init_tracing_config;
+use kline_server::klcommon::log::context::init_tracing_config;
 use kline_server::klcommon::log::{
     LowFreqLogLayer, NamedPipeLogManager, TraceVisualizationLayer,
     TraceDistillerStore, TraceDistillerLayer, distill_all_completed_traces_to_text

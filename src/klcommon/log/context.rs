@@ -1,4 +1,4 @@
-//! src/klcommon/context.rs
+//! src/klcommon/log/context.rs
 //!
 //! # 追踪上下文的统一解决方案
 //!
@@ -37,7 +37,7 @@ fn is_full_tracing_enabled() -> bool {
 
 /// 根据运行时配置，条件化地为 Future 附加 `Span`。
 ///
-/// 这是实现“零成本抽象”的推荐方式。当追踪被禁用时，
+/// 这是实现"零成本抽象"的推荐方式。当追踪被禁用时，
 /// 此函数通过 `futures::future::Either` 在编译后几乎没有额外开销。
 ///
 /// # Example

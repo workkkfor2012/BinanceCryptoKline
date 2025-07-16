@@ -6,7 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry
 
 // 使用库中的模块
 use kline_server::klcommon::Database;
-use kline_server::klcommon::context::init_tracing_config;
+use kline_server::klcommon::log::context::init_tracing_config;
 use kline_server::klserver::web;
 
 // 硬编码参数
@@ -181,6 +181,11 @@ fn init_logging(verbose: bool) {
     // 从配置文件读取日志级别
     let log_level = load_logging_config()
         .unwrap_or_else(|_| if verbose { "trace".to_string() } else { "trace".to_string() });
+
+    // 显示读取到的日志配置
+    eprintln!("📋 K线服务器日志配置:");
+    eprintln!("  日志级别: {}", log_level);
+    eprintln!("  详细模式: {}", if verbose { "启用" } else { "禁用" });
 
     // 创建文件输出层
     let file_appender = tracing_appender::rolling::daily(log_dir, "kline_server.log");

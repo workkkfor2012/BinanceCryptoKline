@@ -1776,6 +1776,7 @@ dependencies = [
  "once_cell",
  "r2d2",
  "r2d2_sqlite",
+ "rand 0.9.1",
  "reqwest",
  "ring 0.17.13",
  "rusqlite",

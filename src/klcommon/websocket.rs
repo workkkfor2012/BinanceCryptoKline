@@ -11,6 +11,7 @@ use std::future::Future;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::mpsc;
 use tokio::net::TcpStream;
+use tokio::time::sleep;
 use tokio_socks::tcp::Socks5Stream;
 use serde_json::json;
 use serde::Deserialize;
@@ -36,6 +37,20 @@ pub const BINANCE_WS_URL: &str = "wss://fstream.binance.com/ws";
 /// WebSocket连接数量
 /// 所有品种将平均分配到这些连接中
 pub const WEBSOCKET_CONNECTION_COUNT: usize = 1;
+
+/// WebSocket连接重试配置
+pub const MAX_RETRY_ATTEMPTS: usize = 5;
+pub const INITIAL_RETRY_DELAY_MS: u64 = 1000; // 1秒
+pub const MAX_RETRY_DELAY_MS: u64 = 30000; // 30秒
+
+/// 归集交易日志目标
+pub const AGG_TRADE_TARGET: &str = "归集交易";
+
+/// WebSocket连接日志目标
+pub const WEBSOCKET_CONNECTION_TARGET: &str = "websocket连接";
+
+/// 全市场精简Ticker日志目标
+pub const MINI_TICKER_TARGET: &str = "全市场精简Ticker";
 
 //=============================================================================
 // WebSocket配置
@@ -122,7 +137,7 @@ impl WebSocketConfig for MiniTickerConfig {
 }
 
 /// 创建订阅消息
-#[instrument(target = "klcommon::websocket", skip_all)]
+#[instrument(skip_all)]
 pub fn create_subscribe_message(streams: &[String]) -> String {
     json!({
         "method": "SUBSCRIBE",
@@ -262,7 +277,7 @@ pub struct AggTradeMessageHandler {
 }
 
 impl AggTradeMessageHandler {
-    #[instrument(target = "AggTradeMessageHandler", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(
         message_count: Arc<std::sync::atomic::AtomicUsize>,
         error_count: Arc<std::sync::atomic::AtomicUsize>,
@@ -275,7 +290,7 @@ impl AggTradeMessageHandler {
     }
 
     /// 创建带有交易数据发送器的消息处理器
-    #[instrument(target = "AggTradeMessageHandler", skip_all)]
+    #[instrument(skip_all)]
     pub fn with_trade_sender(
         message_count: Arc<std::sync::atomic::AtomicUsize>,
         error_count: Arc<std::sync::atomic::AtomicUsize>,
@@ -308,16 +323,16 @@ impl MessageHandler for MiniTickerMessageHandler {
             // MiniTicker 流直接是一个JSON数组
             match serde_json::from_str::<Vec<MiniTickerData>>(&message) {
                 Ok(tickers) => {
-                    debug!(target: "MarketDataIngestor", "连接 {} 收到 {} 条 MiniTicker 更新", connection_id, tickers.len());
+                    debug!(target: MINI_TICKER_TARGET, "连接 {} 收到 {} 条 MiniTicker 更新", connection_id, tickers.len());
                     // 将解析后的数据发送出去
                     if let Err(e) = self.data_sender.send(tickers) {
-                        error!(target: "MarketDataIngestor", "发送 MiniTicker 数据失败: {}", e);
+                        error!(target: MINI_TICKER_TARGET, "发送 MiniTicker 数据失败: {}", e);
                     }
                 }
                 Err(e) => {
                     // 检查是否是订阅成功等非数据消息
                     if !message.contains("result") {
-                         warn!(target: "MarketDataIngestor", "连接 {} 解析 MiniTicker 消息失败: {}, 原始消息: {}", connection_id, e, message);
+                         warn!(target: MINI_TICKER_TARGET, "连接 {} 解析 MiniTicker 消息失败: {}, 原始消息: {}", connection_id, e, message);
                     }
                 }
             }
@@ -333,7 +348,7 @@ impl MessageHandler for AggTradeMessageHandler {
             self.message_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             // 添加详细的消息日志
-            debug!(target: "MarketDataIngestor", "连接 {} 收到原始消息: {}", connection_id,
+            debug!(target: AGG_TRADE_TARGET, "连接 {} 收到原始消息: {}", connection_id,
                 if message.len() > 200 {
                     format!("{}...(长度:{})", &message[..200], message.len())
                 } else {
@@ -343,7 +358,7 @@ impl MessageHandler for AggTradeMessageHandler {
             // 解析归集交易消息
             match self.parse_agg_trade_message(&message).await {
                 Ok(Some(agg_trade)) => {
-                    info!(target: "MarketDataIngestor", "连接 {} 收到归集交易: {} {} @ {}",
+                    info!(target: AGG_TRADE_TARGET, "连接 {} 收到归集交易: {} {} @ {}",
                         connection_id, agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
                     // 将归集交易数据发送给TradeEventRouter
@@ -353,39 +368,109 @@ impl MessageHandler for AggTradeMessageHandler {
 
                         // 发送到交易事件路由器
                         if let Err(e) = sender.send(trade_data) {
-                            error!(target: "MarketDataIngestor", "发送归集交易数据失败: {}", e);
+                            error!(target: AGG_TRADE_TARGET, "发送归集交易数据失败: {}", e);
                             self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         } else {
-                            debug!(target: "MarketDataIngestor", "成功发送归集交易数据到路由器");
+                            debug!(target: AGG_TRADE_TARGET, "成功发送归集交易数据到路由器");
                         }
                     } else {
-                        warn!(target: "MarketDataIngestor", "没有配置交易数据发送器，跳过数据路由");
+                        warn!(target: AGG_TRADE_TARGET, "没有配置交易数据发送器，跳过数据路由");
                     }
 
                     Ok(())
                 }
                 Ok(None) => {
                     // 非归集交易消息，可能是订阅确认等
-                    info!(target: "MarketDataIngestor", "连接 {} 收到非归集交易消息，消息类型检查: {}",
-                        connection_id,
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
-                            if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
-                                format!("事件类型: {}", event_type)
-                            } else if json.get("result").is_some() {
-                                "订阅响应消息".to_string()
-                            } else if json.get("id").is_some() {
-                                "ID响应消息".to_string()
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
+                        if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
+                            tracing::info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                event_type = %event_type,
+                                raw_message = if message.len() > 200 {
+                                    format!("{}...(长度:{})", &message[..200], message.len())
+                                } else {
+                                    message.clone()
+                                },
+                                "连接收到其他事件消息"
+                            );
+                        } else if let Some(result) = json.get("result") {
+                            // 这是订阅响应消息
+                            if result.is_null() && json.get("id").is_some() {
+                                tracing::info!(
+                                    target: AGG_TRADE_TARGET,
+                                    log_type = "low_freq",
+                                    connection_id = connection_id,
+                                    message_type = "订阅确认成功",
+                                    raw_message = if message.len() > 200 {
+                                        format!("{}...(长度:{})", &message[..200], message.len())
+                                    } else {
+                                        message.clone()
+                                    },
+                                    "✅ WebSocket订阅确认成功"
+                                );
                             } else {
-                                format!("未知消息格式: {}", json)
+                                tracing::info!(
+                                    target: AGG_TRADE_TARGET,
+                                    log_type = "low_freq",
+                                    connection_id = connection_id,
+                                    message_type = "订阅响应消息",
+                                    raw_message = if message.len() > 200 {
+                                        format!("{}...(长度:{})", &message[..200], message.len())
+                                    } else {
+                                        message.clone()
+                                    },
+                                    "连接收到订阅响应消息"
+                                );
                             }
+                        } else if json.get("id").is_some() {
+                            tracing::info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                message_type = "ID响应消息",
+                                raw_message = if message.len() > 200 {
+                                    format!("{}...(长度:{})", &message[..200], message.len())
+                                } else {
+                                    message.clone()
+                                },
+                                "连接收到ID响应消息"
+                            );
                         } else {
-                            "非JSON消息".to_string()
-                        });
+                            tracing::info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                message_type = "未知消息格式",
+                                raw_message = if message.len() > 200 {
+                                    format!("{}...(长度:{})", &message[..200], message.len())
+                                } else {
+                                    message.clone()
+                                },
+                                json_content = %json,
+                                "连接收到未知格式消息"
+                            );
+                        }
+                    } else {
+                        tracing::info!(
+                            target: AGG_TRADE_TARGET,
+                            log_type = "low_freq",
+                            connection_id = connection_id,
+                            message_type = "非JSON消息",
+                            raw_message = if message.len() > 200 {
+                                format!("{}...(长度:{})", &message[..200], message.len())
+                            } else {
+                                message.clone()
+                            },
+                            "连接收到非JSON消息"
+                        );
+                    };
                     Ok(())
                 }
                 Err(e) => {
                     self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    error!(target: "MarketDataIngestor", "连接 {} 解析归集交易消息失败: {}, 原始消息: {}",
+                    error!(target: AGG_TRADE_TARGET, "连接 {} 解析归集交易消息失败: {}, 原始消息: {}",
                         connection_id, e,
                         if message.len() > 100 {
                             format!("{}...", &message[..100])
@@ -401,7 +486,7 @@ impl MessageHandler for AggTradeMessageHandler {
 
 impl AggTradeMessageHandler {
     /// 解析归集交易消息
-    #[instrument(target = "AggTradeMessageHandler", skip_all, err)]
+    #[instrument(skip_all, err)]
     async fn parse_agg_trade_message(&self, message: &str) -> Result<Option<BinanceRawAggTrade>> {
         // 解析JSON
         let json: serde_json::Value = serde_json::from_str(message)
@@ -410,18 +495,18 @@ impl AggTradeMessageHandler {
         // 首先检查是否是包装在stream中的消息格式
         let data_json = if let Some(data) = json.get("data") {
             // 这是stream格式的消息，提取data部分
-            debug!(target: "MarketDataIngestor", "检测到stream格式消息，提取data部分");
+            debug!(target: AGG_TRADE_TARGET, "检测到stream格式消息，提取data部分");
             data
         } else {
             // 这是直接格式的消息
-            debug!(target: "MarketDataIngestor", "检测到直接格式消息");
+            debug!(target: AGG_TRADE_TARGET, "检测到直接格式消息");
             &json
         };
 
         // 检查是否是归集交易消息
         if let Some(event_type) = data_json.get("e").and_then(|e| e.as_str()) {
             if event_type == "aggTrade" {
-                debug!(target: "MarketDataIngestor", "确认为归集交易消息，开始解析");
+                debug!(target: AGG_TRADE_TARGET, "确认为归集交易消息，开始解析");
 
                 // 解析归集交易数据
                 let agg_trade = BinanceRawAggTrade {
@@ -437,12 +522,12 @@ impl AggTradeMessageHandler {
                     is_buyer_maker: data_json.get("m").and_then(|m| m.as_bool()).unwrap_or(false),
                 };
 
-                debug!(target: "MarketDataIngestor", "归集交易解析成功: {} {} @ {}",
+                debug!(target: AGG_TRADE_TARGET, "归集交易解析成功: {} {} @ {}",
                     agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
                 // 发出验证事件
                 tracing::info!(
-                    target: "MarketDataIngestor",
+                    target: AGG_TRADE_TARGET,
                     event_name = "trade_data_parsed",
                     symbol = %agg_trade.symbol,
                     price = agg_trade.price.parse::<f64>().unwrap_or(0.0),
@@ -453,10 +538,10 @@ impl AggTradeMessageHandler {
 
                 return Ok(Some(agg_trade));
             } else {
-                debug!(target: "MarketDataIngestor", "事件类型不是aggTrade: {}", event_type);
+                debug!(target: AGG_TRADE_TARGET, "事件类型不是aggTrade: {}", event_type);
             }
         } else {
-            debug!(target: "MarketDataIngestor", "消息中没有找到事件类型字段");
+            debug!(target: AGG_TRADE_TARGET, "消息中没有找到事件类型字段");
         }
 
         // 不是归集交易消息
@@ -465,13 +550,13 @@ impl AggTradeMessageHandler {
 }
 
 /// 处理WebSocket消息
-#[instrument(target = "klcommon::websocket", skip_all)]
+#[instrument(skip_all)]
 pub async fn process_messages<H: MessageHandler>(
     mut rx: mpsc::Receiver<(usize, String)>,
     handler: Arc<H>,
     connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
 ) {
-    info!(target: "MarketDataIngestor", log_type = "module", "🚀 启动WebSocket消息处理器");
+    info!(target: WEBSOCKET_CONNECTION_TARGET,   log_type = "low_freq", "🚀 启动WebSocket消息处理器");
 
     // 统计信息
     let mut _message_count = 0;
@@ -498,11 +583,11 @@ pub async fn process_messages<H: MessageHandler>(
 
         // 处理消息
         if let Err(e) = handler.handle_message(connection_id, text).await {
-            error!(target: "MarketDataIngestor", "处理消息失败: {}", e);
+            error!(target: WEBSOCKET_CONNECTION_TARGET, "处理消息失败: {}", e);
         }
     }
 
-    info!(target: "MarketDataIngestor", log_type = "module", "✅ WebSocket消息处理器已停止");
+    info!( target: WEBSOCKET_CONNECTION_TARGET,   log_type = "low_freq", "✅ WebSocket消息处理器已停止");
 }
 
 //=============================================================================
@@ -548,31 +633,106 @@ impl ConnectionManager {
         }
     }
 
-    /// 连接到WebSocket服务器
-    #[instrument(target = "ConnectionManager", skip_all, err)]
-    pub async fn connect(&self, streams: &[String]) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
+    /// 连接到WebSocket服务器（带重试机制）
+    #[instrument(skip_all, err)]
+    pub async fn connect(&self) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
+        let mut last_error = None;
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15); // 新增：为每次尝试设置15秒超时
+
+        for attempt in 1..=MAX_RETRY_ATTEMPTS {
+            info!(
+                target: WEBSOCKET_CONNECTION_TARGET,
+                log_type = "low_freq",
+                "🔄 WebSocket连接尝试 {}/{}",
+                attempt,
+                MAX_RETRY_ATTEMPTS
+            );
+
+            // [修改逻辑] 使用 tokio::time::timeout 为单次连接尝试增加超时
+            match tokio::time::timeout(CONNECT_TIMEOUT, self.connect_once()).await {
+                Ok(Ok(ws)) => { // 超时内成功连接
+                    if attempt > 1 {
+                        info!(
+                            target: WEBSOCKET_CONNECTION_TARGET,
+                            log_type = "low_freq",
+                            "✅ WebSocket连接在第{}次尝试后成功建立",
+                            attempt
+                        );
+                    }
+                    return Ok(ws);
+                }
+                Ok(Err(e)) => { // 超时内连接失败
+                    last_error = Some(e);
+                }
+                Err(_) => { // 连接超时
+                    last_error = Some(AppError::WebSocketError(format!("连接尝试超过 {} 秒未响应，已超时", CONNECT_TIMEOUT.as_secs())));
+                }
+            }
+
+            if attempt < MAX_RETRY_ATTEMPTS {
+                let delay_ms = std::cmp::min(
+                    INITIAL_RETRY_DELAY_MS * (2_u64.pow((attempt - 1) as u32)),
+                    MAX_RETRY_DELAY_MS
+                );
+
+                // [修改逻辑] 将 warn! 提升为 error! 以确保日志可见性
+                error!(
+                    target: WEBSOCKET_CONNECTION_TARGET,
+                    log_type = "low_freq",
+                    error_chain = format!("{:#}", last_error.as_ref().unwrap()),
+                    "❌ WebSocket连接第{}次尝试失败，{}ms后重试",
+                    attempt,
+                    delay_ms
+                );
+
+                sleep(Duration::from_millis(delay_ms)).await;
+            } else {
+                error!(
+                    target: WEBSOCKET_CONNECTION_TARGET,
+                    log_type = "low_freq",
+                    error_chain = format!("{:#}", last_error.as_ref().unwrap()),
+                    "💥 WebSocket连接在{}次尝试后全部失败",
+                    MAX_RETRY_ATTEMPTS
+                );
+            }
+        }
+
+        // 返回最后一次的错误
+        Err(last_error.unwrap())
+    }
+
+    /// 单次连接尝试（内部方法）
+    #[instrument(skip_all, err)]
+    async fn connect_once(&self) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
         // 设置主机和端口
         let host = "fstream.binance.com";
         let port = 443;
         let addr = format!("{}:{}", host, port);
 
-        // 构建WebSocket URL
-        let path = if streams.is_empty() {
-            "/ws".to_string()
-        } else if streams.len() == 1 {
-            // 单个流使用直接连接格式
-            format!("/ws/{}", streams[0])
-        } else {
-            // 多个流使用组合流订阅格式
-            format!("/stream?streams={}", streams.join("/"))
-        };
+        // [修改逻辑] 统一使用 /ws 端点，以支持动态订阅和统一的连接行为。
+        // 不再根据流的数量来决定是使用 /stream还是 /ws。
+        let path = "/ws".to_string();
 
-        info!(target: "MarketDataIngestor", log_type = "module", "🔗 连接到WebSocket: {}:{}{}", host, port, path);
-        info!(target: "MarketDataIngestor", log_type = "module", "📡 订阅的流: {}", streams.join(", "));
+        // [修改逻辑] 完整URL的日志现在反映了统一的端点
+        let full_url = format!("wss://{}:{}{}", host, port, path);
+        info!(
+            target: WEBSOCKET_CONNECTION_TARGET,
+            log_type = "low_freq",
+            "🔗 WebSocket连接详情 - 统一端点URL: {}",
+            full_url
+        );
+        info!(
+            target: WEBSOCKET_CONNECTION_TARGET,
+            log_type = "low_freq",
+            "🌐 代理设置: 启用={}, 地址={}:{}",
+            self.use_proxy,
+            self.proxy_addr,
+            self.proxy_port
+        );
 
         // 建立TCP连接（通过代理或直接）
         let tcp_stream = if self.use_proxy {
-            info!(target: "MarketDataIngestor", log_type = "module", "🌐 通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
+            debug!(target: WEBSOCKET_CONNECTION_TARGET, log_type = "module", "🌐 通过代理 {}:{} 连接", self.proxy_addr, self.proxy_port);
 
             // 连接到代理
             let socks_stream = Socks5Stream::connect(
@@ -589,7 +749,7 @@ impl ConnectionManager {
             TcpStream::connect(addr).await?
         };
 
-        info!(target: "MarketDataIngestor", log_type = "module", "✅ TCP连接已建立");
+        debug!(target: WEBSOCKET_CONNECTION_TARGET, log_type = "module", "✅ TCP连接已建立");
 
         // 创建 TLS 连接
         let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
@@ -612,9 +772,9 @@ impl ConnectionManager {
         let server_name = ServerName::try_from(host)
             .map_err(|_| AppError::WebSocketError("无效的域名".to_string()))?;
 
-        info!(target: "MarketDataIngestor", log_type = "module", "🔐 建立TLS连接...");
+        debug!(target: WEBSOCKET_CONNECTION_TARGET, log_type = "module", "🔐 建立TLS连接...");
         let tls_stream = connector.connect(server_name, tcp_stream).await?;
-        info!(target: "MarketDataIngestor", log_type = "module", "✅ TLS连接已建立");
+        debug!(target: WEBSOCKET_CONNECTION_TARGET, log_type = "module", "✅ TLS连接已建立");
 
         // 创建 HTTP 请求
         let req = Request::builder()
@@ -631,35 +791,23 @@ impl ConnectionManager {
             .body(Empty::<Bytes>::new())
             .map_err(|e| AppError::WebSocketError(format!("创建HTTP请求失败: {}", e)))?;
 
-        info!(target: "MarketDataIngestor", "执行WebSocket握手...");
+        debug!(target: WEBSOCKET_CONNECTION_TARGET, "执行WebSocket握手...");
 
         // 执行 WebSocket 握手
         let (ws, _) = fastwebsockets::handshake::client(&SpawnExecutor, req, tls_stream).await
             .map_err(|e| AppError::WebSocketError(format!("WebSocket握手失败: {}", e)))?;
-        let mut ws_collector = FragmentCollector::new(ws);
+        let ws_collector = FragmentCollector::new(ws);
 
-        info!(target: "MarketDataIngestor", "WebSocket握手成功");
+        debug!(target: WEBSOCKET_CONNECTION_TARGET, "WebSocket握手成功");
 
-        // 如果使用的是组合流订阅格式（多个流），则需要发送订阅消息
-        if path.contains("?streams=") && !streams.is_empty() {
-            // 发送订阅消息
-            let subscribe_msg = create_subscribe_message(streams);
-            info!(target: "MarketDataIngestor", "发送订阅消息: {}", subscribe_msg);
-            info!(target: "MarketDataIngestor", "订阅的流列表: {:?}", streams);
-
-            ws_collector.write_frame(Frame::new(true, OpCode::Text, None, subscribe_msg.into_bytes().into())).await
-                .map_err(|e| AppError::WebSocketError(format!("发送订阅消息失败: {}", e)))?;
-
-            info!(target: "MarketDataIngestor", log_type = "module", "✅ 订阅消息发送成功，等待服务器响应");
-        } else {
-            info!(target: "MarketDataIngestor", "使用直接连接格式，无需发送额外订阅消息。路径: {}", path);
-        }
+        // [修改逻辑] 移除这里的订阅逻辑。此函数现在只负责连接。
+        // 调用者（如 run_io_loop）将负责在连接成功后发送订阅消息。
 
         Ok(ws_collector)
     }
 
     /// 处理WebSocket消息
-    #[instrument(target = "ConnectionManager", skip_all)]
+    #[instrument(skip_all)]
     pub async fn handle_messages(
         &self,
         connection_id: usize,
@@ -667,7 +815,7 @@ impl ConnectionManager {
         tx: mpsc::Sender<(usize, String)>,
         connections: Arc<TokioMutex<HashMap<usize, WebSocketConnection>>>,
     ) {
-        info!(target: "MarketDataIngestor", "开始处理连接 {} 的消息", connection_id);
+        info!(target: WEBSOCKET_CONNECTION_TARGET, "开始处理连接 {} 的消息", connection_id);
 
         // 处理消息，添加超时处理
         loop {
@@ -692,43 +840,43 @@ impl ConnectionManager {
 
                                     // 发送消息到处理器
                                     if let Err(e) = tx.send((connection_id, text)).await {
-                                        error!(target: "MarketDataIngestor", "发送消息到处理器失败: {}", e);
+                                        error!(target: WEBSOCKET_CONNECTION_TARGET, "发送消息到处理器失败: {}", e);
                                         break;
                                     }
                                 },
                                 OpCode::Binary => {
-                                    debug!(target: "MarketDataIngestor", "收到二进制消息，长度: {}", frame.payload.len());
+                                    debug!(target: WEBSOCKET_CONNECTION_TARGET, "收到二进制消息，长度: {}", frame.payload.len());
                                 },
                                 OpCode::Ping => {
-                                    debug!(target: "MarketDataIngestor", "收到Ping，发送Pong");
+                                    debug!(target: WEBSOCKET_CONNECTION_TARGET, "收到Ping，发送Pong");
                                     if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Pong, None, frame.payload)).await {
-                                        error!(target: "MarketDataIngestor", "发送Pong失败: {}", e);
+                                        error!(target: WEBSOCKET_CONNECTION_TARGET, "发送Pong失败: {}", e);
                                         break;
                                     }
                                 },
                                 OpCode::Pong => {
-                                    debug!(target: "MarketDataIngestor", "收到Pong");
+                                    debug!(target: WEBSOCKET_CONNECTION_TARGET, "收到Pong");
                                 },
                                 OpCode::Close => {
-                                    info!(target: "MarketDataIngestor", "收到关闭消息，连接将关闭");
+                                    info!(target: WEBSOCKET_CONNECTION_TARGET, "收到关闭消息，连接将关闭");
                                     break;
                                 },
                                 _ => {
-                                    debug!(target: "MarketDataIngestor", "收到其他类型的消息");
+                                    debug!(target: WEBSOCKET_CONNECTION_TARGET, "收到其他类型的消息");
                                 }
                             }
                         },
                         Err(e) => {
-                            error!(target: "MarketDataIngestor", "WebSocket错误: {}", e);
+                            error!(target: WEBSOCKET_CONNECTION_TARGET, "WebSocket错误: {}", e);
                             break;
                         }
                     }
                 },
                 Err(_) => {
                     // 超时，发送ping以保持连接
-                    debug!(target: "MarketDataIngestor", "WebSocket连接超时，发送Ping");
+                    debug!(target: WEBSOCKET_CONNECTION_TARGET, "WebSocket连接超时，发送Ping");
                     if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Ping, None, vec![].into())).await {
-                        error!(target: "MarketDataIngestor", "发送Ping失败: {}", e);
+                        error!(target: WEBSOCKET_CONNECTION_TARGET, "发送Ping失败: {}", e);
                         break;
                     }
                 }
@@ -743,7 +891,7 @@ impl ConnectionManager {
             }
         }
 
-        info!(target: "MarketDataIngestor", "连接 {} 已关闭", connection_id);
+        info!(target: WEBSOCKET_CONNECTION_TARGET, "连接 {} 已关闭", connection_id);
     }
 }
 
@@ -774,7 +922,7 @@ pub struct AggTradeClient {
 
 impl AggTradeClient {
     /// 创建新的归集交易客户端
-    #[instrument(target = "AggTradeClient", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(config: AggTradeConfig) -> Self {
         Self {
             config,
@@ -785,7 +933,7 @@ impl AggTradeClient {
     }
 
     /// 创建带有外部消息处理器的归集交易客户端
-    #[instrument(target = "AggTradeClient", skip_all)]
+    #[instrument(skip_all)]
     pub fn new_with_handler(
         config: AggTradeConfig,
         handler: Arc<AggTradeMessageHandler>
@@ -803,11 +951,11 @@ impl WebSocketClient for AggTradeClient {
     /// 启动客户端
     fn start(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            info!(target: "MarketDataIngestor", "启动归集交易客户端");
-            info!(target: "MarketDataIngestor", "使用代理: {}", self.config.use_proxy);
+            info!(target: AGG_TRADE_TARGET, "启动归集交易客户端");
+            info!(target: AGG_TRADE_TARGET, "使用代理: {}", self.config.use_proxy);
 
             if self.config.use_proxy {
-                info!(target: "MarketDataIngestor", "代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
+                info!(target: AGG_TRADE_TARGET, "代理地址: {}:{}", self.config.proxy_addr, self.config.proxy_port);
             }
 
             // 确保日志目录存在
@@ -829,24 +977,24 @@ impl WebSocketClient for AggTradeClient {
 
             // 获取所有流
             let streams = self.config.get_streams();
-            info!(target: "MarketDataIngestor", "总共 {} 个流需要订阅", streams.len());
-            info!(target: "MarketDataIngestor", "订阅的流详情: {:?}", streams);
-            info!(target: "MarketDataIngestor", "配置的交易对: {:?}", self.config.symbols);
+            info!(target: AGG_TRADE_TARGET, "总共 {} 个流需要订阅", streams.len());
+            info!(target: AGG_TRADE_TARGET, "订阅的流详情: {:?}", streams);
+            info!(target: AGG_TRADE_TARGET, "配置的交易对: {:?}", self.config.symbols);
 
             // 使用固定的连接数
             let connection_count = WEBSOCKET_CONNECTION_COUNT;
-            info!(target: "MarketDataIngestor", "使用 {} 个WebSocket连接", connection_count);
+            info!(target: AGG_TRADE_TARGET, "使用 {} 个WebSocket连接", connection_count);
 
             // 计算每个连接的流数量
             let streams_per_connection = (streams.len() + connection_count - 1) / connection_count;
-            info!(target: "MarketDataIngestor", "每个连接平均处理 {} 个流", streams_per_connection);
+            info!(target: AGG_TRADE_TARGET, "每个连接平均处理 {} 个流", streams_per_connection);
 
             // 分配流到连接
             let mut connection_streams = Vec::new();
 
             for (index, chunk) in streams.chunks(streams_per_connection).enumerate() {
                 let chunk_vec = chunk.to_vec();
-                info!(target: "MarketDataIngestor", "连接 {} 将处理 {} 个流: {:?}",
+                info!(target: AGG_TRADE_TARGET, "连接 {} 将处理 {} 个流: {:?}",
                     index + 1, chunk_vec.len(), chunk_vec);
                 connection_streams.push(chunk_vec);
             }
@@ -898,7 +1046,7 @@ impl WebSocketClient for AggTradeClient {
                     }
 
                     // 建立连接
-                    match connection_manager_clone.connect(&streams).await {
+                    match connection_manager_clone.connect().await {
                         Ok(mut ws) => {
                             // 更新状态
                             {
@@ -908,7 +1056,7 @@ impl WebSocketClient for AggTradeClient {
                                 }
                             }
 
-                            info!(target: "MarketDataIngestor", "连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
+                            info!(target: AGG_TRADE_TARGET, "连接 {} 已建立，订阅 {} 个流", connection_id, streams.len());
 
                             // 处理消息
                             connection_manager_clone.handle_messages(connection_id, &mut ws, tx_clone, connections_clone).await;
@@ -922,7 +1070,7 @@ impl WebSocketClient for AggTradeClient {
                                 }
                             }
 
-                            error!(target: "MarketDataIngestor", "连接 {} 失败: {}", connection_id, e);
+                            error!(target: AGG_TRADE_TARGET, "连接 {} 失败: {}", connection_id, e);
                         }
                     }
                 }.instrument(tracing::info_span!("websocket_connection", connection_id = connection_id)));
@@ -935,10 +1083,10 @@ impl WebSocketClient for AggTradeClient {
 
             // 等待消息处理器完成
             if let Err(e) = message_handler.await {
-                error!(target: "MarketDataIngestor", "消息处理器错误: {}", e);
+                error!(target: AGG_TRADE_TARGET, "消息处理器错误: {}", e);
             }
 
-            info!(target: "MarketDataIngestor", "归集交易客户端已停止");
+            info!(target: AGG_TRADE_TARGET, "归集交易客户端已停止");
             Ok(())
         }
     }
@@ -967,7 +1115,7 @@ pub struct MiniTickerClient {
 
 impl MiniTickerClient {
     /// 创建一个新的 MiniTickerClient
-    #[instrument(target = "MiniTickerClient", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(config: MiniTickerConfig, handler: Arc<MiniTickerMessageHandler>) -> Self {
         Self {
             config,
@@ -982,7 +1130,7 @@ impl WebSocketClient for MiniTickerClient {
     /// 启动客户端
     fn start(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            info!(target: "MarketDataIngestor", "启动全市场精简Ticker客户端 (代理: {})", self.config.use_proxy);
+            info!(target: MINI_TICKER_TARGET, "启动全市场精简Ticker客户端 (代理: {})", self.config.use_proxy);
 
             // 创建连接管理器
             let (use_proxy, proxy_addr, proxy_port) = self.config.get_proxy_settings();
@@ -1014,15 +1162,15 @@ impl WebSocketClient for MiniTickerClient {
             // 启动连接任务
             let connection_task = tokio::spawn(async move {
                 conns_clone.lock().await.get_mut(&connection_id).map(|c| c.status = "连接中".to_string());
-                match manager_clone.connect(&streams).await {
+                match manager_clone.connect().await {
                     Ok(mut ws) => {
                         conns_clone.lock().await.get_mut(&connection_id).map(|c| c.status = "已连接".to_string());
-                        info!(target: "MarketDataIngestor", "MiniTicker 连接 {} 已建立", connection_id);
+                        info!(target: MINI_TICKER_TARGET, "MiniTicker 连接 {} 已建立", connection_id);
                         manager_clone.handle_messages(connection_id, &mut ws, tx_clone, conns_clone).await;
                     }
                     Err(e) => {
                         conns_clone.lock().await.get_mut(&connection_id).map(|c| c.status = format!("连接失败: {}", e));
-                        error!(target: "MarketDataIngestor", "MiniTicker 连接 {} 失败: {}", connection_id, e);
+                        error!(target: MINI_TICKER_TARGET, "MiniTicker 连接 {} 失败: {}", connection_id, e);
                     }
                 }
             }.instrument(tracing::info_span!("mini_ticker_connection", id = connection_id)));
@@ -1031,7 +1179,7 @@ impl WebSocketClient for MiniTickerClient {
             // 等待连接任务和消息处理任务结束
             let _ = tokio::try_join!(connection_task, message_handler_task);
 
-            info!(target: "MarketDataIngestor", "全市场精简Ticker客户端已停止");
+            info!(target: MINI_TICKER_TARGET, "全市场精简Ticker客户端已停止");
             Ok(())
         }
     }

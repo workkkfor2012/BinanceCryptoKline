@@ -26,14 +26,11 @@ function Read-UnifiedConfig {
         # 创建配置对象
         $config = @{
             Build = @{}
-            Logging = @{
-                Services = @{}
-            }
+            Logging = @{}
             Database = @{}
             WebSocket = @{}
             Buffer = @{}
             Persistence = @{}
-            WebLog = @{}
             # 顶层配置项
             supported_intervals = @()
             max_symbols = 0
@@ -208,47 +205,29 @@ function Get-LoggingConfig {
         log_level = "info"
         log_transport = "named_pipe"
         pipe_name = "kline_log_pipe"
-        Services = @{
-            weblog = "info"
-            kline_data_service = "info"
-            kline_aggregate_service = "info"
-        }
     }
 }
 
 function Set-LoggingEnvironment {
     <#
     .SYNOPSIS
-    设置日志相关的环境变量
-    
+    设置基础环境变量（程序会直接从配置文件读取所有日志配置）
+
     .PARAMETER ServiceName
-    服务名称，用于获取特定的日志级别
+    服务名称（保留参数以兼容现有调用）
     #>
     param(
         [Parameter(Mandatory=$false)]
         [string]$ServiceName = "kline_aggregate_service"
     )
-    
-    $loggingConfig = Get-LoggingConfig
-    
-    # 设置传输方式
-    $env:LOG_TRANSPORT = $loggingConfig.log_transport
-    
-    # 设置管道名称
-    if ($loggingConfig.pipe_name) {
-        $pipeName = $loggingConfig.pipe_name
-        if (-not $pipeName.StartsWith("\\.\pipe\")) {
-            $pipeName = "\\.\pipe\$pipeName"
-        }
-        $env:PIPE_NAME = $pipeName
-    }
-    
-    # 设置日志级别
-    if ($ServiceName -eq "weblog" -and $loggingConfig.Services -and $loggingConfig.Services.weblog) {
-        $env:RUST_LOG = $loggingConfig.Services.weblog
+
+    # 程序会直接从 config/BinanceKlineConfig.toml 读取所有日志配置
+    # 这里只需要确保配置文件存在
+    if (-not (Test-Path "config\BinanceKlineConfig.toml")) {
+        Write-Warning "配置文件不存在: config\BinanceKlineConfig.toml"
+        Write-Warning "程序可能无法正常启动"
     } else {
-        # 其他服务使用默认日志级别
-        $env:RUST_LOG = $loggingConfig.log_level
+        Write-Host "✅ 程序将从 config\BinanceKlineConfig.toml 读取日志配置" -ForegroundColor Green
     }
 }
 

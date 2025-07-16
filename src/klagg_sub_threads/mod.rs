@@ -6,26 +6,27 @@
 //! 3.  **通道通信**: 计算与I/O之间通过MPSC通道解耦，实现无锁通信。
 //! 4.  **本地缓存**: Worker内部使用`symbol->local_index`的本地缓存，实现热路径O(1)查找。
 
+pub mod web_server;
+
 use crate::klcommon::{
     api::{get_aligned_time, interval_to_milliseconds},
-    context::Instrumented,
     db::Database,
     error::{AppError, Result},
+    log,
     models::Kline as DbKline,
     websocket::{
-        AggTradeClient, AggTradeConfig, AggTradeData,
-        AggTradeMessageHandler, WebSocketClient,
+        AggTradeData, AggTradeMessageHandler, MessageHandler,
     },
+    ComponentStatus, HealthReport, HealthReporter, WatchdogV2, // 引入 health 模块
     AggregateConfig,
 };
+use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
-use tokio::time::{interval, sleep, Duration};
-use tracing::{debug, error, info, trace, warn};
-use tracing_futures::Instrument;
-use kline_macros::perf_profile;
+use tokio::time::{interval, sleep, Duration, Instant};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 // --- 1. 类型定义 ---
 
@@ -68,20 +69,26 @@ pub enum WorkerCmd {
     AddSymbol {
         symbol: String,
         global_index: usize,
-        // ack通道现在传递Result，以通知成功或失败
         ack: oneshot::Sender<std::result::Result<(), String>>,
     },
 }
 
 #[derive(Debug)]
 pub enum WsCmd {
-    // [MODIFIED] 订阅指令现在只包含原始的symbol列表
     Subscribe(Vec<String>),
 }
 
 #[derive(Clone)]
 pub struct WorkerReadHandle {
     snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
+}
+
+impl std::fmt::Debug for WorkerReadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerReadHandle")
+            .field("snapshot_req_tx", &"<mpsc::Sender>")
+            .finish()
+    }
 }
 
 impl WorkerReadHandle {
@@ -97,7 +104,152 @@ impl WorkerReadHandle {
     }
 }
 
-// --- 2. Worker 核心实现 (计算部分) ---
+// --- 2. 计算任务健康报告 ---
+
+struct ComputationHealthReporter {
+    worker_id: usize,
+    last_activity: Arc<AtomicI64>, // 复用之前的心跳原子变量
+    timeout: Duration,
+}
+
+#[async_trait]
+impl HealthReporter for ComputationHealthReporter {
+    fn name(&self) -> String {
+        format!("Computation-Worker-{}", self.worker_id)
+    }
+
+    async fn report(&self) -> HealthReport {
+        let last_activity_ms = self.last_activity.load(Ordering::Relaxed);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let elapsed_ms = now_ms.saturating_sub(last_activity_ms);
+
+        let (status, message) = if last_activity_ms == 0 {
+            (ComponentStatus::Warning, Some("尚未开始活动".to_string()))
+        } else if elapsed_ms > self.timeout.as_millis() as i64 {
+            (
+                ComponentStatus::Error,
+                Some(format!("超过 {} 秒无活动", self.timeout.as_secs())),
+            )
+        } else {
+            (ComponentStatus::Ok, None)
+        };
+
+        HealthReport {
+            component_name: self.name(),
+            status,
+            message,
+            details: [(
+                "last_activity_ago_ms".to_string(),
+                serde_json::json!(elapsed_ms),
+            )]
+            .into(),
+        }
+    }
+}
+
+// --- 3. I/O 任务健康报告 ---
+
+#[derive(Default)]
+struct IoLoopMetrics {
+    messages_received: AtomicU64,
+    last_message_timestamp: AtomicI64,
+    reconnects: AtomicU64,
+}
+
+struct IoHealthReporter {
+    worker_id: usize,
+    metrics: Arc<IoLoopMetrics>,
+    // 如果超过这个时间没有收到任何消息，就发出警告
+    no_message_warning_threshold: Duration,
+}
+
+#[async_trait]
+impl HealthReporter for IoHealthReporter {
+    fn name(&self) -> String {
+        format!("IO-Worker-{}", self.worker_id)
+    }
+
+    async fn report(&self) -> HealthReport {
+        let last_msg_ts = self.metrics.last_message_timestamp.load(Ordering::Relaxed);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let elapsed_ms = now_ms.saturating_sub(last_msg_ts);
+
+        let (status, message) =
+            if last_msg_ts > 0 && elapsed_ms > self.no_message_warning_threshold.as_millis() as i64
+            {
+                (
+                    ComponentStatus::Warning,
+                    Some(format!(
+                        "超过 {} 秒未收到WebSocket消息",
+                        self.no_message_warning_threshold.as_secs()
+                    )),
+                )
+            } else {
+                (ComponentStatus::Ok, None)
+            };
+
+        let reconnects = self.metrics.reconnects.load(Ordering::Relaxed);
+        let final_status = if reconnects > 10 { ComponentStatus::Warning } else { status };
+
+        HealthReport {
+            component_name: self.name(),
+            status: final_status,
+            message,
+            details: [
+                ("reconnects".to_string(), serde_json::json!(reconnects)),
+                ("last_message_ago_ms".to_string(), serde_json::json!(elapsed_ms)),
+            ].into(),
+        }
+    }
+}
+
+// --- 4. 持久化任务健康报告 ---
+
+#[derive(Default)]
+struct PersistenceMetrics {
+    last_successful_run: Option<Instant>,
+    last_batch_size: usize,
+    last_run_duration_ms: u128,
+}
+
+struct PersistenceHealthReporter {
+    metrics: Arc<Mutex<PersistenceMetrics>>,
+    // 如果超过这个时间没有成功运行，就发出警告
+    max_interval: Duration,
+}
+
+#[async_trait]
+impl HealthReporter for PersistenceHealthReporter {
+    fn name(&self) -> String {
+        "Persistence-Task".to_string()
+    }
+    async fn report(&self) -> HealthReport {
+        let guard = self.metrics.lock().unwrap();
+        let (status, message) = match guard.last_successful_run {
+            Some(last_run) if last_run.elapsed() > self.max_interval => (
+                ComponentStatus::Warning,
+                Some(format!(
+                    "超过 {} 秒未成功持久化",
+                    self.max_interval.as_secs()
+                )),
+            ),
+            None => (ComponentStatus::Warning, Some("尚未执行过持久化".to_string())),
+            _ => (ComponentStatus::Ok, None),
+        };
+
+        HealthReport {
+            component_name: self.name(),
+            status,
+            message,
+            details: [
+                ("last_batch_size".to_string(), serde_json::json!(guard.last_batch_size)),
+                ("last_run_duration_ms".to_string(), serde_json::json!(guard.last_run_duration_ms)),
+            ].into(),
+        }
+    }
+}
+
+// --- 5. Worker 核心实现 (计算部分) ---
 
 pub struct Worker {
     worker_id: usize,
@@ -108,7 +260,7 @@ pub struct Worker {
     active_buffer_index: usize,
     local_symbol_cache: HashMap<String, usize>,
     managed_symbols_count: usize,
-    cmd_rx: Option<mpsc::Receiver<Instrumented<WorkerCmd>>>,
+    cmd_rx: Option<mpsc::Receiver<WorkerCmd>>,
     snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
     snapshot_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
     ws_cmd_tx: mpsc::Sender<WsCmd>,
@@ -118,14 +270,14 @@ pub struct Worker {
 
 impl Worker {
     #[allow(clippy::too_many_arguments)]
-    // [MODIFIED] Worker::new is now an async function
+    #[instrument(target = "计算核心", level = "info", skip_all, fields(worker_id, initial_symbols = assigned_symbols.len()))]
     pub async fn new(
         worker_id: usize,
         partition_start_index: usize,
         assigned_symbols: &[String],
         symbol_to_global_index: Arc<RwLock<HashMap<String, usize>>>,
         periods: Arc<Vec<String>>,
-        cmd_rx: Option<mpsc::Receiver<Instrumented<WorkerCmd>>>,
+        cmd_rx: Option<mpsc::Receiver<WorkerCmd>>,
         clock_rx: watch::Receiver<i64>,
     ) -> Result<(Self, mpsc::Receiver<WsCmd>, mpsc::Receiver<AggTradeData>)> {
         let (snapshot_req_tx, snapshot_req_rx) = mpsc::channel(8);
@@ -141,13 +293,11 @@ impl Worker {
         };
 
         let total_slots = initial_capacity_symbols * num_periods;
-        info!(worker_id, initial_capacity_symbols, total_slots, "Allocating state buffers.");
 
         let kline_states = vec![KlineState::default(); total_slots];
         let snapshot_buffers = (vec![KlineData::default(); total_slots], vec![KlineData::default(); total_slots]);
 
         let mut local_symbol_cache = HashMap::with_capacity(assigned_symbols.len());
-        // [MODIFIED] No longer uses block_on, now it awaits the read lock.
         let guard = symbol_to_global_index.read().await;
         for symbol in assigned_symbols {
             if let Some(&global_index) = guard.get(symbol) {
@@ -172,7 +322,8 @@ impl Worker {
             trade_tx,
             clock_rx,
         };
-
+        
+        info!(target: "计算核心", log_type="low_freq", "Worker 实例已创建");
         Ok((worker, ws_cmd_rx, trade_rx))
     }
 
@@ -186,57 +337,62 @@ impl Worker {
         self.trade_tx.clone()
     }
 
+    #[instrument(target = "计算核心", skip_all, name = "run_computation_loop", fields(worker_id = self.worker_id))]
     pub async fn run_computation_loop(
         &mut self,
         mut shutdown_rx: watch::Receiver<bool>,
         mut trade_rx: mpsc::Receiver<AggTradeData>,
-        health_probe: Arc<AtomicI64>,
+        watchdog: Arc<WatchdogV2>, // 接收 Watchdog
     ) {
-        info!(log_type = "low_freq", worker_id = self.worker_id, "计算循环启动...");
+        // 创建并注册自己的健康报告者
+        let health_probe = Arc::new(AtomicI64::new(0));
+        let reporter = Arc::new(ComputationHealthReporter {
+            worker_id: self.worker_id,
+            last_activity: health_probe.clone(),
+            timeout: Duration::from_secs(60), // 与旧的 timeout 一致
+        });
+        watchdog.register(reporter);
+
+        info!(target: "计算核心", log_type="low_freq", "计算循环开始");
         health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
         let is_special_worker = self.cmd_rx.is_some();
 
         loop {
             tokio::select! {
                 biased;
-                _ = shutdown_rx.changed() => { if *shutdown_rx.borrow() { info!(worker_id = self.worker_id, "Shutdown signal received."); break; } },
+                _ = shutdown_rx.changed() => { if *shutdown_rx.borrow() { break; } },
                 Some(trade) = trade_rx.recv() => {
+                    trace!(target: "计算核心", symbol = %trade.symbol, price = trade.price, "收到交易数据");
                     self.process_trade(trade);
                     health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
                 },
                 Ok(_) = self.clock_rx.changed() => {
                     let time = *self.clock_rx.borrow();
-                    if time > 0 { self.process_clock_tick(time); }
+                    if time > 0 { 
+                        debug!(time, "收到时钟滴答");
+                        self.process_clock_tick(time); 
+                    }
                     health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
                 },
-                Some(response_tx) = self.snapshot_req_rx.recv() => { self.process_snapshot_request(response_tx); },
-                Some(instrumented_cmd) = async { if let Some(rx) = self.cmd_rx.as_mut() { rx.recv().await } else { std::future::pending().await } }, if is_special_worker => {
-                    // 解构为 payload 和 span，避免借用冲突
-                    let (cmd, span) = instrumented_cmd.into_parts();
-                    // 使用 instrument() 方法将 future 包装在 Span 中执行
-                    self.process_command(cmd).instrument(span).await;
+                Some(response_tx) = self.snapshot_req_rx.recv() => {
+                    debug!(target: "计算核心", "收到快照请求");
+                    self.process_snapshot_request(response_tx);
+                },
+                Some(cmd) = async { if let Some(rx) = self.cmd_rx.as_mut() { rx.recv().await } else { std::future::pending().await } }, if is_special_worker => {
+                    debug!(target: "计算核心", ?cmd, "收到Worker指令");
+                    self.process_command(cmd).await;
                 },
             }
         }
-        info!(log_type = "low_freq", worker_id = self.worker_id, "计算循环结束");
+        warn!(target: "计算核心", "计算循环退出");
     }
 
-    #[perf_profile(
-        name = "trade_processing",
-        level = "trace",
-        skip_all,
-        fields(
-            worker_id = self.worker_id,
-            symbol = %trade.symbol,
-            price = trade.price,
-            quantity = trade.quantity
-        )
-    )]
+    #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(symbol = %trade.symbol, price = trade.price))]
     fn process_trade(&mut self, trade: AggTradeData) {
         let local_index = match self.local_symbol_cache.get(&trade.symbol) {
             Some(&idx) => idx,
             None => {
-                warn!(worker_id = self.worker_id, symbol = %trade.symbol, "收到未缓存品种的交易数据，丢弃");
+                warn!(target: "计算核心", symbol = %trade.symbol, "收到未被此Worker管理的品种的交易数据，已忽略");
                 return;
             }
         };
@@ -244,10 +400,19 @@ impl Worker {
         let num_periods = self.periods.len();
         let base_offset = local_index * num_periods;
         if base_offset >= self.kline_states.len() {
-            error!(worker_id = self.worker_id, symbol = %trade.symbol, local_index, "计算的本地索引超出边界！");
+            // This indicates a severe logic error
+            error!(
+                log_type = "assertion",
+                symbol = %trade.symbol,
+                local_index,
+                base_offset,
+                kline_states_len = self.kline_states.len(),
+                "计算出的K线偏移量超出预分配容量，数据可能已损坏！"
+            );
             return;
         }
 
+        trace!(target: "计算核心", symbol=%trade.symbol, local_index, "开始处理聚合交易");
         let write_buffer = if self.active_buffer_index == 0 { &mut self.snapshot_buffers.0 } else { &mut self.snapshot_buffers.1 };
         let global_index = local_index + self.partition_start_index;
 
@@ -289,9 +454,8 @@ impl Worker {
         }
     }
 
-    #[perf_profile(skip_all, fields(worker_id = self.worker_id, time = current_time))]
+    #[instrument(target = "计算核心", level = "debug", skip(self), fields(current_time))]
     fn process_clock_tick(&mut self, current_time: i64) {
-        trace!(worker_id = self.worker_id, time = current_time, "Processing clock tick");
         let num_periods = self.periods.len();
         let write_buffer = if self.active_buffer_index == 0 { &mut self.snapshot_buffers.0 } else { &mut self.snapshot_buffers.1 };
 
@@ -314,44 +478,40 @@ impl Worker {
         }
     }
 
-    // [MODIFIED] Now sends an acknowledgement back to the SymbolManager
+    #[instrument(target = "计算核心", level = "debug", skip(self, cmd), fields(command_type = std::any::type_name::<WorkerCmd>()))]
     async fn process_command(&mut self, cmd: WorkerCmd) {
-        info!(worker_id = self.worker_id, "处理指令: {:?}", cmd);
         match cmd {
             WorkerCmd::AddSymbol { symbol, global_index, ack } => {
                 let local_index = global_index - self.partition_start_index;
                 let max_local_index = self.kline_states.len() / self.periods.len();
 
                 if local_index >= max_local_index {
-                    error!(worker_id = self.worker_id, %symbol, global_index, local_index, max_local_index, "新品种本地索引超出预分配边界！");
+                    error!(
+                        log_type = "assertion",
+                        symbol, global_index, local_index, max_local_index,
+                        "计算出的本地索引超出预分配容量，这是一个严重的逻辑错误！"
+                    );
                     let _ = ack.send(Err("Local index exceeds pre-allocated boundary".to_string()));
                     return;
                 }
-
+                
+                info!(target: "计算核心", %symbol, global_index, local_index, "正在动态添加新品种");
                 self.local_symbol_cache.insert(symbol.clone(), local_index);
                 self.managed_symbols_count = (local_index + 1).max(self.managed_symbols_count);
-                info!(worker_id = self.worker_id, %symbol, global_index, local_index, "新品种状态初始化完成");
 
-                // Send command to I/O task to subscribe to the new symbol
-                let cmd = WsCmd::Subscribe(vec![symbol.clone()]);
-                if self.ws_cmd_tx.send(cmd).await.is_err() {
-                    error!(worker_id = self.worker_id, %symbol, "向I/O任务发送订阅指令失败");
+                if self.ws_cmd_tx.send(WsCmd::Subscribe(vec![symbol.clone()])).await.is_err() {
+                    warn!(target: "计算核心", %symbol, "向I/O任务发送订阅命令失败，通道可能已关闭");
                     let _ = ack.send(Err("Failed to send subscribe command to I/O task".to_string()));
                     return;
                 }
-                info!(worker_id = self.worker_id, %symbol, "订阅指令已发送到I/O任务");
 
-                // 发送成功确认信号
-                if ack.send(Ok(())).is_err() {
-                    warn!(worker_id = self.worker_id, %symbol, "向品种管理器发送确认信号失败，可能已超时");
-                }
+                let _ = ack.send(Ok(()));
             }
         }
     }
-
-    #[perf_profile(skip_all, fields(worker_id = self.worker_id))]
+    
+    #[instrument(target = "计算核心", level = "debug", skip(self, response_tx))]
     fn process_snapshot_request(&mut self, response_tx: oneshot::Sender<Vec<KlineData>>) {
-        trace!(worker_id = self.worker_id, "Processing snapshot request");
         let read_buffer_index = self.active_buffer_index;
         self.active_buffer_index = 1 - self.active_buffer_index;
 
@@ -363,17 +523,17 @@ impl Worker {
             .cloned()
             .collect();
 
+        let updated_count = updated_data.len();
         read_buffer.iter_mut().filter(|kd| kd.is_updated).for_each(|kd| kd.is_updated = false);
-
-        if response_tx.send(updated_data).is_err() {
-            warn!(worker_id = self.worker_id, "Snapshot request channel closed before sending response.");
-        }
+        
+        debug!(target: "计算核心", updated_kline_count = updated_count, "快照已生成，准备发送");
+        let _ = response_tx.send(updated_data);
     }
 }
 
 // --- 3. I/O 任务实现 ---
 
-// [MODIFIED] run_io_loop is now more robust against reconnections
+#[instrument(target = "I/O核心", skip_all, name="run_io_loop", fields(worker_id))]
 pub async fn run_io_loop(
     worker_id: usize,
     initial_symbols: Vec<String>,
@@ -381,126 +541,204 @@ pub async fn run_io_loop(
     mut shutdown_rx: watch::Receiver<bool>,
     mut ws_cmd_rx: mpsc::Receiver<WsCmd>,
     trade_tx: mpsc::Sender<AggTradeData>,
+    watchdog: Arc<WatchdogV2>, // [修改] 接收 watchdog
 ) {
-    info!(log_type = "low_freq", worker_id, "I/O循环启动...");
-    // [NEW] This list tracks all symbols this I/O loop is responsible for.
-    let mut managed_symbols = initial_symbols;
+    let metrics = Arc::new(IoLoopMetrics::default());
+    let reporter = Arc::new(IoHealthReporter {
+        worker_id,
+        metrics: metrics.clone(),
+        no_message_warning_threshold: Duration::from_secs(60),
+    });
+    watchdog.register(reporter);
 
-    // 创建一个转换通道，将 AggTradeData 转发到计算线程
-    let (klcommon_sender, mut klcommon_receiver) = tokio::sync::mpsc::unbounded_channel::<AggTradeData>();
+    info!(target: "I/O核心", log_type = "low_freq", "I/O 循环启动");
 
-    // 启动转换任务
+    // 创建一个中转通道，因为 AggTradeMessageHandler 需要 UnboundedSender
+    let (unbounded_tx, mut unbounded_rx) = tokio::sync::mpsc::unbounded_channel::<AggTradeData>();
+
+    // 启动一个任务来转发数据从 unbounded 到 bounded 通道
     let trade_tx_clone = trade_tx.clone();
-    tokio::spawn(async move {
-        while let Some(trade) = klcommon_receiver.recv().await {
+    let metrics_clone = metrics.clone();
+    log::context::spawn_instrumented(async move {
+        while let Some(trade) = unbounded_rx.recv().await {
+            // 更新 I/O 指标
+            metrics_clone.messages_received.fetch_add(1, Ordering::Relaxed);
+            metrics_clone.last_message_timestamp.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
             if trade_tx_clone.send(trade).await.is_err() {
-                trace!("Computation loop trade channel closed.");
+                warn!(target: "I/O核心", "计算任务的trade通道已关闭，I/O数据转发任务退出");
                 break;
             }
         }
     });
-    
-    loop {
-        // 检查是否有品种需要处理
-        if managed_symbols.is_empty() {
-            info!(worker_id, "No symbols assigned to this worker, waiting for commands...");
 
-            // 等待命令或关闭信号
-            tokio::select! {
-                biased;
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        info!(worker_id, "I/O loop received shutdown signal.");
-                        return;
-                    }
-                },
-                Some(cmd) = ws_cmd_rx.recv() => {
-                    info!(worker_id, ?cmd, "I/O task received command.");
-                    match cmd {
-                        WsCmd::Subscribe(new_symbols) => {
-                            // 更新管理的品种列表
-                            managed_symbols.extend(new_symbols.clone());
-                            info!(worker_id, new_count = managed_symbols.len(), "Updated managed symbols list.");
-                            // 继续到下一次循环尝试连接
-                            continue;
-                        }
-                    }
-                },
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                    // 定期检查是否有新的品种分配
-                    continue;
-                }
-            }
+    // 创建一个消息处理器，它会将解析后的数据发给计算线程
+    let handler = Arc::new(AggTradeMessageHandler::with_trade_sender(
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        unbounded_tx,
+    ));
+
+    // 使用 ConnectionManager 来处理连接逻辑
+    let connection_manager = crate::klcommon::websocket::ConnectionManager::new(
+        config.websocket.use_proxy,
+        config.websocket.proxy_host.clone(),
+        config.websocket.proxy_port,
+    );
+
+    // [MODIFIED] 主要的重连循环
+    'reconnect_loop: loop {
+        if *shutdown_rx.borrow() {
+            warn!(target: "I/O核心", "I/O 循环因关闭信号而退出");
+            break 'reconnect_loop;
         }
 
-        // [MODIFIED] Always use the current `managed_symbols` list for connections.
-        let _streams_to_subscribe: Vec<String> = managed_symbols
-            .iter()
+        // 初始订阅流
+        let streams_to_subscribe = if initial_symbols.is_empty() {
+            // 如果一开始没有品种，就等待指令
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => continue 'reconnect_loop,
+                Some(cmd) = ws_cmd_rx.recv() => {
+                    if let WsCmd::Subscribe(new_symbols) = cmd {
+                        new_symbols
+                    } else {
+                        vec![]
+                    }
+                },
+            }
+        } else {
+            initial_symbols.clone()
+        };
+
+        if streams_to_subscribe.is_empty() && !*shutdown_rx.borrow() {
+            sleep(Duration::from_secs(1)).await;
+            continue 'reconnect_loop;
+        }
+
+        info!(target: "I/O核心", symbol_count = streams_to_subscribe.len(), "准备启动 AggTrade WebSocket 客户端");
+        metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+
+        // [MODIFIED] 连接一次
+        let agg_trade_streams: Vec<String> = streams_to_subscribe.iter()
             .map(|s| format!("{}@aggTrade", s.to_lowercase()))
             .collect();
 
-        let agg_trade_config = AggTradeConfig {
-            use_proxy: config.websocket.use_proxy,
-            proxy_addr: config.websocket.proxy_host.clone(),
-            proxy_port: config.websocket.proxy_port,
-            symbols: managed_symbols.clone(), // This is used by some generic websocket parts
+        // [修改逻辑] 调用 connect 时不再传递任何参数
+        let mut ws = match connection_manager.connect().await {
+            Ok(ws) => ws,
+            Err(e) => {
+                error!(target: "I/O核心", error = ?e, "WebSocket 连接失败，将在延迟后重试");
+                sleep(Duration::from_secs(5)).await;
+                continue 'reconnect_loop;
+            }
         };
-        
-        let handler = Arc::new(AggTradeMessageHandler::with_trade_sender(
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            klcommon_sender.clone(),
-        ));
-        let mut client = AggTradeClient::new_with_handler(agg_trade_config, handler);
-        
-        // 启动 WebSocket 客户端
-        tokio::select! {
-            biased;
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    info!(worker_id, "I/O loop received shutdown signal.");
-                    return;
-                }
-            },
-            result = client.start() => {
-                if let Err(e) = result {
-                    error!(worker_id, error = %e, "WebSocket client failed.");
-                }
-                // WebSocket 连接断开，等待重连
-                sleep(Duration::from_secs(1)).await;
-            },
-            Some(cmd) = ws_cmd_rx.recv() => {
-                info!(worker_id, ?cmd, "I/O task received command.");
-                match cmd {
-                    WsCmd::Subscribe(new_symbols) => {
-                        // 更新管理的品种列表
-                        managed_symbols.extend(new_symbols.clone());
-                        info!(worker_id, new_count = managed_symbols.len(), "Updated managed symbols list.");
-                        // 注意：新的订阅将在下次重连时生效
-                        info!(worker_id, "New symbols will be subscribed on next reconnection.");
-                    }
-                }
-            },
+
+        // [修改逻辑] 在这里发送初始订阅消息，而不是在 connect_once 内部。
+        if !agg_trade_streams.is_empty() {
+            let subscribe_msg = crate::klcommon::websocket::create_subscribe_message(&agg_trade_streams);
+            let frame = fastwebsockets::Frame::text(subscribe_msg.into_bytes().into());
+
+            if let Err(e) = ws.write_frame(frame).await {
+                error!(target: "I/O核心", error = ?e, "发送初始订阅命令失败，准备重连...");
+                sleep(Duration::from_secs(5)).await;
+                continue 'reconnect_loop;
+            } else {
+                info!(target: "I/O核心",
+                    log_type = "low_freq",
+                    worker_id = worker_id,
+                    streams = ?agg_trade_streams,
+                    stream_count = agg_trade_streams.len(),
+                    "🔗 初始订阅命令已发送"
+                );
+            }
         }
 
-        // 等待重连
-        tokio::select! {
-            _ = sleep(Duration::from_secs(5)) => {
-                info!(worker_id, "Attempting to reconnect WebSocket...");
-            },
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    info!(worker_id, "I/O loop received shutdown signal during retry wait. Exiting.");
-                    return;
+        info!(target: "I/O核心", "WebSocket 连接成功建立，开始监听消息...");
+
+        // [MODIFIED] 统一的事件循环
+        'message_loop: loop {
+            tokio::select! {
+                biased;
+                // 监听关闭信号
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        warn!(target: "I/O核心", "I/O 循环因关闭信号而退出");
+                        break 'reconnect_loop;
+                    }
+                },
+                // 监听传入的 WebSocket 消息
+                result = ws.read_frame() => {
+                    match result {
+                        Ok(frame) => {
+                            match frame.opcode {
+                                fastwebsockets::OpCode::Text => {
+                                    let text = String::from_utf8_lossy(&frame.payload).to_string();
+                                    metrics.messages_received.fetch_add(1, Ordering::Relaxed);
+                                    metrics.last_message_timestamp.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+
+                                    if let Err(e) = handler.handle_message(worker_id, text).await {
+                                        warn!(target: "I/O核心", error = ?e, "消息处理失败");
+                                    }
+                                },
+                                fastwebsockets::OpCode::Close => {
+                                    info!(target: "I/O核心", "服务器关闭了连接，准备重连...");
+                                    break 'message_loop;
+                                }
+                                fastwebsockets::OpCode::Ping => {
+                                    debug!(target: "I/O核心", "收到 Ping, 自动回复 Pong");
+                                    let _ = ws.write_frame(fastwebsockets::Frame::pong(frame.payload)).await;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            warn!(target: "I/O核心", error = ?e, "读取 WebSocket 帧失败，连接可能已断开，准备重连...");
+                            break 'message_loop;
+                        }
+                    }
+                },
+                // 监听来自计算线程的命令
+                Some(cmd) = ws_cmd_rx.recv() => {
+                    if let WsCmd::Subscribe(new_symbols) = cmd {
+                        let new_streams: Vec<_> = new_symbols.iter().map(|s| format!("{}@aggTrade", s.to_lowercase())).collect();
+
+                        // [MODIFIED] 发送订阅命令，而不是重启
+                        let subscribe_msg = crate::klcommon::websocket::create_subscribe_message(&new_streams);
+
+                        info!(target: "I/O核心",
+                            count = new_symbols.len(),
+                            symbols = ?new_symbols,
+                            streams = ?new_streams,
+                            subscribe_msg = %subscribe_msg,
+                            "收到动态订阅指令"
+                        );
+                        let frame = fastwebsockets::Frame::text(subscribe_msg.into_bytes().into());
+
+                        if let Err(e) = ws.write_frame(frame).await {
+                            error!(target: "I/O核心", error = ?e, "发送动态订阅命令失败，准备重连...");
+                            break 'message_loop;
+                        } else {
+                            info!(target: "I/O核心",
+                                log_type = "low_freq",
+                                worker_id = worker_id,
+                                new_streams = ?new_streams,
+                                stream_count = new_streams.len(),
+                                "🔗 动态订阅命令发送成功"
+                            );
+                        }
+                    }
                 }
             }
         }
+        // 如果 message_loop 中断，则会在这里稍作等待后重新进入 reconnect_loop
+        sleep(Duration::from_secs(5)).await;
     }
 }
 
 
 // --- 4. 后台任务 (持久化) ---
 
+#[instrument(target = "持久化任务", skip_all, name="persistence_task")]
 pub async fn persistence_task(
     db: Arc<Database>,
     worker_handles: Arc<Vec<WorkerReadHandle>>,
@@ -508,87 +746,107 @@ pub async fn persistence_task(
     periods: Arc<Vec<String>>,
     config: Arc<AggregateConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
+    watchdog: Arc<WatchdogV2>, // [修改] 接收 watchdog
 ) {
+    let metrics = Arc::new(Mutex::new(PersistenceMetrics::default()));
+    let reporter = Arc::new(PersistenceHealthReporter {
+        metrics: metrics.clone(),
+        max_interval: Duration::from_millis(config.persistence_interval_ms * 3), // e.g., 3倍于周期
+    });
+    watchdog.register(reporter);
+
     let persistence_interval = Duration::from_millis(config.persistence_interval_ms);
     let mut interval = interval(persistence_interval);
-    info!(log_type = "low_freq", interval_ms = config.persistence_interval_ms, "持久化任务启动");
+    info!(target: "持久化任务", log_type = "low_freq", interval_ms = persistence_interval.as_millis(), "持久化任务已启动");
 
     loop {
         tokio::select! {
-            _ = interval.tick() => {},
+            _ = interval.tick() => {
+                perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods, metrics.clone()).await;
+            },
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
-                    info!(log_type = "low_freq", "持久化任务收到关闭信号，执行最终写入...");
-                    perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods).await;
+                    info!(target: "持久化任务", "收到关闭信号，执行最后一次持久化...");
+                    perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods, metrics.clone()).await;
+                    info!(target: "持久化任务", "最后一次持久化完成");
                     break;
                 }
             }
         }
-        perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods).await;
     }
-    info!(log_type = "low_freq", "持久化任务结束");
+    warn!(target: "持久化任务", "持久化任务已退出");
 }
 
-#[perf_profile(
-    name = "persistence_cycle_transaction",
-    level = "info",
-    skip_all,
-    fields(
-        tx_id = format!("persist:{}", chrono::Utc::now().timestamp_millis()),
-        log_type = "high_freq"
-    )
-)]
+#[instrument(target = "持久化任务", skip_all, name="perform_persistence_cycle")]
 async fn perform_persistence_cycle(
     db: &Arc<Database>,
     worker_handles: &Arc<Vec<WorkerReadHandle>>,
     index_to_symbol: &Arc<RwLock<Vec<String>>>,
     periods: &Arc<Vec<String>>,
+    metrics: Arc<Mutex<PersistenceMetrics>>, // [修改] 接收 metrics
 ) {
-    debug!("开始持久化周期...");
-    let handles = worker_handles.iter().map(|h| h.request_snapshot());
+    let cycle_start = Instant::now();
+
+    let handles = worker_handles.iter().enumerate().map(|(id, h)| async move {
+        (id, h.request_snapshot().await)
+    });
     let results = futures::future::join_all(handles).await;
 
     let mut klines_to_save = Vec::new();
     let index_to_symbol_guard = index_to_symbol.read().await;
 
-    for result in results {
-        if let Ok(snapshot) = result {
-            for kline_data in snapshot {
-                if let (Some(symbol), Some(interval)) = (
-                    index_to_symbol_guard.get(kline_data.global_symbol_index),
-                    periods.get(kline_data.period_index),
-                ) {
-                    let db_kline = DbKline {
-                        open_time: kline_data.open_time,
-                        open: kline_data.open.to_string(),
-                        high: kline_data.high.to_string(),
-                        low: kline_data.low.to_string(),
-                        close: kline_data.close.to_string(),
-                        volume: kline_data.volume.to_string(),
-                        close_time: kline_data.open_time + interval_to_milliseconds(interval) - 1,
-                        quote_asset_volume: kline_data.turnover.to_string(),
-                        number_of_trades: kline_data.trade_count,
-                        taker_buy_base_asset_volume: kline_data.taker_buy_volume.to_string(),
-                        taker_buy_quote_asset_volume: kline_data.taker_buy_turnover.to_string(),
-                        ignore: "0".to_string(),
-                    };
-                    klines_to_save.push((symbol.clone(), interval.clone(), db_kline));
+    for (worker_id, result) in results {
+        match result {
+            Ok(snapshot) => {
+                debug!(target: "持久化任务", worker_id, kline_count = snapshot.len(), "成功从Worker获取快照");
+                for kline_data in snapshot {
+                    if let (Some(symbol), Some(interval)) = (
+                        index_to_symbol_guard.get(kline_data.global_symbol_index),
+                        periods.get(kline_data.period_index),
+                    ) {
+                        let db_kline = DbKline {
+                            open_time: kline_data.open_time,
+                            open: kline_data.open.to_string(),
+                            high: kline_data.high.to_string(),
+                            low: kline_data.low.to_string(),
+                            close: kline_data.close.to_string(),
+                            volume: kline_data.volume.to_string(),
+                            close_time: kline_data.open_time + interval_to_milliseconds(interval) - 1,
+                            quote_asset_volume: kline_data.turnover.to_string(),
+                            number_of_trades: kline_data.trade_count,
+                            taker_buy_base_asset_volume: kline_data.taker_buy_volume.to_string(),
+                            taker_buy_quote_asset_volume: kline_data.taker_buy_turnover.to_string(),
+                            ignore: "0".to_string(),
+                        };
+                        klines_to_save.push((symbol.clone(), interval.clone(), db_kline));
+                    }
                 }
             }
-        } else if let Err(e) = result {
-            error!("从Worker获取快照失败: {}", e);
+            Err(e) => {
+                warn!(target: "持久化任务", worker_id, error = ?e, "从Worker获取快照失败");
+            }
         }
     }
 
     if !klines_to_save.is_empty() {
         let count = klines_to_save.len();
-        info!(log_type = "low_freq", count, "保存K线数据到数据库...");
+        info!(target: "持久化任务", log_type="beacon", kline_count = count, "开始执行批量K线数据持久化");
         if let Err(e) = db.upsert_klines_batch(klines_to_save) {
-            error!(error = %e, "保存K线数据到数据库失败");
+            error!(target: "持久化任务", error = ?e, "批量K线数据持久化失败");
         } else {
-            info!(log_type = "low_freq", count, "成功保存{}条K线数据", count);
+            info!(target: "持久化任务", log_type="beacon", kline_count = count, "批量K线数据持久化成功");
+            // [修改] 更新指标
+            let mut guard = metrics.lock().unwrap();
+            guard.last_successful_run = Some(Instant::now());
+            guard.last_batch_size = count;
+            guard.last_run_duration_ms = cycle_start.elapsed().as_millis();
         }
     } else {
-        debug!("本周期无更新的K线数据需要持久化");
+        debug!(target: "持久化任务", "本次持久化周期内无更新的K线数据");
+        // 即使没有数据，也算成功运行了一次
+        let mut guard = metrics.lock().unwrap();
+        guard.last_successful_run = Some(Instant::now());
+        guard.last_batch_size = 0;
+        guard.last_run_duration_ms = cycle_start.elapsed().as_millis();
     }
 }

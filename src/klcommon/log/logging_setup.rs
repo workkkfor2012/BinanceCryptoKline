@@ -5,14 +5,17 @@
 
 use crate::klcommon::{
     log::{
-        init_log_sender,
-        McpLayer,
+        // init_log_sender,     // [注释掉] 未使用的导入
+        // McpLayer,            // [注释掉] 未使用的导入
         init_problem_summary_log,
         ProblemSummaryLayer,
         init_low_freq_log,
         LowFreqLogLayer,
         init_beacon_log,
         BeaconLogLayer,
+        // [新增] 导入新组件
+        init_target_log_sender,
+        TargetLogLayer,
     },
     AppError,
     Result,
@@ -46,26 +49,33 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
         eprintln!("警告：无法创建日志目录: {}", e);
     }
 
-    // 获取日志配置 - 优先从配置文件读取，回退到环境变量
-    let (log_level, _log_transport, pipe_name, enable_full_tracing) = match load_logging_config() {
-        Ok(config) => {
-            config
-        },
-        Err(e) => {
-            eprintln!("配置文件读取失败，回退到环境变量: {}", e);
-            let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-            let pipe_name = std::env::var("PIPE_NAME").unwrap_or_else(|_| "kline_mcp_log_pipe".to_string());
-            let enable_full_tracing = std::env::var("ENABLE_FULL_TRACING").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true);
-            (log_level, "named_pipe".to_string(), pipe_name, enable_full_tracing)
-        }
-    };
+    // 获取日志配置 - 只从配置文件读取
+    let (log_level, log_transport, pipe_name, enable_full_tracing) = load_logging_config()
+        .map_err(|e| {
+            eprintln!("配置文件读取失败: {}", e);
+            eprintln!("请确保 config/BinanceKlineConfig.toml 文件存在且格式正确");
+            e
+        })?;
+
+    // 在控制台显示读取到的日志配置
+    eprintln!("📋 日志配置信息:");
+    eprintln!("  日志级别: {}", log_level);
+    eprintln!("  传输方式: {}", log_transport);
+    eprintln!("  管道名称: {}", pipe_name);
+    eprintln!("  完全追踪: {}", if enable_full_tracing { "启用" } else { "禁用" });
 
     // 初始化追踪配置
-    use crate::klcommon::context::init_tracing_config;
+    use crate::klcommon::log::context::init_tracing_config;
     init_tracing_config(enable_full_tracing);
 
-    // [恢复] 初始化所有自定义日志组件
-    init_log_sender(&pipe_name);
+    // [修改] 使用配置文件中的 `weblog_pipe_name` 来初始化新的日志发送器
+    // 从配置中获取weblog管道名称，如果没有则使用默认值
+    let weblog_pipe_name = load_weblog_pipe_name().unwrap_or_else(|_| "weblog_pipe".to_string());
+    init_target_log_sender(&weblog_pipe_name);
+
+    // [注释掉] 旧的初始化
+    // init_log_sender(&pipe_name);
+
     init_problem_summary_log("logs/problem_summary.log").ok();
     init_low_freq_log("logs/low_freq.log").ok();
     init_beacon_log("logs/beacon.log").ok();
@@ -78,12 +88,16 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
         log_level
     );
 
-    // 2. 初始化订阅者注册表，并为业务层应用业务过滤器
+    // 显示过滤器字符串用于调试
+    eprintln!("🔍 日志过滤器: {}", business_filter_str);
+
+    // [修改] 这是切换日志层的关键点
     let registry = Registry::default()
-        .with(McpLayer.with_filter(EnvFilter::new(&business_filter_str)))
-        .with(ProblemSummaryLayer.with_filter(EnvFilter::new(&business_filter_str)))
-        .with(LowFreqLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)))
-        .with(BeaconLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)));
+        .with(TargetLogLayer::new().with_filter(EnvFilter::new(&business_filter_str))) // [启用] 简单日志层
+        // .with(McpLayer.with_filter(EnvFilter::new(&business_filter_str)))          // [禁用] AI富日志层
+        .with(ProblemSummaryLayer.with_filter(EnvFilter::new(&business_filter_str))) // 可按需保留
+        .with(LowFreqLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)))   // 可按需保留
+        .with(BeaconLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)));    // 可按需保留
 
     // 3. 条件性地准备性能分析层和其 guard
     let enable_perf_log = std::env::var("ENABLE_PERF_LOG").is_ok();
@@ -113,6 +127,21 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
         .init();
 
     eprintln!("统一日志系统初始化完成");
+
+    // 使用刚初始化的日志系统记录配置信息
+    use tracing::info;
+    info!(
+        log_type = "low_freq",
+        event_type = "logging_config_loaded",
+        log_level = %log_level,
+        log_transport = %log_transport,
+        pipe_name = %pipe_name,
+        enable_full_tracing = enable_full_tracing,
+        "📋 日志配置已加载并应用"
+    );
+
+    // [新增] 发送会话开始标记，通知weblog端清空所有历史数据
+    send_session_start_marker();
 
     // 5. 返回 guard，它的生命周期将由 main 函数管理
     Ok(final_guard)
@@ -146,4 +175,52 @@ pub fn load_logging_config() -> Result<(String, String, String, bool)> {
     } else {
         Err(AppError::ConfigError(format!("配置文件不存在: {}，回退到环境变量", config_path)))
     }
+}
+
+/// 加载WebLog管道名称配置
+pub fn load_weblog_pipe_name() -> Result<String> {
+    const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
+
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+
+    if Path::new(&config_path).exists() {
+        match AggregateConfig::from_file(&config_path) {
+            Ok(config) => {
+                // 获取weblog管道名称，如果没有则使用默认值
+                let weblog_pipe_name = config.logging.weblog_pipe_name
+                    .unwrap_or_else(|| "weblog_pipe".to_string());
+
+                // 确保管道名称格式正确
+                let pipe_name = if weblog_pipe_name.starts_with(r"\\.\pipe\") {
+                    weblog_pipe_name
+                } else {
+                    format!(r"\\.\pipe\{}", weblog_pipe_name)
+                };
+
+                Ok(pipe_name)
+            },
+            Err(e) => Err(AppError::ConfigError(format!("Failed to parse config: {}", e))),
+        }
+    } else {
+        // 如果配置文件不存在，使用默认值
+        Ok(r"\\.\pipe\weblog_pipe".to_string())
+    }
+}
+
+/// 发送会话开始标记，通知weblog端清空所有历史数据
+fn send_session_start_marker() {
+    use tracing::info;
+
+    // 创建会话开始标记日志
+    // weblog端会识别这个特殊消息并清空所有数据
+    info!(
+        session_start = true,
+        event_type = "session_start",
+        program_name = env!("CARGO_PKG_NAME"),
+        program_version = env!("CARGO_PKG_VERSION"),
+        timestamp = chrono::Utc::now().to_rfc3339(),
+        "session_start"
+    );
+
+    eprintln!("[Session] 会话开始标记已发送，weblog端将清空所有历史数据");
 }

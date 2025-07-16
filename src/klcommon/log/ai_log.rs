@@ -14,7 +14,8 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use std::thread::{self, JoinHandle};
-use tracing::{Id, Subscriber};
+use uuid;
+use tracing::{Id, Subscriber, warn};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use once_cell::sync::Lazy;
@@ -39,6 +40,7 @@ pub struct SpanModel {
     pub attributes: HashMap<String, AttributeValue>,
     pub events: Vec<SpanEvent>,
     pub status: String, // "SUCCESS" or "FAILURE"
+    pub span_type: String, // "span" 或 "event"
 }
 
 /// Span内部发生的事件的模型
@@ -406,24 +408,27 @@ where
         let span = ctx.span(id).expect("Span not found");
         let mut extensions = span.extensions_mut();
 
-        // 1. 确定Trace ID
+        // [修改] 回归到标准的 Trace ID 继承/生成逻辑
         let trace_id = if let Some(parent) = span.parent() {
-            // 如果有父Span，从父Span继承Trace ID
             parent.extensions()
                   .get::<SpanContext>()
                   .map(|d| d.trace_id.clone())
-                  .unwrap_or_else(|| parent.id().into_u64().to_string()) // Fallback
+                  .unwrap_or_else(|| {
+                       // 保留健壮性回退逻辑
+                       warn!(parent_id = ?parent.id(), child_id = ?id, "Parent span is missing SpanContext, generating new trace_id for this sub-tree.");
+                       uuid::Uuid::new_v4().to_string()
+                  })
         } else {
-            // 如果是根Span，用自己的ID作为Trace ID
-            id.into_u64().to_string()
+            // 如果是根 Span（由 parent: None 或无父上下文创建），则生成一个唯一的UUID
+            uuid::Uuid::new_v4().to_string()
         };
 
-        // 2. 收集字段
+        // 正常收集字段
         let mut attributes = HashMap::new();
         let mut visitor = JsonVisitor(&mut attributes);
         attrs.record(&mut visitor);
 
-        // 3. 将Trace ID、字段和开始时间存入Span的extensions中
+        // 正常存储上下文
         extensions.insert(Instant::now());
         extensions.insert(SpanContext {
             trace_id,
@@ -434,8 +439,9 @@ where
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-        // 找到当前事件所属的Span
+        // [修改逻辑] 检查事件是否在某个Span内部
         if let Some(span) = ctx.lookup_current() {
+            // --- 行为不变: 事件在Span内部，附加到父Span ---
             let mut extensions = span.extensions_mut();
             if let Some(data) = extensions.get_mut::<SpanContext>() {
 
@@ -463,6 +469,39 @@ where
                     attributes,
                 });
             }
+        } else {
+            // --- [新增行为]: 处理独立的、不在任何Span内的事件 ---
+            // 将这种独立事件视为一个"瞬时"的、零时长的Span来处理
+            let mut attributes = HashMap::new();
+            let mut visitor = JsonVisitor(&mut attributes);
+            event.record(&mut visitor);
+
+            let name = attributes.remove("message")
+                .and_then(|v| if let serde_json::Value::String(s) = v { Some(s) } else { None })
+                .unwrap_or_else(|| event.metadata().name().to_string());
+
+            let pseudo_id = format!("{}-{}", chrono::Utc::now().timestamp_micros(), rand::random::<u32>());
+
+            let model = SpanModel {
+                id: pseudo_id.clone(),
+                trace_id: pseudo_id, // 自身就是根
+                parent_id: None,
+                name,
+                target: event.metadata().target().to_string(),
+                level: event.metadata().level().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                duration_ms: 0.0,
+                attributes,
+                events: vec![],
+                status: if *event.metadata().level() <= tracing::Level::WARN {
+                    "FAILURE"
+                } else {
+                    "SUCCESS"
+                }.to_string(),
+                span_type: "event".to_string(), // [关键] 标记为事件
+            };
+
+            send_log(StructuredLog::Span(model));
         }
     }
 
@@ -490,6 +529,7 @@ where
             attributes: span_context.attributes,
             events: span_context.events,
             status,
+            span_type: "span".to_string(), // [关键] 标记为真实Span
         };
 
         send_log(StructuredLog::Span(model));

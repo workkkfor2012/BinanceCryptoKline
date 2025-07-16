@@ -70,66 +70,16 @@ function Read-LoggingConfig {
     }
 }
 
-function Read-WebLogConfig {
-    <#
-    .SYNOPSIS
-    从WebLog配置文件读取日志配置
 
-    .DESCRIPTION
-    读取src/weblog/config/logging_config.toml文件中的WebLog日志配置，返回包含LogLevel的对象
-
-    .OUTPUTS
-    PSCustomObject 包含WebLog日志配置的对象
-    #>
-
-    $configPath = "src\weblog\config\logging_config.toml"
-
-    if (-not (Test-Path $configPath)) {
-        Write-Warning "WebLog配置文件不存在: $configPath，使用默认配置"
-        return @{
-            LogLevel = "info"
-        }
-    }
-
-    try {
-        $configContent = Get-Content $configPath -Raw -Encoding UTF8
-
-        # 解析WebLog日志级别 - 查找[weblog]部分的log_level
-        $logLevel = "info"  # 默认值
-        $inWeblogSection = $false
-
-        foreach ($line in ($configContent -split "`n")) {
-            $line = $line.Trim()
-            if ($line -eq "[weblog]") {
-                $inWeblogSection = $true
-            } elseif ($line.StartsWith("[") -and $line -ne "[weblog]") {
-                $inWeblogSection = $false
-            } elseif ($inWeblogSection -and $line -match 'log_level\s*=\s*"(.+?)"') {
-                $logLevel = $matches[1]
-                break
-            }
-        }
-
-        return @{
-            LogLevel = $logLevel
-        }
-    }
-    catch {
-        Write-Error "读取WebLog配置文件失败: $_"
-        return @{
-            LogLevel = "info"
-        }
-    }
-}
 
 function Set-LoggingEnvironment {
     <#
     .SYNOPSIS
-    设置日志环境变量
-    
+    设置日志环境变量（仅设置传输方式和管道名称，日志级别由程序直接从配置文件读取）
+
     .DESCRIPTION
     根据提供的日志配置对象设置相应的环境变量
-    
+
     .PARAMETER LoggingConfig
     包含日志配置的对象
     #>
@@ -137,15 +87,13 @@ function Set-LoggingEnvironment {
         [Parameter(Mandatory=$true)]
         [hashtable]$LoggingConfig
     )
-    
+
     try {
-        # 设置环境变量
-        $env:RUST_LOG = $LoggingConfig.LogLevel
+        # 注意：不再设置 RUST_LOG 环境变量，让程序直接从配置文件读取日志级别
         $env:LOG_TRANSPORT = $LoggingConfig.LogTransport
         $env:PIPE_NAME = $LoggingConfig.PipeName
-        
-        Write-Host "✅ 环境变量设置完成" -ForegroundColor Green
-        Write-Host "  日志级别: $($LoggingConfig.LogLevel)" -ForegroundColor Gray
+
+        Write-Host "✅ 环境变量设置完成（日志级别由程序从配置文件读取）" -ForegroundColor Green
         Write-Host "  传输方式: $($LoggingConfig.LogTransport)" -ForegroundColor Gray
         Write-Host "  管道名称: $($LoggingConfig.PipeName)" -ForegroundColor Gray
     }

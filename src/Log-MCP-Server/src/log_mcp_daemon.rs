@@ -71,6 +71,7 @@ pub struct SpanModel {
     pub attributes: std::collections::HashMap<String, AttributeValue>,
     pub events: Vec<SpanEvent>,
     pub status: String,
+    pub span_type: String, // "span" 或 "event"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,13 +86,6 @@ pub struct SpanEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StructuredLog {
     Span(SpanModel),
-    Event {
-        timestamp: String,
-        level: String,
-        target: String,
-        message: String,
-        attributes: std::collections::HashMap<String, AttributeValue>,
-    },
 }
 
 // --- 2. 内存数据库 (普通struct) ---
@@ -266,7 +260,6 @@ async fn log_receiver_task(pipe_name: &str, db_mutex: Arc<Mutex<InMemoryDb>>, en
                         let mut db = db_clone.lock().await;
                         db.insert_span(span);
                     }
-                    Ok(_) => {}
                     Err(e) => {
                         if enable_debug {
                             eprintln!(
@@ -350,7 +343,6 @@ async fn log_receiver_task(tcp_addr: &str, db_mutex: Arc<Mutex<InMemoryDb>>, ena
                                 let mut db = db_clone.lock().await;
                                 db.insert_span(span);
                             }
-                            Ok(_) => {}
                             Err(e) => {
                                 if enable_debug {
                                     eprintln!(

@@ -42,9 +42,9 @@ description = "你被授权使用以下封装好的高级工具集。专注于�
 name = "Query-Trace-By-Id"
 description = "根据 trace_id 从 log_mcp_daemon 获取一个完整调用链下的所有Spans。这是你最主要的日志查询工具。"
 direct_execution = "直接执行HTTP GET请求，无需加载脚本文件"
-api_endpoint = "GET http://127.0.0.1:9002/api/v1/trace/{trace_id}"
-powershell_command = "Invoke-WebRequest -Uri \"http://127.0.0.1:9002/api/v1/trace/<trace_id>\" -Method GET"
-example = "Invoke-WebRequest -Uri \"http://127.0.0.1:9002/api/v1/trace/23\" -Method GET"
+api_endpoint = "GET http://127.0.0.1:1/api/v1/trace/{trace_id}"
+powershell_command = "Invoke-WebRequest -Uri \"http://127.0.0.1:9001/api/v1/trace/<trace_id>\" -Method GET"
+example = "Invoke-WebRequest -Uri \"http://127.0.0.1:9001/api/v1/trace/23\" -Method GET"
 backup_note = "备用方案：如果直接HTTP调用失败，可使用src/Log-MCP-Server/query_commands.ps1脚本中的qtrace命令"
 
 [[toolset.commands]]
@@ -139,7 +139,7 @@ description = "当HTTP查询失败时，可参考以下信息进行排查。"
 
 [[troubleshooting.issues]]
 problem = "HTTP GET请求失败或超时"
-solution = "请检查：1. log_mcp_daemon服务是否正常运行。2. 端口是否正确(默认9002)。3. 网络连接是否正常。"
+solution = "请检查：1. log_mcp_daemon服务是否正常运行。2. 端口是否正确(默认9001)。3. 网络连接是否正常。"
 
 [[troubleshooting.issues]]
 problem = "返回空结果或404错误"

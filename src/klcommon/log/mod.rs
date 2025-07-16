@@ -14,6 +14,10 @@ pub mod ai_problem_summary;
 
 pub mod low_freq_log;
 pub mod beacon_log;
+pub mod logging_setup;
+pub mod context;
+pub mod health;
+pub mod target_log; // [新增] 声明新模块
 
 // 导出AI日志系统核心类型
 pub use ai_log::{
@@ -44,6 +48,36 @@ pub use low_freq_log::{
 pub use beacon_log::{
     BeaconLogLayer,
     init_beacon_log,
+};
+
+pub use logging_setup::{
+    init_ai_logging,
+    load_logging_config,
+    LogGuard,
+    DummyGuard,
+};
+
+pub use context::{
+    init_tracing_config,
+    instrument_if_enabled,
+    spawn_instrumented,
+    spawn_instrumented_on,
+    spawn_blocking_instrumented,
+    Instrumented,
+};
+
+pub use health::{
+    WatchdogV2,
+    HealthReporter,
+    HealthReport,
+    ComponentStatus,
+};
+
+// [新增] 导出新模块的公共API
+pub use target_log::{
+    TargetLogLayer,
+    init_target_log_sender,
+    shutdown_target_log_sender,
 };
 
 

@@ -16,6 +16,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tower_http::services::ServeDir;
 use serde::Deserialize;
+use chrono;
 
 /// 全局连接计数器
 static CONNECTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -62,7 +63,8 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
     let connection_id = CONNECTION_COUNTER.fetch_add(1, Ordering::SeqCst);
     let active_connections = CONNECTION_COUNTER.load(Ordering::SeqCst);
 
-    tracing::info!("🔗 新WebSocket连接 #{} (当前活跃: {})", connection_id, active_connections);
+    let now = chrono::Utc::now().format("%H:%M:%S%.3f");
+    tracing::info!("🔗 [{}] 新WebSocket连接 #{} (当前活跃: {})", now, connection_id, active_connections);
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -129,10 +131,11 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
 
     tracing::debug!("连接 #{} 历史日志发送完成，共 {} 条", connection_id, history_count);
 
-    // === 阶段3：实时转发过滤后的新日志 ===
+    // === 阶段3：实时转发过滤后的新日志 + 监听WebSocket控制消息 ===
     tracing::debug!("连接 #{} 开始实时转发 {:?} 类型的日志", connection_id, subscription_type);
 
     let mut log_receiver = state.log_sender.subscribe();
+    let mut websocket_receiver = state.websocket_sender.subscribe();
 
     loop {
         tokio::select! {
@@ -165,6 +168,26 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
+            // 接收并转发WebSocket控制消息（如SessionStart）
+            websocket_result = websocket_receiver.recv() => {
+                match websocket_result {
+                    Ok(websocket_message) => {
+                        if send_websocket_message(&mut sender, websocket_message).await.is_err() {
+                            tracing::info!("连接 #{} 发送WebSocket控制消息失败，客户端断开连接", connection_id);
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!("连接 #{} WebSocket控制消息处理速度过慢，跳过了 {} 条消息", connection_id, skipped);
+                        // 继续处理，不断开连接
+                    }
+                    Err(_) => {
+                        tracing::error!("连接 #{} WebSocket控制消息接收器错误", connection_id);
+                        break;
+                    }
+                }
+            }
+
             // 监听客户端断开
             _ = receiver.next() => {
                 tracing::info!("连接 #{} 客户端主动断开连接", connection_id);
@@ -176,7 +199,8 @@ async fn websocket_connection(socket: WebSocket, state: Arc<AppState>) {
     // 连接关闭时减少计数器
     CONNECTION_COUNTER.fetch_sub(1, Ordering::SeqCst);
     let remaining_connections = CONNECTION_COUNTER.load(Ordering::SeqCst);
-    tracing::info!("🔌 连接 #{} 已关闭 (剩余活跃: {})", connection_id, remaining_connections);
+    let now = chrono::Utc::now().format("%H:%M:%S%.3f");
+    tracing::info!("🔌 [{}] 连接 #{} 已关闭 (剩余活跃: {})", now, connection_id, remaining_connections);
 }
 
 /// 发送日志条目到WebSocket客户端
@@ -227,6 +251,22 @@ async fn send_session_start(
         }
         Err(e) => {
             tracing::error!("序列化会话开始信令失败: {}", e);
+            Err(axum::Error::new("序列化失败"))
+        }
+    }
+}
+
+/// 发送WebSocket控制消息（通用方法）
+async fn send_websocket_message(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    websocket_message: WebSocketMessage,
+) -> Result<(), axum::Error> {
+    match serde_json::to_string(&websocket_message) {
+        Ok(json) => {
+            sender.send(Message::Text(json)).await.map_err(|_| axum::Error::new("发送失败"))
+        }
+        Err(e) => {
+            tracing::error!("序列化WebSocket控制消息失败: {}", e);
             Err(axum::Error::new("序列化失败"))
         }
     }

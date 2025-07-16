@@ -50,6 +50,11 @@ class KlineSystemLauncher:
                     "name": "Log MCP 守护进程",
                     "description": "启动Log MCP守护进程服务",
                     "category": "logging"
+                },
+                "src\\weblog\\start_weblog_with_window.ps1": {
+                    "name": "WebLog 日志可视化系统",
+                    "description": "启动WebLog日志可视化系统（独立窗口模式）",
+                    "category": "logging"
                 }
             }
         }
@@ -566,12 +571,12 @@ class KlineSystemLauncher:
             self.log(f"⚠️ 加载日志等级配置失败: {e}")
 
     def read_kline_log_level(self):
-        """读取K线服务的日志等级（使用默认日志级别）"""
+        """读取K线服务的日志等级"""
         try:
             if os.path.exists(self.kline_config_file):
                 with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    # 查找 [logging] 部分的 default_log_level
+                    # 查找 [logging] 部分的 log_level
                     in_logging_section = False
                     for line in content.split('\n'):
                         line = line.strip()
@@ -579,7 +584,7 @@ class KlineSystemLauncher:
                             in_logging_section = True
                         elif line.startswith('[') and line != '[logging]':
                             in_logging_section = False
-                        elif in_logging_section and line.startswith('default_log_level'):
+                        elif in_logging_section and line.startswith('log_level'):
                             value = line.split('=')[1].strip().strip('"\'')
                             return value
             return "info"  # 默认值
@@ -627,13 +632,13 @@ class KlineSystemLauncher:
             messagebox.showerror("设置失败", f"更新日志等级失败: {e}")
 
     def update_kline_log_level(self, level):
-        """更新K线服务的日志等级（更新默认日志级别）"""
+        """更新K线服务的日志等级"""
         try:
             if os.path.exists(self.kline_config_file):
                 with open(self.kline_config_file, 'r', encoding='utf-8') as f:
                     content = f.read()
 
-                # 替换[logging]部分的default_log_level
+                # 替换[logging]部分的log_level
                 lines = content.split('\n')
                 in_logging_section = False
                 for i, line in enumerate(lines):
@@ -642,8 +647,8 @@ class KlineSystemLauncher:
                         in_logging_section = True
                     elif stripped.startswith('[') and stripped != '[logging]':
                         in_logging_section = False
-                    elif in_logging_section and stripped.startswith('default_log_level'):
-                        lines[i] = f'default_log_level = "{level}"'
+                    elif in_logging_section and stripped.startswith('log_level'):
+                        lines[i] = f'log_level = "{level}"'
                         break
 
                 # 写回文件

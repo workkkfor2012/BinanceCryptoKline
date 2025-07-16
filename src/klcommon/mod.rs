@@ -8,8 +8,6 @@ pub mod server_time_sync; // 服务器时间同步模块
 // pub mod aggkline; // 归集交易K线模块 - 暂时注释掉
 pub mod proxy; // 代理配置模块
 pub mod log;
-pub mod logging_setup; // 日志处理模块（包含observability和trace_visualization）
-pub mod context; // 追踪上下文抽象层
 pub mod config; // 配置模块
 
 // 重新导出常用类型，方便使用
@@ -43,6 +41,11 @@ pub use log::{
     SpanModel,
     SpanEvent,
     StructuredLog,
+    // 健康监控系统
+    WatchdogV2,
+    HealthReporter,
+    HealthReport,
+    ComponentStatus,
 };
 // 导出配置相关类型
 pub use config::{

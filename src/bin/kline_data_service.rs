@@ -6,10 +6,7 @@ use kline_macros::perf_profile;
 use std::sync::Arc;
 
 // 导入统一日志设置模块
-use kline_server::klcommon::{
-    log::shutdown_log_sender,
-    logging_setup::init_ai_logging,
-};
+use kline_server::klcommon::log::{shutdown_log_sender, init_ai_logging};
 
 // 导入tracing宏
 use tracing::info;

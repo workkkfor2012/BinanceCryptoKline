@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, interval, Instant};
 use tracing::{info, warn, error};
 use weblog::{WebLogConfig, AppState, create_app, LogTransport};
 use serde::Deserialize;
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           config.web_port, config.max_log_entries, cli.pipe_name);
 
     // 创建应用状态
-    let (state, _log_receiver) = AppState::new();
+    let (state, _log_receiver, _websocket_receiver) = AppState::new();
     let state = Arc::new(state);
 
     // 启动命名管道日志处理任务
@@ -146,28 +146,45 @@ async fn process_named_pipe_logs(
                 info!("🔗 客户端已连接到命名管道");
 
                 let mut reader = AsyncBufReader::new(pipe_server);
-                let mut line_count = 0;
+                let mut line_count = 0u64;
                 let mut line = String::new();
 
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(0) => {
-                            // EOF reached
-                            info!("📡 命名管道连接断开");
-                            break;
-                        }
-                        Ok(_) => {
-                            line_count += 1;
-                            process_log_line(&state, line.trim()).await;
+                // 创建10秒定时器用于统计输出
+                let mut stats_timer = interval(Duration::from_secs(10));
+                let mut last_reported_count = 0u64;
+                let start_time = Instant::now();
 
-                            if line_count % 100 == 0 {
-                                info!("📊 已处理 {} 行日志", line_count);
+                loop {
+                    tokio::select! {
+                        // 处理日志行
+                        read_result = reader.read_line(&mut line) => {
+                            match read_result {
+                                Ok(0) => {
+                                    // EOF reached
+                                    info!("📡 命名管道连接断开");
+                                    break;
+                                }
+                                Ok(_) => {
+                                    line_count += 1;
+                                    process_log_line(&state, line.trim()).await;
+                                    line.clear();
+                                }
+                                Err(e) => {
+                                    error!("读取日志行失败: {}", e);
+                                    break;
+                                }
                             }
                         }
-                        Err(e) => {
-                            error!("读取日志行失败: {}", e);
-                            break;
+
+                        // 每10秒输出统计信息
+                        _ = stats_timer.tick() => {
+                            let new_logs = line_count - last_reported_count;
+                            let elapsed = start_time.elapsed().as_secs();
+                            if new_logs > 0 {
+                                info!("📊 过去10秒收到 {} 条日志，总计 {} 条，运行时间 {}秒",
+                                      new_logs, line_count, elapsed);
+                            }
+                            last_reported_count = line_count;
                         }
                     }
                 }
@@ -191,7 +208,7 @@ async fn create_named_pipe_server(pipe_name: &str) -> Result<tokio::net::windows
     let pipe_formats = vec![
         pipe_name.to_string(),
         format!(r"\\.\pipe\{}", pipe_name.trim_start_matches(r"\\.\pipe\").trim_start_matches(r"\\\\.\\pipe\\")),
-        format!(r"\\.\pipe\kline_log_pipe"),
+        format!(r"\\.\pipe\weblog_pipe"),
     ];
 
     for (i, format_name) in pipe_formats.iter().enumerate() {
@@ -238,8 +255,25 @@ async fn process_log_line(state: &Arc<AppState>, line: &str) {
             // 检查是否是会话开始标记
             if is_session_start_marker(&log_entry) {
                 info!("🆕 检测到会话开始标记，开始新会话");
+                info!("📋 会话开始标记详情:");
+                info!("   - 消息内容: '{}'", log_entry.message);
+                info!("   - 时间戳: {}", log_entry.timestamp);
+                info!("   - 目标模块: {}", log_entry.target);
+
+                // 显示关键字段
+                if let Some(session_start) = log_entry.fields.get("session_start") {
+                    info!("   - session_start字段: {}", session_start);
+                }
+                if let Some(event_type) = log_entry.fields.get("event_type") {
+                    info!("   - event_type字段: {}", event_type);
+                }
+                if let Some(program_name) = log_entry.fields.get("program_name") {
+                    info!("   - program_name字段: {}", program_name);
+                }
+
                 let new_session_id = state.start_new_session();
                 info!("✅ 新会话已开始: {}", new_session_id);
+                info!("🧹 历史数据已清空，准备接收新会话的日志");
                 return; // 不处理会话开始标记本身
             }
 
@@ -256,15 +290,19 @@ async fn process_log_line(state: &Arc<AppState>, line: &str) {
 
 /// 检查是否是会话开始标记
 fn is_session_start_marker(log_entry: &weblog::LogEntry) -> bool {
-    // 检查消息是否为 SESSION_START
-    if log_entry.message == "SESSION_START" {
+    // 检查消息是否为 session_start
+    if log_entry.message == "session_start" {
+        info!("✅ 会话开始标记匹配 - 消息匹配: message == 'session_start'");
         return true;
     }
 
     // 检查fields中是否有session_start标记
     if let Some(session_start) = log_entry.fields.get("session_start") {
         if let Some(is_start) = session_start.as_bool() {
-            return is_start;
+            if is_start {
+                info!("✅ 会话开始标记匹配 - 字段匹配: fields.session_start == true");
+                return true;
+            }
         }
     }
 
@@ -284,41 +322,56 @@ struct WebLogServiceConfig {
     log_level: String,
 }
 
-/// 读取WebLog日志级别配置 - 从WebLog自己的配置文件读取
+/// 读取WebLog日志级别配置 - 从统一配置文件读取
 fn load_weblog_log_level() -> String {
-    // 首先检查环境变量，这样可以被外部脚本覆盖
-    if let Ok(env_log_level) = std::env::var("RUST_LOG") {
-        eprintln!("从环境变量读取日志级别: {}", env_log_level);
-        return env_log_level;
-    }
-
-    // 获取当前可执行文件的目录
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-
-    // 尝试多个可能的配置文件路径
+    // 尝试从统一配置文件读取
     let possible_paths = vec![
-        std::path::PathBuf::from("config/logging_config.toml"),  // 相对于当前工作目录
-        exe_dir.join("config/logging_config.toml"),  // 相对于可执行文件目录
-        exe_dir.join("../config/logging_config.toml"),  // 上级目录的config
-        exe_dir.join("../../config/logging_config.toml"),  // 再上级目录的config
+        std::path::PathBuf::from("config/BinanceKlineConfig.toml"),  // 相对于当前工作目录
+        std::path::PathBuf::from("../config/BinanceKlineConfig.toml"),  // 上级目录的config
+        std::path::PathBuf::from("../../config/BinanceKlineConfig.toml"),  // 再上级目录的config
     ];
 
     for config_path in possible_paths {
         if let Ok(content) = std::fs::read_to_string(&config_path) {
-            match toml::from_str::<WebLogLoggingConfig>(&content) {
-                Ok(config) => {
-                    eprintln!("从配置文件读取日志级别: {} (路径: {:?})", config.weblog.log_level, config_path);
-                    return config.weblog.log_level;
+            // 首先尝试读取 [logging.services] 部分的 weblog 配置
+            let lines: Vec<&str> = content.lines().collect();
+            let mut in_services_section = false;
+
+            for line in lines.iter() {
+                let trimmed = line.trim();
+                if trimmed == "[logging.services]" {
+                    in_services_section = true;
+                } else if trimmed.starts_with('[') && trimmed != "[logging.services]" {
+                    in_services_section = false;
+                } else if in_services_section && trimmed.starts_with("weblog") {
+                    if let Some(value) = trimmed.split('=').nth(1) {
+                        let log_level = value.trim().trim_matches('"').trim_matches('\'');
+                        eprintln!("从统一配置文件读取WebLog日志级别: {} (路径: {:?})", log_level, config_path);
+                        return log_level.to_string();
+                    }
                 }
-                Err(e) => {
-                    eprintln!("解析配置文件失败: {} (路径: {:?})", e, config_path);
+            }
+
+            // 如果没有找到 weblog 特定配置，回退到 [logging] 部分的 log_level
+            let mut in_logging_section = false;
+            for line in lines {
+                let trimmed = line.trim();
+                if trimmed == "[logging]" {
+                    in_logging_section = true;
+                } else if trimmed.starts_with('[') && trimmed != "[logging]" {
+                    in_logging_section = false;
+                } else if in_logging_section && trimmed.starts_with("log_level") {
+                    if let Some(value) = trimmed.split('=').nth(1) {
+                        let log_level = value.trim().trim_matches('"').trim_matches('\'');
+                        eprintln!("从统一配置文件读取默认日志级别: {} (路径: {:?})", log_level, config_path);
+                        return log_level.to_string();
+                    }
                 }
             }
         }
     }
 
     // 所有路径都失败，使用默认值
-    eprintln!("未找到有效的配置文件，使用默认日志级别 info");
+    eprintln!("未找到统一配置文件，使用默认日志级别 info");
     "info".to_string()
 }

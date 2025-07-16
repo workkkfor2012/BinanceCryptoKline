@@ -44,7 +44,7 @@ if ($needsCompile) {
 
 # 设置环境变量
 $env:LOG_TRANSPORT = "named_pipe"
-$env:PIPE_NAME = "\\.\pipe\kline_log_pipe"
+$env:PIPE_NAME = "\\.\pipe\weblog_pipe"
 # 注意：不设置RUST_LOG，让weblog.rs中的设置生效
 
 Write-Host "🚀 启动WebLog服务器 (端口: 8080)" -ForegroundColor Cyan
@@ -54,4 +54,4 @@ Write-Host "📡 命名管道: $env:PIPE_NAME" -ForegroundColor Cyan
 Write-Host ""
 
 # 启动服务器 - 使用命名管道模式
-cargo run --bin weblog -- --pipe-name "\\.\pipe\kline_log_pipe"
+cargo run --bin weblog -- --pipe-name "\\.\pipe\weblog_pipe"

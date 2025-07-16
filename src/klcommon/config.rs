@@ -28,6 +28,11 @@ fn default_enable_full_tracing() -> bool {
     true
 }
 
+/// 默认WebLog管道名称
+fn default_weblog_pipe_name() -> Option<String> {
+    Some("weblog_pipe".to_string())
+}
+
 /// K线聚合系统配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregateConfig {
@@ -153,8 +158,12 @@ pub struct LoggingConfig {
     /// 日志传输方式 (named_pipe, file, console)
     pub log_transport: String,
 
-    /// 命名管道名称
+    /// 命名管道名称 (用于Log MCP)
     pub pipe_name: String,
+
+    /// WebLog管道名称 (用于WebLog可视化)
+    #[serde(default = "default_weblog_pipe_name")]
+    pub weblog_pipe_name: Option<String>,
 
     /// 是否启用完全追踪功能（包括跨线程上下文传递）
     #[serde(default = "default_enable_full_tracing")]
@@ -217,6 +226,7 @@ impl Default for LoggingConfig {
             log_level: "trace".to_string(),
             log_transport: "named_pipe".to_string(),
             pipe_name: r"\\.\pipe\kline_log_pipe".to_string(),
+            weblog_pipe_name: Some("weblog_pipe".to_string()),
             enable_full_tracing: true,
         }
     }

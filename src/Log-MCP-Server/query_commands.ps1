@@ -5,7 +5,7 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 基础配置
-$LogServerUrl = "http://127.0.0.1:9002"
+$LogServerUrl = "http://127.0.0.1:9001"
 
 Write-Host "=== Log MCP Server 查询命令集合 ===" -ForegroundColor Green
 Write-Host "服务器地址: $LogServerUrl" -ForegroundColor Cyan
@@ -41,7 +41,7 @@ function Test-LogServer {
         Write-Host "� API端点可访问" -ForegroundColor Cyan
     } catch {
         Write-Host "❌ 日志服务器连接失败: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "💡 请检查log_mcp_daemon是否运行在端口9002" -ForegroundColor Yellow
+        Write-Host "💡 请检查log_mcp_daemon是否运行在端口9001" -ForegroundColor Yellow
     }
 }
 

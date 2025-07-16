@@ -5,9 +5,7 @@ title = "核心任务与方法论"
 task = "你的任务是为给定的Rust代码，添加一套服务于自动化诊断的日志埋点和性能监控。"
 methodology = "你的工作必须严格遵循两步操作流程，核心是区分‘高频次的业务流程’与‘一次性或低频次的业务流程’，并为关键流程嵌入性能断言。"
 
-# ... [core_mission] ...
-
-# 新增模块：全局追踪策略定义
+# 全局追踪策略定义
 [global_trace_strategy]
 title = "零号步骤：定义全局追踪策略"
 description = "在对任何代码进行埋点之前，必须首先明确回答以下关于顶层追踪模型的问题。这是所有可观测性工作的基础。"
@@ -16,16 +14,15 @@ description = "在对任何代码进行埋点之前，必须首先明确回答�
 question = "应用的追踪模型是什么？"
 options = [
     "A. 单一应用生命周期追踪 (Single Application Trace): 整个应用的运行过程共享一个唯一的trace_id。适用于简单的后台服务或脚本。",
-    "B. 独立业务事务追踪 (Per-Transaction Trace): 每个独立的、高价值的业务流程（如一个API请求、一个消息处理）都应该生成一个全新的、唯一的trace_id，开启一个独立的追踪链路。适用于复杂的、多任务的服务。",
+    "B. 独立业务事务追踪 (Per-Transaction Trace): 每个独立的、高价值的业务流程（如一个API请求、一个消息处理、一个定时任务的单次执行）都应该生成一个全新的、唯一的trace_id，开启一个独立的追踪链路。适用于复杂的、多任务的服务。",
 ]
-action = "你必须首先选择一个模型，并在后续的埋点中贯彻这个模型。"
+action = "你必须首先选择一个模型，并在后续的埋点中贯彻这个模型。对于K线聚合服务，我们已确定采用模型 [B]。"
 
 [[global_trace_strategy.questions]]
 question = "Trace ID的生成规范是什么？"
 requirement = "Trace ID必须是全局唯一的。严禁使用自增整数或任何在重启后会重复的值。**必须**使用UUID v4或类似的随机化方案作为trace_id的生成标准。"
-implementation_note = "这意味着在创建根Span或需要开启新链路的Span时，必须主动生成并注入一个符合规范的trace_id。"
+implementation_note = "这意味着在创建根Span或需要开启新链路的Span时，必须主动生成并注入一个符合规范的trace_id。`tracing`库在创建根Span时会自动处理此问题。"
 
-# ... [operation_flow] ...
 # 埋点操作流程分为两大步骤
 [operation_flow]
 title = "埋点操作流程"
@@ -38,7 +35,7 @@ description = "首要任务：像业务流程架构师一样，识别系统中�
 # 用于识别高频业务的思考线索
 [[operation_flow.high_frequency.thought_clues]]
 question = "这个功能单元的目的是什么？"
-explanation = "它是在处理单个用户的请求吗？是在下载单个数据吗？是在处理一条消息队列中的消息吗？"
+explanation = "它是在处理单个用户的请求吗？是在下载单个数据吗？是在处理一条消息队列中的消息吗？还是一个周期性任务的单次执行？"
 
 [[operation_flow.high_frequency.thought_clues]]
 question = "这个功能单元会被调用多少次？"
@@ -51,7 +48,7 @@ explanation = "单个“用户登录”事务的失败，是否是一个需要�
 # 用于定位高频业务的技术特征
 [[operation_flow.high_frequency.technical_locators]]
 type = "循环执行"
-description = "位于核心的`for`或`while`循环中，处理大量数据。"
+description = "位于核心的`for`或`while`循环中，处理大量数据或周期性任务。"
 
 [[operation_flow.high_frequency.technical_locators]]
 type = "并发/流式执行"
@@ -69,7 +66,7 @@ description = "作为处理从队列（如MPSC Channel）中取出的消息的�
 [operation_flow.high_frequency.strategy]
 title = "埋点策略：创建带规范化ID和高频标记的事务Span"
 goal = "为每一次事务的执行实例，创建一个可被独立查询、聚合和分析的、完整的业务上下文树。"
-action = "在该核心事务的函数入口，必须使用`#[instrument]`宏来创建`Span`，并包含一个规范化的事务ID。同时，必须在Span的字段中添加 `log_type = \"high_freq\"` 以明确其分类。"
+action = "在该核心事务的函数入口或循环体内，必须使用`tracing::info_span!`宏来创建`Span`，并包含一个规范化的事务ID。同时，必须在Span的字段中添加 `log_type = \"high_freq\"` 以明确其分类。要开启新的独立事务，请参考`通用埋点细则`中的`模式四`。"
 
 # 事务ID (tx_id) 的详细规范
 [operation_flow.high_frequency.tx_id_spec]
@@ -78,27 +75,25 @@ field_name = "tx_id"
 format_string = '"<transaction_type>:<instance_identifier>"'
 
 [operation_flow.high_frequency.tx_id_spec.format_parts]
-transaction_type = "描述这一类事务的业务性质，使用蛇形命名法 (snake_case)。例如：`user_login`, `kline_download`。"
-instance_identifier = "唯一标识这一个事务实例的关键参数。例如用户的ID，或`BTC-1h`。"
+transaction_type = "描述这一类事务的业务性质，使用蛇形命名法 (snake_case)。例如：`user_login`, `add_symbol`, `persist_cycle`。"
+instance_identifier = "唯一标识这一个事务实例的关键参数。例如用户的ID，或`BTCUSDT`，或一个时间戳。"
 
 example = '''
-# 场景: `process_single_kline_download`函数代表了“下载单支K线”这个高频业务流程。
-#[instrument(
-    name = "kline_download_transaction", 
-    skip_all,
-    fields(
-        tx_id = %format!("kline_download:{}-{}", task.symbol, task.interval),
-        log_type = "high_freq", // [核心规范] 必须在Span级别添加高频标记
-    )
-)]
-async fn process_single_kline_download(task: DownloadTask) { /* ... */ }
+# 场景: `persistence_task`的循环体代表了“执行一次持久化”这个高频业务流程。
+let persistence_span = tracing::info_span!(
+    parent: None, // 开启新的独立事务追踪
+    "persistence_cycle_transaction", 
+    tx_id = %format!("persist:cycle:{}", chrono::Utc::now().timestamp_millis()),
+    log_type = "high_freq", // [核心规范] 必须在Span级别添加高频标记
+);
+perform_persistence_cycle(...).instrument(persistence_span).await;
 '''
 
 # --- 第二步：低频逻辑 ---
 [operation_flow.low_frequency]
 title = "第二步：埋点“一次性或低频次的逻辑”"
 definition = "根据排除法，任何不属于第一步中识别出的“高频次的业务流程”的代码，都自动归类为此类。"
-characteristics = "通常负责程序的初始化、配置加载、程序退出，或为核心事务准备前置条件（如获取一次性的全局资源列表）。"
+characteristics = "通常负责程序的初始化、配置加载、后台服务的生命周期管理、程序退出等。"
 
 # 低频业务的埋点策略
 [operation_flow.low_frequency.strategy]
@@ -121,15 +116,15 @@ description = "以下规则是最终的检查清单，它们适用于所有代�
 # --- 规则：日志类型的显式规范 (Log Type Specification) ---
 [general_rules.log_type_specification]
 title = "规则：日志类型的显式规范"
-principle = "在正确的位置，用正确的标签，明确意图。"
+principle = "在正确的位置，用正确的标签，明确意图，保持纯粹性。"
 description = """
 为了保证日志数据的清晰和一致性，我们正式确立以下日志分类规范：
-1.  **高频日志 (`high_freq`)**: **必须**在代表业务事务的`Span`级别进行标记。通过在`#[instrument]`宏的`fields`中添加`log_type = "high_freq"`来实现。这会将该事务的所有内部事件都归于高频类别。
+1.  **高频日志 (`high_freq`)**: **必须**在代表独立业务事务的`Span`级别进行标记。通过在`tracing::info_span!`宏的`fields`中添加`log_type = "high_freq"`来实现。这会将该事务的所有内部事件都归于高频类别。**事务内部的事件不应再被标记为 `low_freq`**。
 2.  **低频日志 (`low_freq`)**: **必须**在`Event`级别进行标记。通过在`tracing::info!`或类似宏中直接添加`log_type = "low_freq"`字段来实现。这用于标记程序生命周期中的单个关键检查点。
 3.  **性能SLA违规 (`performance_sla_violation`)**: 当操作耗时超过预设阈值时，**必须**在`Event`级别记录一个`WARN`日志，并附带此`log_type`。
-4.  **其他特定日志**: 同样需要显式标记，如 `log_type = "assertion"`。
+4.  **业务断言 (`assertion`)**: 使用`soft_assert!`宏产生的日志事件会自动标记为`log_type = "assertion"`。
 
-此规则确保了每条日志的分类都清晰可查，并利用了`Span`和`Event`的层级关系来避免信息冗余。
+此规则确保了每条日志的分类都清晰可查，并利用了`Span`和`Event`的层级关系来避免信息冗余和分类混淆。
 """
 
 # --- 规则：嵌入式性能断言 (Embedded Performance Assertions) ---
@@ -139,9 +134,9 @@ goal = "将性能监控内建于代码中，确保关键操作的执行时间符
 mechanism = """
 我们通过一个`SlaGuard`模式来实现。在进入一个需要监控性能的`Span`时，我们创建一个计时器实例。
 这个实例的`Drop` trait会在`Span`结束时自动执行。在`Drop`实现中，我们计算总耗时，并与预设的SLA阈值进行比较。
-如果耗时超标，就记录一条`WARN`级别的日志到`problem_summary.log`。
+如果耗时超标，就记录一条`WARN`级别的日志。
 """
-action = "对于`docs/implementation_spec.md`中定义了性能SLA的函数，你必须在其入口处注入性能断言逻辑。"
+action = "对于定义了性能SLA的函数，你必须在其入口处注入性能断言逻辑。"
 
 [[general_rules.performance_sla_monitoring.examples]]
 scenario = "监控一个异步函数的执行时间"
@@ -188,16 +183,16 @@ async fn some_critical_operation() {
 
 # --- 核心准则：异步上下文传播 ---
 [general_rules.async_context_propagation]
-title = "核心准则：使用 `context.rs` 工具箱无损地传播异步上下文"
+title = "核心准则：使用 `context.rs` 工具箱与标准化模式无损地传播异步上下文"
 description = """
 在异步Rust中，当工作从一个任务（或线程）转移到另一个时，`tracing`的上下文（包括`trace_id`和当前`Span`）不会自动传播。
 这是一个必须解决的首要问题，并且本项目已为此提供了标准化的解决方案。
 
-**核心原则：`src/klcommon/context.rs` 是解决所有上下文传递问题的“唯一事实来源”和“最佳实践工具箱”。**
+**核心原则：`src/klcommon/context.rs` 和本节定义的标准化模式是解决所有上下文传递问题的“唯一事实来源”和“最佳实践工具箱”。**
 
 在实现任何涉及异步边界（如 `tokio::spawn`, MPSC Channel, `spawn_blocking` 等）的上下文传递逻辑之前，
-**你必须首先查阅 `context.rs` 文件，并优先使用其中提供的函数。**
-如果现有函数不能满足需求，你的任务是**扩充 `context.rs`**，而不是在业务代码中创建一次性的临时解决方案。
+**你必须首先查阅 `context.rs` 文件和本节定义的模式，并优先使用其中提供的函数或模式。**
+如果现有方案不能满足需求，你的任务是**扩充 `context.rs`**，而不是在业务代码中创建一次性的临时解决方案。
 """
 
 [[general_rules.async_context_propagation.patterns]]
@@ -231,29 +226,48 @@ async fn handle_request() {
 '''
 
 [[general_rules.async_context_propagation.patterns]]
-name = "模式三：处理新的或复杂边界 (扩充工具箱)"
-scenario = "当你遇到一个新的、`context.rs`中尚无现成解决方案的上下文传递边界时（例如，跨MPSC通道传递任务，或与`spawn_blocking`交互）。"
-solution_steps = [
-  "1. **禁止**在业务代码中编写一次性的、临时的上下文传递逻辑。",
-  "2. **必须**进入`src/klcommon/context.rs`文件，添加一个新的、通用的、可复用的辅助函数来封装这个解决方案。",
-  "3. 在你的业务代码中，调用这个你刚刚创建的新函数。",
-]
+name = "模式三：跨通道传递上下文 (`Instrumented<T>`)"
+scenario = "当需要在两个独立运行的任务之间通过通道传递消息，并希望接收方能进入消息创建时的上下文时。"
+solution = "**必须**使用 `context::Instrumented<T>` 结构体来包装你的消息。它会自动捕获当前Span，并在接收端提供 `.instrument(future)` 和 `.in_span(...)` 方法来恢复上下文。"
 example = '''
-// 这是一个思想实验，展示了如何遵循这个模式来解决问题。
-// 旧的、不好的做法是在worker_loop中手动处理task.context.0.instrument()。
-//
-// 新的、正确的做法是：
-// 1. 在 `context.rs` 中创建一个 `spawn_blocking_instrumented` 函数。
-// 2. 在业务代码中，直接调用 `context::spawn_blocking_instrumented(...)`。
-//
-// 这种方法将复杂性隔离在 `context.rs` 中，保持业务代码的纯净。
-// `db.rs`中对`WriteTask`的处理就应遵循此原则进行重构。
+// 发送端
+let cmd = WorkerCmd::AddSymbol { ... };
+let instrumented_cmd = Instrumented::new(cmd);
+cmd_tx.send(instrumented_cmd).await;
+
+// 接收端
+if let Some(instrumented_cmd) = rx.recv().await {
+    let (cmd, span) = instrumented_cmd.into_parts();
+    // 使用 .instrument() 将异步处理逻辑附加到原始Span上
+    self.process_command(cmd).instrument(span).await;
+}
+'''
+
+[[general_rules.async_context_propagation.patterns]]
+name = "模式四：开启独立的业务事务追踪"
+scenario = "当一个事件（如收到一条消息、一个定时任务触发）需要开启一个全新的、端到端的追踪链路，而**不**继承当前执行上下文时。这对于定义清晰的、高价值的业务事务（如'添加品种'、'持久化数据'）至关重要。"
+solution = "**严禁**在此场景下使用 `spawn_instrumented` 或普通的 `info_span!`。**必须**使用 `tracing::info_span!` 宏并显式设置 `parent: None` 来创建一个新的根Span。这个根Span必须遵循高频事务的埋点规范（包含 `tx_id` 和 `log_type = \"high_freq\"`）。"
+example = '''
+// 在 `persistence_task` 的循环中
+// 每次 tick 都代表一个新的、独立的持久化事务
+
+let persistence_span = tracing::info_span!(
+    parent: None, // [核心规范] 使用 parent: None 来断开上下文，创建新的根Span和Trace ID
+    "persistence_cycle_transaction",
+    tx_id = %format!("persist:cycle:{}", chrono::Utc::now().timestamp_millis()),
+    log_type = "high_freq"
+);
+
+// 将整个业务逻辑附加到这个新的根Span上
+perform_persistence_cycle(...)
+    .instrument(persistence_span)
+    .await;
 '''
 
 # --- 规则：记录关键决策变量 ---
 [general_rules.log_decision_variables]
 title = "规则：记录关键决策变量"
-goal = "为SOP中的“纵向分析”提供直接证据，使AI能够精确推断程序为何会进入特定的逻辑分支。"
+goal = "为根因分析提供直接证据，使AI或人类能够精确推断程序为何会进入特定的逻辑分支。"
 action = "在任何执行条件判断的代码块之前或内部（尤其是在即将进入error或warn分支时），必须使用`tracing`事件记录下直接用于该判断的一个或多个核心变量值。"
 key_locations = [
   "`if condition { ... } else { ... }`",
@@ -266,9 +280,9 @@ scenario = "简单的 `if` 判断"
 code = '''
 if balance < required_amount {
     tracing::error!(
-        log_type = "precondition_failed",
-        balance = %balance,
-        required_amount = %required_amount,
+        // 此事件会自动归属父Span
+        balance, // 等同于 balance = balance
+        required_amount,
         "Insufficient balance"
     );
     return Err(anyhow!("Insufficient balance"));
@@ -283,7 +297,7 @@ let data = match some_function_that_returns_result() {
     Ok(d) => d,
     Err(e) => {
         tracing::error!(
-            log_type = "operation_failed",
+            // 此事件会自动归属父Span
             error_details = %e,
             error_chain = format!("{:#}", e), // 总是记录完整的错误链
             "The operation failed, cannot continue."
@@ -311,4 +325,4 @@ description = [
     "对于那些不应该发生但又不至于让程序崩溃（Panic）的业务逻辑问题，使用软断言。",
     "必须遵循规则：`soft_assert!(condition, ...)` 应该与 `tracing::warn!` 或 `error!` 结合，记录下断言失败时的相关变量。"
 ]
-best_practice = "`soft_assert!`宏通常需要自己实现或使用库，并应与`problem_summary.log`系统集成。"
+best_practice = "`soft_assert!`宏通常需要自己实现或使用库，并与问题摘要日志系统集成。"

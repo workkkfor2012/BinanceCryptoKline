@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>K-Line Live Verification</title>
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #131722; color: #d1d4dc; margin: 0; padding: 0; height: 100vh; }
+h1 { margin: 20px 0; font-weight: 300; }
+.controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+#symbolInput { padding: 8px; font-size: 16px; width: 150px; text-transform: uppercase; background-color: #1e222d; border: 1px solid #444; color: #d1d4dc; border-radius: 4px; }
+#subscribeBtn { padding: 8px 16px; font-size: 16px; cursor: pointer; background-color: #2962ff; color: white; border: none; border-radius: 4px; }
+#status { font-style: italic; color: #888; }
+#chart-container { width: 95%; flex-grow: 1; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+<h1>K-Line Live Verification</h1>
+<div class="controls">
+<input type="text" id="symbolInput" value="BTCUSDT">
+<button id="subscribeBtn">Subscribe</button>
+<div id="status">Connecting...</div>
+</div>
+<div id="chart-container"></div>
+
+<script>
+    const chartContainer = document.getElementById('chart-container');
+    const statusElement = document.getElementById('status');
+    const symbolInput = document.getElementById('symbolInput');
+    const subscribeBtn = document.getElementById('subscribeBtn');
+
+    const chart = LightweightCharts.createChart(chartContainer, {
+        layout: { backgroundColor: '#131722', textColor: '#d1d4dc' },
+        grid: { vertLines: { color: '#334158' }, horzLines: { color: '#334158' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: true },
+        // 主价格轴配置 - 用于K线价格
+        rightPriceScale: {
+            scaleMargins: { top: 0.1, bottom: 0.3 }, // 为成交量留出底部空间
+            borderColor: 'rgba(197, 203, 206, 0.8)',
+        },
+        // 左侧价格轴配置 - 用于成交量
+        leftPriceScale: {
+            visible: true,
+            scaleMargins: { top: 0.7, bottom: 0.05 }, // 成交量占据底部30%空间
+            borderColor: 'rgba(197, 203, 206, 0.8)',
+        },
+    });
+
+    // 【修改】将系列变量放在外面，以便管理
+    let candleSeries = null;
+    let volumeSeries = null; 
+    let currentSymbol = '';
+    let ws = null;
+
+    function subscribe(symbol) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.error("WebSocket is not open.");
+            statusElement.textContent = "Error: Not Connected";
+            return;
+        }
+        if (currentSymbol === symbol) return;
+
+        currentSymbol = symbol;
+        chart.applyOptions({ watermark: { text: symbol } });
+
+        if (candleSeries) chart.removeSeries(candleSeries);
+        if (volumeSeries) chart.removeSeries(volumeSeries);
+
+        // K线系列 - 使用右侧价格轴
+        candleSeries = chart.addCandlestickSeries({
+            title: "OHLC",
+            upColor: '#26a69a', downColor: '#ef5350',
+            borderDownColor: '#ef5350', borderUpColor: '#26a69a',
+            wickDownColor: '#ef5350', wickUpColor: '#26a69a',
+            priceScaleId: 'right', // 明确指定使用右侧价格轴
+        });
+
+        // 成交量系列 - 使用左侧价格轴
+        volumeSeries = chart.addHistogramSeries({
+            title: "Volume",
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'left', // 明确指定使用左侧价格轴
+            color: 'rgba(38, 166, 154, 0.5)',
+        });
+
+        const subscriptionMsg = JSON.stringify({ subscribe: symbol });
+        ws.send(subscriptionMsg);
+        statusElement.textContent = `Subscribed to ${symbol}`;
+        console.log(`Sent subscription for ${symbol}`);
+    }
+    
+    function connectWebSocket() {
+        statusElement.textContent = 'Connecting...';
+        ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+        ws.onopen = () => {
+            statusElement.textContent = 'Connected';
+            subscribe(symbolInput.value.toUpperCase());
+        };
+
+        ws.onmessage = (event) => {
+            const klines = JSON.parse(event.data);
+            if (klines.length === 0) return;
+
+            klines.forEach(kline => {
+                if (kline.period !== '1m') return; 
+
+                const time = kline.open_time / 1000;
+                
+                candleSeries.update({
+                    time: time, open: kline.open, high: kline.high, low: kline.low, close: kline.close,
+                });
+                
+                volumeSeries.update({
+                    time: time,
+                    value: kline.volume,
+                    color: kline.close >= kline.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+                });
+            });
+        };
+
+        ws.onclose = () => { statusElement.textContent = 'Disconnected. Retrying in 5s...'; setTimeout(connectWebSocket, 5000); };
+        ws.onerror = (err) => { console.error('WebSocket error:', err); statusElement.textContent = 'Connection Error'; ws.close(); };
+    }
+
+    subscribeBtn.addEventListener('click', () => subscribe(symbolInput.value.toUpperCase()));
+    symbolInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') subscribe(symbolInput.value.toUpperCase()); });
+    window.addEventListener('resize', () => chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight }));
+
+    connectWebSocket();
+</script>
+
+</body>
+</html>
