@@ -94,13 +94,21 @@ impl LatestKlineUpdater {
     /// 更新所有品种、所有周期的最新一根K线
     async fn update_latest_klines(&self) -> Result<usize> {
         // 1. 获取所有正在交易的U本位永续合约交易对
-        let all_symbols = match self.api.get_trading_usdt_perpetual_symbols().await {
-            Ok(symbols) => symbols,
+        let (all_symbols, delisted_symbols) = match self.api.get_trading_usdt_perpetual_symbols().await {
+            Ok((trading, delisted)) => (trading, delisted),
             Err(e) => {
                 error!("获取交易对信息失败: {}", e);
                 return Err(e);
             }
         };
+
+        // 处理已下架的品种（在这里只记录，不删除数据）
+        if !delisted_symbols.is_empty() {
+            info!(
+                "发现已下架品种: {}，这些品种不会更新最新K线",
+                delisted_symbols.join(", ")
+            );
+        }
 
         info!("获取到 {} 个交易对", all_symbols.len());
 
@@ -137,7 +145,6 @@ impl LatestKlineUpdater {
 
                 // 创建下载任务
                 let task = DownloadTask {
-                    transaction_id: 0, // 最新K线更新不需要业务追踪，使用0作为占位符
                     symbol: symbol.clone(),
                     interval: interval.clone(),
                     start_time: Some(start_time),
@@ -189,7 +196,7 @@ impl LatestKlineUpdater {
                         sorted_klines.sort_by_key(|k| k.open_time);
 
                         // 保存到数据库
-                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines, 0).await?;
+                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines).await?;
 
                         // 增加成功计数
                         success_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

@@ -353,7 +353,8 @@ async fn initialize_symbol_indexing(
             "DOGEUSDT".to_string(),
         ]
     } else {
-        api.get_trading_usdt_perpetual_symbols().await?
+        let (trading_symbols, _delisted_symbols) = api.get_trading_usdt_perpetual_symbols().await?;
+        trading_symbols
     };
 
     let symbol_listing_times = db.batch_get_earliest_kline_timestamps(&symbols, "1d")?;

@@ -7,7 +7,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry
 // 使用库中的模块
 use kline_server::klcommon::Database;
 use kline_server::klcommon::log::context::init_tracing_config;
-use kline_server::klserver::web;
+// use kline_server::klserver::web; // 暂时注释掉，klserver模块不存在
 
 // 硬编码参数
 const VERBOSE: bool = true;
@@ -132,7 +132,8 @@ async fn main() -> Result<()> {
         "启动Web服务器..."
     );
 
-    // 启动Web服务器
+    // 启动Web服务器 - 暂时注释掉，klserver模块不存在
+    /*
     match web::start_web_server(db.clone()).await {
         Ok(_) => info!(
             target = "kline_server::web_server",
@@ -146,6 +147,13 @@ async fn main() -> Result<()> {
             "启动Web服务器失败"
         ),
     }
+    */
+
+    info!(
+        target = "kline_server::web_server",
+        event_type = "web_server_disabled",
+        "Web服务器功能暂时禁用"
+    );
 
     Ok(())
 }

@@ -207,6 +207,16 @@ pub struct Symbol {
     pub settle_plan: i32,
     #[serde(default)]
     pub trigger_protect: String,
+    /// 合约类型，对应API返回的contractType字段
+    #[serde(default, rename = "contractType")]
+    pub contract_type: String,
+    /// 合约状态，对应API返回的contractStatus字段
+    #[serde(default, rename = "contractStatus")]
+    pub contract_status: String,
+    #[serde(default = "default_i64")]
+    pub delivery_date: i64,  // 新增：交割日期/下架时间
+    #[serde(default = "default_i64")]
+    pub onboard_date: i64,   // 新增：上线日期
     #[serde(default)]
     pub filters: Vec<serde_json::Value>,
     #[serde(default)]
@@ -217,9 +227,6 @@ pub struct Symbol {
     pub liquidation_fee: String,
     #[serde(default)]
     pub market_take_bound: String,
-    /// 合约类型，对应API返回的contractType字段
-    #[serde(default, rename = "contractType")]
-    pub contract_type: String,
     // 添加其他可能的字段
     #[serde(skip)]
     pub extra: Option<HashMap<String, serde_json::Value>>,
@@ -264,7 +271,6 @@ pub struct ExchangeInfo {
 /// 下载任务，用于特定交易对和时间范围
 #[derive(Debug, Clone)]
 pub struct DownloadTask {
-    pub transaction_id: u64,     // ✨ [新增] 事务ID，用于业务追踪
     pub symbol: String,
     pub interval: String,
     pub start_time: Option<i64>,  // 可选，如果为None则下载最新1000根K线
@@ -283,6 +289,11 @@ pub struct DownloadResult {
 /// i32字段的默认值
 // #[instrument] 移除：这是serde反序列化的内部细节，被调用数百次产生噪音
 fn default_i32() -> i32 {
+    0
+}
+
+/// i64字段的默认值
+fn default_i64() -> i64 {
     0
 }
 

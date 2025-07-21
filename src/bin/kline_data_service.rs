@@ -1,4 +1,6 @@
 // K线数据服务主程序 - 专注于K线补齐功能
+// 注意：本程序现在主要用作一个独立的、手动的历史数据修复工具。
+// K线聚合服务的启动时自动补齐逻辑已内聚到 `src/bin/klagg_sub_threads.rs` 中。
 use kline_server::klcommon::{Database, Result};
 use kline_server::kldata::KlineBackfiller;
 use kline_macros::perf_profile;
@@ -62,7 +64,7 @@ async fn run_app() -> Result<()> {
         KlineBackfiller::new(db.clone(), interval_list.clone())
     };
 
-    backfiller.run_once().await?;
+    let _ = backfiller.run_once().await?; // 忽略返回的 HashMap
 
     // ✨ [新增] 低频日志：标记核心业务逻辑的成功结束
     info!(log_type = "low_freq", message = "核心应用逻辑成功完成");

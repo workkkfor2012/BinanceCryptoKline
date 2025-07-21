@@ -210,12 +210,12 @@ impl SymbolMetadataRegistry {
 
         for attempt in 1..=MAX_RETRIES {
             match self.api_client.get_trading_usdt_perpetual_symbols().await {
-                Ok(symbols) => {
-                    if symbols.is_empty() {
+                Ok((trading_symbols, _delisted_symbols)) => {
+                    if trading_symbols.is_empty() {
                         warn!(target: "SymbolMetadataRegistry", event_name = "API返回空列表", attempt = attempt, max_retries = MAX_RETRIES, "API返回空的交易品种列表 (尝试: {}/{})", attempt, MAX_RETRIES);
                     } else {
-                        tracing::Span::current().record("symbols_count", symbols.len());
-                        return Ok(symbols);
+                        tracing::Span::current().record("symbols_count", trading_symbols.len());
+                        return Ok(trading_symbols);
                     }
                 }
                 Err(e) => {

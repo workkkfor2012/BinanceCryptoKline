@@ -255,7 +255,6 @@ impl TimestampChecker {
                 for (symbol, _) in inconsistent_symbols {
                     // 创建下载任务，只获取最新的一根K线
                     let task = DownloadTask {
-                        transaction_id: 0, // 时间戳检查不需要业务追踪，使用0作为占位符
                         symbol: symbol.clone(),
                         interval: "1m".to_string(),
                         start_time: None, // 不指定起始时间，币安会默认获取最新的一根K线

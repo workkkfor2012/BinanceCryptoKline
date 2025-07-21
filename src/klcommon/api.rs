@@ -3,8 +3,24 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
-use tracing::{warn, error}; // 导入 warn 和 error 宏
+use tracing::{warn, error, info}; // 导入 warn, error 和 info 宏
 use kline_macros::perf_profile;
+use chrono::TimeZone; // 添加TimeZone导入
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggTrade {
+    #[serde(rename = "a")]
+    pub agg_trade_id: i64,
+    #[serde(rename = "p")]
+    pub price: String,
+    #[serde(rename = "q")]
+    pub quantity: String,
+    #[serde(rename = "T")]
+    pub timestamp_ms: i64,
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool,
+    // 忽略 f 和 l 字段，因为我们暂时用不到
+}
 
 /// 将时间间隔转换为毫秒数
 /// 例如: "1m" -> 60000, "1h" -> 3600000
@@ -25,23 +41,24 @@ pub fn interval_to_milliseconds(interval: &str) -> i64 {
 /// 获取对齐到特定周期的时间戳
 ///
 /// 不同周期的K线有特定的时间对齐要求：
-/// - 分钟K线（1m, 5m, 30m）：应该在每分钟的00秒开始
-/// - 小时K线（1h, 4h）：应该在每小时的00分00秒开始
+/// - 分钟/小时K线（如 1m, 5m, 1h, 4h）：应该对齐到该周期的整数倍时间。
 /// - 日K线（1d）：应该在UTC 00:00:00开始
 /// - 周K线（1w）：应该在每周一的UTC 00:00:00开始
 // #[instrument] 移除：这是纯工具函数，时间对齐计算，追踪会产生噪音
 pub fn get_aligned_time(timestamp_ms: i64, interval: &str) -> i64 {
     use chrono::{DateTime, Datelike, TimeZone, Utc};
 
+    // ✨ [修改] 统一处理所有基于时长的周期 (m, h)，修正4h对齐的BUG
+    let last_char = interval.chars().last().unwrap_or(' ');
+    if last_char == 'm' || last_char == 'h' {
+        let interval_ms = interval_to_milliseconds(interval);
+        if interval_ms > 0 {
+            return (timestamp_ms / interval_ms) * interval_ms;
+        }
+    }
+
+    // 保持对d和w的特殊处理
     match interval {
-        "1m" | "5m" | "30m" => {
-            // 对齐到分钟
-            (timestamp_ms / 60000) * 60000
-        },
-        "1h" | "4h" => {
-            // 对齐到小时
-            (timestamp_ms / 3600000) * 3600000
-        },
         "1d" => {
             // 对齐到天
             let dt = DateTime::<Utc>::from_timestamp(timestamp_ms / 1000, 0).unwrap();
@@ -56,7 +73,7 @@ pub fn get_aligned_time(timestamp_ms: i64, interval: &str) -> i64 {
             let week_start = day_start - chrono::Duration::days(days_from_monday);
             week_start.timestamp() * 1000
         },
-        _ => timestamp_ms
+        _ => timestamp_ms // 对于未知或已处理的周期，返回原值
     }
 }
 
@@ -142,32 +159,58 @@ impl BinanceApi {
         Ok(exchange_info)
     }
 
-    /// 获取正在交易的U本位永续合约
+    /// 获取正在交易的U本位永续合约，同时返回需要删除的已下架品种
     #[perf_profile]
-    pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<Vec<String>> {
+    pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<(Vec<String>, Vec<String>)> {
         const MAX_RETRIES: usize = 5;
         const RETRY_INTERVAL: u64 = 1;
 
         for retry in 0..MAX_RETRIES {
             match self.get_exchange_info().await {
                 Ok(exchange_info) => {
-                    let usdt_perpetual_symbols: Vec<String> = exchange_info.symbols
-                        .iter()
-                        .filter(|symbol| {
-                            let is_usdt = symbol.symbol.ends_with("USDT");
-                            let is_trading = symbol.status == "TRADING";
-                            let is_perpetual = symbol.contract_type == "PERPETUAL";
-                            is_usdt && is_trading && is_perpetual
-                        })
-                        .map(|symbol| symbol.symbol.clone())
-                        .collect();
+                    let mut trading_symbols = Vec::new();
+                    let mut delisted_symbols = Vec::new();
 
-                    if usdt_perpetual_symbols.is_empty() {
+                    for symbol in &exchange_info.symbols {
+                        let is_usdt = symbol.symbol.ends_with("USDT");
+                        let is_perpetual = symbol.contract_type == "PERPETUAL";
+
+                        // 只处理USDT永续合约
+                        if !is_usdt  || !is_perpetual {
+                            continue;
+                        }
+
+                        // ✨ [修改] 根据状态进行不同处理
+                        match symbol.status.as_str() {
+                            "TRADING" => {
+                                // 正常交易状态，加入交易列表
+                                trading_symbols.push(symbol.symbol.clone());
+                            },
+                            "CLOSE" | "SETTLING" => {
+                                // 已下架状态（包括CLOSE和SETTLING），加入删除列表
+                                delisted_symbols.push(symbol.symbol.clone());
+                                // 注意：这里只是发现已下架品种，具体是否需要删除数据
+                                // 要等到backfill模块检查数据库中是否存在相关数据后才能确定
+                            },
+                            _ => {
+                                // 其他未知状态，记录日志
+                                info!(
+                                    log_type = "low_freq",
+                                    message = "发现未知状态的品种",
+                                    symbol = %symbol.symbol,
+                                    status = %symbol.status,
+                                    note = "非TRADING、CLOSE或SETTLING状态，需要关注",
+                                );
+                            }
+                        }
+                    }
+
+                    if trading_symbols.is_empty() {
                         if retry == MAX_RETRIES - 1 {
                             return Err(AppError::ApiError("获取U本位永续合约交易对失败，已重试5次但未获取到任何交易对".to_string()));
                         }
                     } else {
-                        return Ok(usdt_perpetual_symbols);
+                        return Ok((trading_symbols, delisted_symbols));
                     }
                 },
                 Err(e) => {
@@ -193,7 +236,7 @@ impl BinanceApi {
         Err(AppError::ApiError("获取U本位永续合约交易对失败，已达到最大重试次数".to_string()))
     }
 
-    /// 下载连续合约K线数据
+    /// 下载连续合约K线数据 (简化版，无内部重试)
     #[perf_profile(skip_all, fields(symbol = %task.symbol, interval = %task.interval))]
     pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
         // 构建URL参数
@@ -215,23 +258,37 @@ impl BinanceApi {
         // 使用fapi.binance.com
         let fapi_url = format!("{}/fapi/v1/continuousKlines?{}", self.api_url, url_params);
 
-        // 创建新的HTTP客户端
+        // 记录下载URL到日志
+        info!(
+            log_type = "low_freq",
+            message = "开始下载K线数据",
+            symbol = %task.symbol,
+            interval = %task.interval,
+            download_url = %fapi_url,
+            start_time = task.start_time.map(|t| {
+                chrono::Utc.timestamp_millis(t).format("%Y-%m-%d %H:%M:%S").to_string()
+            }).unwrap_or_else(|| "无限制".to_string()),
+            end_time = task.end_time.map(|t| {
+                chrono::Utc.timestamp_millis(t).format("%Y-%m-%d %H:%M:%S").to_string()
+            }).unwrap_or_else(|| "无限制".to_string()),
+            limit = task.limit,
+        );
+
+        // 创建HTTP客户端
         let client = self.create_client()?;
 
         // 构建请求
         let request = client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
 
-        // 发送请求
+        // 发送请求，直接处理结果
         let response = request.send().await.map_err(AppError::from)?;
 
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_else(|_| "无法读取响应体".to_string());
 
-            // 修改点：在返回错误前，记录一条结构化的警告日志
             warn!(
-                // log_type 会从调用者的Span继承
                 http_status = %status,
                 response_text = %text,
                 message = "API请求返回非成功状态码"
@@ -244,26 +301,16 @@ impl BinanceApi {
             return Err(api_error);
         }
 
-        // 获取原始响应文本
         let response_text = response.text().await?;
-
-        // 尝试解析为JSON
         let raw_klines: Vec<Vec<Value>> = serde_json::from_str(&response_text)
             .map_err(AppError::JsonError)?;
 
-        // 检查是否为空结果
         if raw_klines.is_empty() {
-            let data_error = AppError::DataError(format!(
-                "连续合约空结果，原始响应: {}",
-                response_text
-            ));
+            let data_error = AppError::DataError(format!("连续合约空结果，原始响应: {}", response_text));
             return Err(data_error);
         }
 
-        let klines = raw_klines
-            .iter()
-            .filter_map(|raw| Kline::from_raw_kline(raw))
-            .collect::<Vec<Kline>>();
+        let klines = raw_klines.iter().filter_map(|raw| Kline::from_raw_kline(raw)).collect::<Vec<Kline>>();
         Ok(klines)
     }
 
@@ -319,5 +366,31 @@ impl BinanceApi {
         }
 
         Err(AppError::ApiError("获取服务器时间失败，已达到最大重试次数".to_string()))
+    }
+
+    /// 获取归集交易记录 (aggTrades)
+    #[perf_profile(skip_all, fields(symbol = %symbol))]
+    pub async fn get_agg_trades(
+        &self,
+        symbol: String,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+        limit: Option<u16>,
+    ) -> Result<Vec<AggTrade>> {
+        let mut url_params = format!("symbol={}", symbol);
+        if let Some(st) = start_time { url_params.push_str(&format!("&startTime={}", st)); }
+        if let Some(et) = end_time { url_params.push_str(&format!("&endTime={}", et)); }
+        url_params.push_str(&format!("&limit={}", limit.unwrap_or(1000)));
+
+        let fapi_url = format!("{}/fapi/v1/aggTrades?{}", self.api_url, url_params);
+        let client = self.create_client()?;
+        let response = client.get(&fapi_url).send().await?;
+
+        if !response.status().is_success() {
+            return Err(AppError::ApiError(format!("获取 {} aggTrades 失败: {}", symbol, response.status())));
+        }
+
+        let trades: Vec<AggTrade> = response.json().await?;
+        Ok(trades)
     }
 }

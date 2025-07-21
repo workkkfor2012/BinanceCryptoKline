@@ -110,9 +110,9 @@ impl KlineBackfiller {
         } else {
             info!(log_type = "module", target = "backfill", "📡 获取所有正在交易的U本位永续合约交易对...");
             match self.api.get_trading_usdt_perpetual_symbols().await {
-                Ok(symbols) => {
-                    info!(log_type = "module", target = "backfill", "✅ 获取到 {} 个交易对", symbols.len());
-                    symbols
+                Ok((trading_symbols, _delisted_symbols)) => {
+                    info!(log_type = "module", target = "backfill", "✅ 获取到 {} 个交易对", trading_symbols.len());
+                    trading_symbols
                 },
                 Err(e) => {
                     // 获取交易对失败是严重错误，直接返回错误并结束程序

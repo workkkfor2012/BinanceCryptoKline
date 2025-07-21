@@ -56,6 +56,23 @@ class KlineSystemLauncher:
                     "description": "启动WebLog日志可视化系统（独立窗口模式）",
                     "category": "logging"
                 }
+            },
+            "数据工具": {
+                "start_gap_detector.ps1": {
+                    "name": "数据空洞检测器",
+                    "description": "检测和修复K线数据库中的数据空洞",
+                    "category": "tools"
+                },
+                "quick_gap_check.ps1": {
+                    "name": "快速数据完整性检查",
+                    "description": "快速检查K线数据的基本完整性",
+                    "category": "tools"
+                },
+                "start_kldata_service.ps1": {
+                    "name": "历史数据回填服务",
+                    "description": "回填历史K线数据",
+                    "category": "tools"
+                }
             }
         }
         
@@ -269,8 +286,8 @@ class KlineSystemLauncher:
 
     def create_script_tabs(self):
         """创建脚本分类标签页"""
-        # 只显示生产环境脚本和日志程序，移除调试脚本和工具脚本
-        allowed_categories = ["生产环境脚本", "日志程序"]
+        # 显示生产环境脚本、日志程序和数据工具
+        allowed_categories = ["生产环境脚本", "日志程序", "数据工具"]
 
         for category_name, scripts in self.scripts.items():
             if category_name not in allowed_categories:
@@ -342,6 +359,11 @@ class KlineSystemLauncher:
             start_btn2 = ttk.Button(button_frame, text="🔥 快速启动", width=12,
                                    command=lambda: self.run_script(script_file))
             start_btn2.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
+        elif script_file == "start_gap_detector.ps1":
+            # 为空洞检测器添加修复模式按钮
+            repair_btn = ttk.Button(button_frame, text="🔧 检测+修复", width=12,
+                                   command=lambda: self.run_gap_detector_with_repair())
+            repair_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
 
         # 状态标签
         status_label = ttk.Label(button_frame, text="就绪", foreground='green')
@@ -442,6 +464,68 @@ class KlineSystemLauncher:
                 # 移除进程引用
                 if script_file in self.running_processes:
                     del self.running_processes[script_file]
+
+        # 在新线程中运行
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
+
+    def run_gap_detector_with_repair(self):
+        """运行空洞检测器（修复模式）"""
+        script_file = "start_gap_detector.ps1"
+
+        if not os.path.exists(script_file):
+            self.log(f"❌ 脚本文件不存在: {script_file}")
+            messagebox.showerror("文件不存在", f"脚本文件不存在: {script_file}")
+            return
+
+        self.log(f"🔧 启动空洞检测器（修复模式）: {script_file}")
+
+        # 更新状态
+        status_attr = f"status_{script_file.replace('.', '_')}"
+        if hasattr(self, status_attr):
+            status_label = getattr(self, status_attr)
+            status_label.config(text="修复中", foreground='orange')
+
+        def run_in_thread():
+            try:
+                # 使用PowerShell运行脚本，添加-Repair参数
+                cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_file, "-Repair"]
+
+                process = subprocess.Popen(
+                    cmd,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+
+                # 保存进程引用
+                self.running_processes[f"{script_file}_repair"] = process
+
+                # 等待进程完成
+                process.wait()
+
+                # 更新状态
+                if hasattr(self, status_attr):
+                    status_label = getattr(self, status_attr)
+                    if process.returncode == 0:
+                        status_label.config(text="修复完成", foreground='green')
+                        self.log(f"✅ 空洞修复完成: {script_file}")
+                    else:
+                        status_label.config(text="修复失败", foreground='red')
+                        self.log(f"❌ 空洞修复失败: {script_file}")
+                        self.log(f"返回码: {process.returncode}")
+
+                # 移除进程引用
+                if f"{script_file}_repair" in self.running_processes:
+                    del self.running_processes[f"{script_file}_repair"]
+
+            except Exception as e:
+                self.log(f"❌ 启动空洞修复失败: {script_file}, 错误: {e}")
+                if hasattr(self, status_attr):
+                    status_label = getattr(self, status_attr)
+                    status_label.config(text="错误", foreground='red')
+
+                # 移除进程引用
+                if f"{script_file}_repair" in self.running_processes:
+                    del self.running_processes[f"{script_file}_repair"]
 
         # 在新线程中运行
         thread = threading.Thread(target=run_in_thread, daemon=True)

@@ -41,8 +41,6 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 /// [MODIFIED] 统一了任务格式，以支持批量写入。
 #[derive(Debug)]
 struct WriteTask {
-    #[allow(dead_code)]
-    transaction_id: u64,
     // 任务现在直接携带批量写入所需的数据格式
     klines_to_save: Vec<(String, String, Kline)>,
     result_sender: oneshot::Sender<Result<usize>>,
@@ -331,7 +329,7 @@ impl Database {
 
     /// [MODIFIED] 使用写入队列异步保存K线数据
     #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval, kline_count = klines.len()))]
-    pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline], transaction_id: u64) -> Result<usize> {
+    pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {
             return Ok(0);
         }
@@ -350,7 +348,6 @@ impl Database {
         let (result_sender, result_receiver) = oneshot::channel();
 
         let task = WriteTask {
-            transaction_id,
             klines_to_save, // 使用新的字段
             result_sender,
             span: Span::current(),
