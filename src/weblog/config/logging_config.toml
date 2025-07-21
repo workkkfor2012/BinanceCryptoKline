@@ -1,0 +1,6 @@
+# WebLog独立日志配置文件
+# 保持WebLog程序的独立性
+
+[weblog]
+# WebLog服务日志级别 (trace, debug, info, warn, error)
+log_level = "info"

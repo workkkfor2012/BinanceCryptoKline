@@ -1,5 +1,5 @@
 use crate::klcommon::{BinanceApi, Result};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument, Instrument};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
@@ -11,6 +11,7 @@ use chrono::Utc;
 /// 负责两个主要任务：
 /// 1. 每分钟的第30秒与服务器通信，获取服务器时间，计算时间差值
 /// 2. 测量获取服务器时间的延迟
+#[derive(Debug)]
 pub struct ServerTimeSyncManager {
     /// 币安API客户端
     api: BinanceApi,
@@ -24,6 +25,7 @@ pub struct ServerTimeSyncManager {
 
 impl ServerTimeSyncManager {
     /// 创建新的服务器时间同步管理器
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn new() -> Self {
         Self {
             api: BinanceApi::new(),
@@ -34,16 +36,19 @@ impl ServerTimeSyncManager {
     }
 
     /// 获取当前的时间差值
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn get_time_diff(&self) -> i64 {
         self.time_diff.load(Ordering::SeqCst)
     }
 
     /// 获取当前的网络延迟
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn get_network_delay(&self) -> i64 {
         self.network_delay.load(Ordering::SeqCst)
     }
 
     /// 获取最后一次同步时间
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn get_last_sync_time(&self) -> i64 {
         self.last_sync_time.load(Ordering::SeqCst)
     }
@@ -51,6 +56,7 @@ impl ServerTimeSyncManager {
     /// 获取校准后的服务器时间
     ///
     /// 基于本地时间和时间差值计算出校准后的服务器时间
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn get_calibrated_server_time(&self) -> i64 {
         let local_time = Utc::now().timestamp_millis();
         let time_diff = self.get_time_diff();
@@ -60,6 +66,7 @@ impl ServerTimeSyncManager {
     /// 检查时间同步是否有效
     ///
     /// 如果最后一次同步时间超过5分钟，认为时间同步可能失效
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn is_time_sync_valid(&self) -> bool {
         let last_sync = self.get_last_sync_time();
         if last_sync == 0 {
@@ -74,6 +81,7 @@ impl ServerTimeSyncManager {
     /// 计算最优请求发送时间
     ///
     /// 基于当前的时间差值和网络延迟，计算下一分钟开始前的最优请求发送时间
+    #[instrument(target = "服务器校时", skip_all)]
     pub fn calculate_optimal_request_time(&self) -> i64 {
         // 获取当前本地时间
         let local_time = Utc::now().timestamp_millis();
@@ -95,8 +103,9 @@ impl ServerTimeSyncManager {
     }
 
     /// 只进行一次服务器时间同步，不启动定时任务
+    #[instrument(target = "服务器校时", skip_all, err)]
     pub async fn sync_time_once(&self) -> Result<(i64, i64)> {
-        info!(target: "server_time_sync", "开始与币安服务器进行时间同步");
+        info!(target: "服务器校时", "开始与币安服务器进行时间同步");
 
         // 记录开始时间，用于计算网络延迟
         let start_time = Instant::now();
@@ -110,7 +119,7 @@ impl ServerTimeSyncManager {
         // 更新网络延迟
         self.network_delay.store(network_delay, Ordering::SeqCst);
 
-        info!(target: "server_time_sync", "币安服务器时间: {}, 网络延迟: {}毫秒", server_time.server_time, network_delay);
+        info!(target: "服务器校时", "币安服务器时间: {}, 网络延迟: {}毫秒", server_time.server_time, network_delay);
 
         // 计算本地时间与服务器时间的差值
         let local_time = Utc::now().timestamp_millis();
@@ -122,39 +131,41 @@ impl ServerTimeSyncManager {
         // 更新最后同步时间
         self.last_sync_time.store(local_time, Ordering::SeqCst);
 
-        info!(target: "server_time_sync", "本地时间与服务器时间差值: {}毫秒", time_diff);
+        info!(target: "服务器校时", "本地时间与服务器时间差值: {}毫秒", time_diff);
 
         // 返回时间差值和网络延迟
         Ok((time_diff, network_delay))
     }
 
     /// 启动服务器时间同步任务
+    #[instrument(target = "服务器校时", skip_all, err)]
     pub async fn start(&self) -> Result<()> {
-        info!(target: "server_time_sync", "启动服务器时间同步管理器");
+        info!(target: "服务器校时", "启动服务器时间同步管理器");
 
         // 首先进行一次时间同步
         let (time_diff, network_delay) = self.sync_time_once().await?;
-        info!(target: "server_time_sync", "初始时间同步完成，时间差值: {}毫秒，网络延迟: {}毫秒", time_diff, network_delay);
+        info!(target: "服务器校时", "初始时间同步完成，时间差值: {}毫秒，网络延迟: {}毫秒", time_diff, network_delay);
 
         // 启动定时同步任务
         let time_sync_handle = self.start_time_sync_task().await?;
 
         // 等待任务完成（实际上不会完成，除非发生错误）
         if let Err(e) = time_sync_handle.await {
-            error!(target: "server_time_sync", "时间同步任务异常终止: {}", e);
+            error!(target: "服务器校时", "时间同步任务异常终止: {}", e);
         }
 
         Ok(())
     }
 
     /// 启动独立的时间同步任务（每分钟的第30秒运行）
+    #[instrument(target = "服务器校时", skip_all, err)]
     async fn start_time_sync_task(&self) -> Result<tokio::task::JoinHandle<()>> {
         let api = self.api.clone();
         let time_diff = self.time_diff.clone();
         let network_delay = self.network_delay.clone();
         let last_sync_time = self.last_sync_time.clone();
 
-        info!(target: "server_time_sync", "启动独立的时间同步任务，将在每分钟的第30秒运行");
+        info!(target: "服务器校时", "启动独立的时间同步任务，将在每分钟的第30秒运行");
 
         let handle = tokio::spawn(async move {
             loop {
@@ -169,7 +180,7 @@ impl ServerTimeSyncManager {
                     90 - seconds // 等待到下一分钟的30秒
                 };
 
-                debug!(target: "server_time_sync", "时间同步任务: 等待 {}秒 到下一个30秒点", wait_seconds);
+                debug!(target: "服务器校时", "时间同步任务: 等待 {}秒 到下一个30秒点", wait_seconds);
 
                 // 等待到30秒
                 sleep(Duration::from_secs(wait_seconds as u64)).await;
@@ -196,17 +207,17 @@ impl ServerTimeSyncManager {
                         // 更新最后同步时间
                         last_sync_time.store(local_time, Ordering::SeqCst);
 
-                        info!(target: "server_time_sync", "时间同步任务: 更新时间差值: {}毫秒 (原差值: {}毫秒), 网络延迟: {}毫秒 (原延迟: {}毫秒)",
+                        info!(target: "服务器校时", "时间同步任务: 更新时间差值: {}毫秒 (原差值: {}毫秒), 网络延迟: {}毫秒 (原延迟: {}毫秒)",
                             new_time_diff, old_time_diff, new_network_delay, old_network_delay);
                     },
                     Err(e) => {
-                        error!(target: "server_time_sync", "时间同步任务: 获取服务器时间失败: {}", e);
+                        error!(target: "服务器校时", "时间同步任务: 获取服务器时间失败: {}", e);
                         // 如果获取失败，等待5秒后重试
                         sleep(Duration::from_secs(5)).await;
                     }
                 }
             }
-        });
+        }.instrument(tracing::info_span!("server_time_sync_task", target = "服务器校时")));
 
         Ok(handle)
     }

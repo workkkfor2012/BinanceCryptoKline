@@ -1,0 +1,2045 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>函数执行路径可视化 - Trace Viewer</title>
+    
+    <!-- Xterm.js CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
+    
+    <!-- Xterm.js JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js" defer></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background-color: #1a1a1a;
+            color: #00ff00;
+            padding: 10px;
+            font-size: 16px;
+            line-height: 1.5;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 10px;
+            border-bottom: 2px solid #333;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            color: #00ffff;
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .nav-button {
+            background-color: #0066ff;
+            color: #ffffff;
+            border: 2px solid #3388ff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: 'Consolas', monospace;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-button:hover {
+            background-color: #3388ff;
+            transform: scale(1.05);
+        }
+
+        .connection-status {
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .connected { background-color: #006600; color: #00ff00; }
+        .disconnected { background-color: #660000; color: #ff0000; }
+
+        .main-content {
+            display: flex;
+            gap: 15px;
+            height: calc(100vh - 120px);
+        }
+
+        .left-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 400px;
+            transition: all 0.3s ease;
+            height: 100%;
+        }
+
+        .left-panel.hidden {
+            flex: 0;
+            min-width: 0;
+            width: 0;
+            overflow: hidden;
+        }
+
+        .right-panel {
+            flex: 3; /* 让右侧整体更宽 */
+            display: flex;
+            flex-direction: row; /* 让列表和详情左右排列 */
+            gap: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .right-panel.full-width {
+            flex: 1;
+        }
+
+        .trace-list-panel {
+            flex: 0.2; /* 缩小为原来的五分之一 */
+            min-width: 200px; /* 减小最小宽度 */
+            height: 100%;
+        }
+
+        .trace-detail-panel {
+            flex: 2.8; /* 相应增加详情面板的宽度 */
+            height: 100%;
+        }
+
+        .trace-list-container {
+            padding: 5px;
+        }
+
+        .trace-list-item {
+            padding: 8px 10px;
+            margin-bottom: 3px;
+            background-color: #111;
+            border-left: 3px solid #0066ff;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 12px;
+            border-radius: 3px;
+        }
+
+        .trace-list-item:hover {
+            background-color: #222;
+            transform: translateX(2px);
+        }
+
+        .trace-list-item.selected {
+            background-color: #0066ff;
+            color: white;
+            border-left-color: #fff;
+            box-shadow: 0 2px 8px rgba(0, 102, 255, 0.3);
+        }
+
+        .trace-list-item.has-error {
+            border-left-color: #ff0000;
+            background-color: rgba(255, 0, 0, 0.1);
+        }
+
+        .trace-list-item .trace-name {
+            font-weight: bold;
+            color: #00ffff;
+            margin-bottom: 2px;
+        }
+
+        .trace-list-item .trace-id {
+            color: #888;
+            font-size: 10px;
+            margin-bottom: 2px;
+        }
+
+        .trace-list-item .trace-duration {
+            color: #ff6600;
+            font-size: 11px;
+        }
+
+        .trace-list-item.selected .trace-name,
+        .trace-list-item.selected .trace-id,
+        .trace-list-item.selected .trace-duration {
+            color: white;
+        }
+
+        .panel {
+            border: 1px solid #333;
+            border-radius: 5px;
+            background-color: #0a0a0a;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            height: 100%;
+        }
+
+        .panel-header {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #1a1a2e;
+            flex-shrink: 0;
+        }
+
+        .panel-title {
+            font-weight: bold;
+            font-size: 16px;
+            color: #00ffff;
+        }
+
+        .panel-status {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-running { background-color: #006600; color: #00ff00; }
+        .status-waiting { background-color: #666600; color: #ffff00; }
+        .status-error { background-color: #660000; color: #ff0000; }
+
+        .panel-content {
+            flex: 1;
+            padding: 5px;
+            background-color: #000000;
+            overflow-y: auto;
+            min-height: 100px;
+        }
+
+        .xterm {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+            font-size: 13px !important;
+        }
+
+        .xterm .xterm-viewport {
+            background-color: #000000 !important;
+        }
+
+        .xterm .xterm-screen {
+            background-color: #000000 !important;
+        }
+
+        .panel-content .xterm,
+        .panel-content .xterm-viewport,
+        .panel-content .xterm-screen {
+            height: 100% !important;
+        }
+
+        .search-panel {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            background-color: #1a1a1a;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+
+        .search-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 5px;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 4px 8px;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 3px;
+            color: #00ff00;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #00ff00;
+            box-shadow: 0 0 3px rgba(0, 255, 0, 0.3);
+        }
+
+        .search-btn {
+            padding: 4px 8px;
+            background-color: #0066ff;
+            color: white;
+            border: 1px solid #3388ff;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .search-btn:hover:not(:disabled) {
+            background-color: #3388ff;
+            transform: scale(1.05);
+        }
+
+        .search-btn:disabled {
+            background-color: #333;
+            color: #666;
+            cursor: not-allowed;
+            border-color: #444;
+        }
+
+        .search-status {
+            color: #888;
+            font-size: 11px;
+            font-style: italic;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: all 0.3s ease;
+        }
+
+        .search-status.has-results {
+            color: #00ff00;
+            background-color: rgba(0, 255, 0, 0.1);
+            border: 1px solid rgba(0, 255, 0, 0.3);
+        }
+
+        .search-status.no-results {
+            color: #ff6600;
+            background-color: rgba(255, 102, 0, 0.1);
+            border: 1px solid rgba(255, 102, 0, 0.3);
+        }
+
+        .stats-panel {
+            padding: 10px 15px;
+            border-bottom: 1px solid #333;
+            font-size: 13px;
+            color: #cccccc;
+            flex-shrink: 0;
+        }
+
+        .stat-line {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .toggle-btn {
+            padding: 4px 8px;
+            background-color: #333;
+            color: #ccc;
+            border: 1px solid #555;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-btn.active {
+            background-color: #0066ff;
+            color: white;
+            border-color: #3388ff;
+        }
+
+        .toggle-btn:hover {
+            background-color: #555;
+        }
+
+        .toggle-btn.active:hover {
+            background-color: #3388ff;
+        }
+
+        .placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* 调用树样式 */
+        .trace-tree-view {
+            height: 100%;
+            overflow-y: auto;
+        }
+
+        .tree-container {
+            padding: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .span-node {
+            margin: 2px 0;
+            padding: 4px 8px;
+            border-left: 2px solid #333;
+            background-color: rgba(0, 255, 0, 0.05);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .span-node:hover {
+            background-color: rgba(0, 255, 0, 0.1);
+            border-left-color: #00ff00;
+        }
+
+        .span-node.expanded {
+            background-color: rgba(0, 255, 255, 0.05);
+            border-left-color: #00ffff;
+        }
+
+        .span-node.completed {
+            border-left-color: #00ff00;
+        }
+
+        .span-node.running {
+            border-left-color: #ffff00;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { border-left-color: #ffff00; }
+            50% { border-left-color: #ff6600; }
+            100% { border-left-color: #ffff00; }
+        }
+
+        .span-status {
+            width: 20px;
+            text-align: center;
+            font-size: 12px;
+        }
+
+        .span-node.critical-path {
+            border-left-color: #ff6600 !important;
+            background-color: rgba(255, 102, 0, 0.1) !important;
+            box-shadow: 0 0 5px rgba(255, 102, 0, 0.3);
+        }
+
+        .span-node.critical-path .span-name {
+            color: #ff6600;
+            font-weight: bold;
+        }
+
+        .span-log-entry.critical {
+            background-color: rgba(255, 102, 0, 0.2);
+            border-radius: 3px;
+            padding: 2px 4px;
+        }
+
+        .span-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .span-toggle {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .span-name {
+            color: #00ffff;
+            font-weight: bold;
+        }
+
+        .span-target {
+            color: #ffff00;
+            font-size: 11px;
+            padding: 1px 4px;
+            background-color: rgba(255, 255, 0, 0.1);
+            border-radius: 2px;
+        }
+
+        .span-duration {
+            color: #ff6600;
+            font-size: 11px;
+            margin-left: auto;
+        }
+
+        .span-children {
+            /* 这个 margin-left 是旧的，新的实现里我们用父节点的margin，这里只需要连接线 */
+            padding-left: 10px; /* 控制连接线和子节点的间距 */
+            border-left: 1px dashed #444; /* 左侧的垂直连接线 */
+        }
+
+        .span-node.selected {
+            background-color: rgba(0, 255, 255, 0.15);
+            border-left-color: #00ffff !important;
+            box-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
+        }
+
+        .span-logs {
+            margin-top: 4px;
+            margin-left: 20px;
+            font-size: 11px;
+            color: #ccc;
+            max-height: 100px;
+            overflow-y: auto;
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 4px;
+            border-radius: 2px;
+        }
+
+        .span-log-entry {
+            margin: 1px 0;
+            padding: 1px 0;
+        }
+
+        .span-log-time {
+            color: #666;
+        }
+
+        .span-log-message {
+            color: #00ff00;
+        }
+
+        /* 时间轴样式 */
+        .timeline-view {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .timeline-header {
+            padding: 10px;
+            border-bottom: 1px solid #333;
+            background-color: #1a1a1a;
+            flex-shrink: 0;
+        }
+
+        .timeline-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+        }
+
+        .timeline-controls label {
+            color: #ccc;
+        }
+
+        .timeline-controls input {
+            width: 60px;
+            padding: 2px 4px;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 3px;
+            color: #00ff00;
+            font-size: 11px;
+        }
+
+        .timeline-container {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+
+        .timeline-ruler {
+            height: 30px;
+            background-color: #1a1a1a;
+            border-bottom: 1px solid #333;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            font-size: 11px;
+            color: #888;
+        }
+
+        .timeline-content {
+            padding: 10px;
+            min-height: 200px;
+        }
+
+        .timeline-track {
+            margin-bottom: 2px;
+            height: 24px;
+            position: relative;
+            border-bottom: 1px solid #222;
+        }
+
+        .timeline-track-label {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 200px;
+            height: 24px;
+            background-color: #1a1a1a;
+            border-right: 1px solid #333;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: #ccc;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            z-index: 5;
+        }
+
+        .timeline-track-content {
+            margin-left: 200px;
+            height: 24px;
+            position: relative;
+        }
+
+        .timeline-span-bar {
+            position: absolute;
+            height: 20px;
+            top: 2px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            padding: 0 4px;
+            font-size: 10px;
+            color: white;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .timeline-span-bar:hover {
+            transform: scaleY(1.2);
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        .timeline-span-bar.completed {
+            background-color: #006600;
+            border: 1px solid #00aa00;
+        }
+
+        .timeline-span-bar.running {
+            background-color: #666600;
+            border: 1px solid #aaaa00;
+            animation: timeline-pulse 2s infinite;
+        }
+
+        .timeline-span-bar.critical-path {
+            background-color: #cc4400 !important;
+            border: 1px solid #ff6600 !important;
+            box-shadow: 0 0 4px rgba(255, 102, 0, 0.5);
+        }
+
+        @keyframes timeline-pulse {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+
+        .timeline-tick {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background-color: #333;
+        }
+
+        .timeline-tick-label {
+            position: absolute;
+            top: 5px;
+            left: 2px;
+            font-size: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 函数执行路径可视化</h1>
+        <div class="header-controls">
+            <button id="toggle-raw-logs-btn" class="nav-button">📋 隐藏原始日志</button>
+            <div class="connection-status" id="connection-status">连接中...</div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <!-- 左侧面板：实时原始日志 -->
+        <div class="left-panel">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">实时原始日志</div>
+                    <div class="panel-status status-waiting" id="raw-logs-status">等待连接</div>
+                </div>
+                <div class="stats-panel">
+                    <div class="stat-line">
+                        <span>日志总数:</span>
+                        <span id="total-logs-count">0</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>最后更新:</span>
+                        <span id="last-update-time">--:--:--</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>连接时长:</span>
+                        <span id="connection-duration">00:00:00</span>
+                    </div>
+                </div>
+                <div class="search-panel">
+                    <div class="search-controls">
+                        <input type="text" id="raw-logs-search-input" placeholder="搜索日志内容..." class="search-input">
+                        <button id="raw-logs-search-btn" class="search-btn" title="开始搜索">🔍</button>
+                        <button id="raw-logs-search-clear" class="search-btn" title="清除搜索">✖</button>
+                        <button id="raw-logs-search-prev" class="search-btn" title="上一个匹配" disabled>↑</button>
+                        <button id="raw-logs-search-next" class="search-btn" title="下一个匹配" disabled>↓</button>
+                        <button id="raw-logs-save-btn" class="search-btn" title="保存所有日志到文件">💾</button>
+                        <button id="raw-logs-clear-btn" class="search-btn" title="清空所有日志">🗑️</button>
+                    </div>
+                    <div class="search-status" id="raw-logs-search-status">输入关键词开始搜索</div>
+                </div>
+                <div class="panel-content" id="raw-logs-terminal"></div>
+            </div>
+        </div>
+
+        <!-- 右侧面板：现在拆分为两个 -->
+        <div class="right-panel">
+
+            <!-- 新增: Trace列表面板 -->
+            <div class="panel trace-list-panel">
+                <div class="panel-header">
+                    <div class="panel-title">追踪列表 (Traces)</div>
+                    <div class="panel-status" id="trace-list-status">等待数据</div>
+                </div>
+                <div class="stats-panel">
+                    <div class="stat-line">
+                        <span>活跃Trace:</span>
+                        <span id="active-traces-count">0</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>总Span数:</span>
+                        <span id="total-spans-count">0</span>
+                    </div>
+                </div>
+                <div class="panel-content trace-list-container" id="trace-list-container">
+                    <div class="placeholder">等待追踪数据...</div>
+                </div>
+            </div>
+
+            <!-- Trace详情面板 -->
+            <div class="panel trace-detail-panel">
+                <div class="panel-header">
+                    <div class="panel-title">调用路径详情</div>
+                    <div class="view-toggle">
+                        <button class="toggle-btn active" id="tree-view-btn">🌳 调用树</button>
+                        <button class="toggle-btn" id="timeline-view-btn">📊 时间轴</button>
+                    </div>
+                </div>
+                <div class="stats-panel" id="trace-detail-stats">
+                    <div class="stat-line">
+                        <span>选中Trace:</span>
+                        <span id="selected-trace-id">无</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>总耗时:</span>
+                        <span id="selected-trace-duration">--</span>
+                    </div>
+                </div>
+                <div class="panel-content" id="trace-visualization-content">
+                    <div class="trace-tree-view" id="trace-tree-view" style="display: block;">
+                        <div class="tree-container" id="tree-container">
+                            <div class="placeholder">点击左侧列表中的一个Trace来查看详情</div>
+                        </div>
+                    </div>
+                    <div class="timeline-view" id="timeline-view" style="display: none;">
+                        <div class="timeline-header">
+                            <div class="timeline-controls">
+                                <label>最小耗时过滤: <input type="number" id="min-duration-filter" value="0" min="0" step="0.1"> ms</label>
+                                <button id="apply-filter-btn" class="search-btn">应用过滤</button>
+                                <button id="reset-filter-btn" class="search-btn">重置</button>
+                            </div>
+                        </div>
+                        <div class="timeline-container" id="timeline-container">
+                            <div class="timeline-ruler" id="timeline-ruler"></div>
+                            <div class="timeline-content" id="timeline-content">
+                                <div class="placeholder">
+                                    <div>
+                                        <h3>📊 时间轴视图</h3>
+                                        <p>等待span数据...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        console.log('🚀 Trace Viewer 启动');
+
+        // Trace数据处理器 - 重新设计的核心数据处理器
+        class TraceProcessor {
+            constructor() {
+                // 数据存储核心：一个Map，键是trace_id，值是该Trace的所有信息
+                this.traces = new Map();
+            }
+
+            // 根据trace_id获取或创建一个新的Trace对象
+            getOrCreateTrace(traceId) {
+                if (!this.traces.has(traceId)) {
+                    this.traces.set(traceId, {
+                        id: traceId,
+                        spans: new Map(),      // 存储这个Trace下的所有Span对象 (id -> span)
+                        rootSpans: [],       // 存储根Span对象（没有父ID的）
+                        startTime: null,     // Trace的开始时间
+                        duration: null,      // Trace的总时长
+                        hasError: false
+                    });
+                }
+                return this.traces.get(traceId);
+            }
+
+            // 处理一个已经转换好的、干净的span事件
+            processSpanEvent(event) {
+                const trace = this.getOrCreateTrace(event.trace_id);
+                const spanId = event.span_id;
+
+                if (event.type === 'span_start') {
+                    const span = {
+                        id: spanId,
+                        parentId: event.parent_id,
+                        name: event.name,
+                        target: event.target,
+                        startTime: new Date(event.timestamp),
+                        children: [],
+                        logs: [],
+                        status: 'running',
+                        duration: null,
+                        selfTime: null,
+                        isCritical: false
+                    };
+
+                    trace.spans.set(spanId, span);
+
+                    if (span.parentId) {
+                        const parentSpan = trace.spans.get(span.parentId);
+                        if (parentSpan) {
+                            parentSpan.children.push(span);
+                        }
+                    } else {
+                        trace.rootSpans.push(span);
+                        if (!trace.startTime) trace.startTime = span.startTime;
+                    }
+
+                } else if (event.type === 'span_end') {
+                    const span = trace.spans.get(spanId);
+                    if (span) {
+                        span.duration = event.duration_ms;
+                        span.status = 'completed';
+
+                        // 计算自身耗时
+                        this.calculateSelfTime(span, trace);
+
+                        // 如果是根Span结束，可以更新Trace总时长并计算关键路径
+                        if (!span.parentId) {
+                            trace.duration = span.duration;
+                            this.calculateCriticalPath(span, trace);
+                        }
+                    }
+                } else if (event.type === 'log' && event.level === 'ERROR') {
+                     const span = trace.spans.get(spanId);
+                     if(span) span.logs.push(event);
+                }
+            }
+
+            calculateSelfTime(span, trace) {
+                let childrenDuration = 0;
+                for (const child of span.children) {
+                    childrenDuration += child.duration || 0;
+                }
+                span.selfTime = Math.max(0, (span.duration || 0) - childrenDuration);
+            }
+
+            calculateCriticalPath(rootSpan, trace) {
+                // 简化的逻辑：直接标记耗时最长的子节点链
+                let current = rootSpan;
+                while(current) {
+                    trace.spans.get(current.id).isCritical = true;
+                    if(current.children.length === 0) break;
+                    current = current.children.reduce((max, child) => (child.duration > (max?.duration || 0) ? child : max), null);
+                }
+            }
+
+            // 获取所有根Span，用于渲染
+            getAllRootSpansForRender() {
+                const trees = [];
+                for (const trace of this.traces.values()) {
+                    // 为每个根span添加trace信息
+                    trace.rootSpans.forEach(rootSpan => {
+                        rootSpan.traceId = trace.id;
+                        trees.push(rootSpan);
+                    });
+                }
+                trees.sort((a, b) => b.startTime - a.startTime); // 最新在最前
+                return trees;
+            }
+
+            // 获取所有Trace的摘要信息，用于渲染左侧列表
+            getTraceSummaries() {
+                const summaries = [];
+                for (const trace of this.traces.values()) {
+                    if (trace.rootSpans.length > 0) {
+                        const rootSpan = trace.rootSpans[0];
+                        summaries.push({
+                            id: trace.id,
+                            name: rootSpan.name,
+                            duration: trace.duration,
+                            startTime: trace.startTime,
+                            hasError: trace.hasError
+                        });
+                    }
+                }
+                summaries.sort((a, b) => b.startTime - a.startTime);
+                return summaries;
+            }
+
+            // 更新统计信息
+            updateTraceStats() {
+                const activeTracesEl = document.getElementById('active-traces-count');
+                const totalSpansEl = document.getElementById('total-spans-count');
+
+                if (activeTracesEl) activeTracesEl.textContent = this.traces.size;
+
+                let totalSpans = 0;
+                for (const trace of this.traces.values()) {
+                    totalSpans += trace.spans.size;
+                }
+                if (totalSpansEl) totalSpansEl.textContent = totalSpans;
+            }
+        }
+
+        // 全局状态管理
+        class TraceViewerState {
+            constructor() {
+                this.allLogs = [];
+                this.logCount = 0;
+                this.lastLogTime = null;
+                this.startTime = Date.now();
+                this.isConnected = false;
+                this.traceProcessor = new TraceProcessor();
+
+                // 新增：异步事件处理队列
+                this.eventQueue = [];
+                this.isProcessing = false;
+
+                // 新增：当前选中的Trace ID
+                this.activeTraceId = null;
+            }
+
+            // 新增方法：将事件放入异步处理队列
+            queueEventForProcessing(eventData) {
+                this.eventQueue.push(eventData);
+                // 如果处理循环没有在运行，就启动它
+                if (!this.isProcessing) {
+                    this.startProcessingLoop();
+                }
+            }
+
+            // 新增方法：启动异步处理循环
+            startProcessingLoop() {
+                this.isProcessing = true;
+                const process = () => {
+                    // 每次处理一小批事件，避免长时间占用主线程
+                    const batchSize = 50; // 可调整
+                    let processedCount = 0;
+
+                    while (this.eventQueue.length > 0 && processedCount < batchSize) {
+                        const event = this.eventQueue.shift();
+                        this.handleEvent(event); // 调用原来的处理逻辑
+                        processedCount++;
+                    }
+
+                    // 如果队列中还有事件，继续调度下一次处理
+                    if (this.eventQueue.length > 0) {
+                        requestAnimationFrame(process);
+                    } else {
+                        this.isProcessing = false; // 队列空了，停止循环
+                    }
+                };
+                requestAnimationFrame(process);
+            }
+
+            // 修正后的 handleEvent 函数
+            handleEvent(data) {
+                // 检查新的日志格式，只处理用于可视化的 trace 日志
+                if (data.log_type === 'trace') {
+                    // 直接将整个日志对象传递给转换器
+                    // 因为span事件信息现在直接在 'fields' 字段中
+                    const spanEvent = this.convertLogEntryToSpanEvent(data);
+                    if (spanEvent) {
+                        this.processSpanEvent(spanEvent);
+                    }
+                }
+                // log_type 为 'module' 或其他类型的日志将被忽略，不会进入调用树的构建过程
+            }
+
+            // 修正后的 convertLogEntryToSpanEvent 函数
+            convertLogEntryToSpanEvent(logData) {
+                const fields = logData.fields;
+
+                // 增加一个检查，确保这是一个我们能处理的span事件
+                if (!fields || !fields.event_type) {
+                    return null;
+                }
+
+                return {
+                    type: fields.event_type, // "span_start", "span_end", "log"
+                    timestamp: logData.timestamp,
+                    trace_id: fields.trace_id,
+                    span_id: fields.span_id,
+                    parent_id: fields.parent_id || null,
+                    name: fields.span_name || 'unknown_span_name', // name现在总是在fields里
+                    target: logData.target, // target在顶层
+                    duration_ms: fields.duration_ms || 0,
+                    level: logData.level,     // level在顶层
+                    message: logData.message, // message在顶层
+                };
+            }
+
+            // 这个方法现在只处理span事件
+            processSpanEvent(spanEvent) {
+                this.traceProcessor.processSpanEvent(spanEvent);
+                this.traceProcessor.updateTraceStats(); // 更新统计信息
+                this.updateTraceVisualization(); // 触发UI更新
+            }
+
+
+
+            updateTraceVisualization() {
+                if (this.updateTimer) clearTimeout(this.updateTimer);
+
+                this.updateTimer = setTimeout(() => {
+                    // 1. 更新统计信息
+                    this.traceProcessor.updateTraceStats(); // 确保这个方法存在并更新UI
+                    // 2. 更新左侧Trace列表
+                    this.renderTraceList();
+                    // 3. 更新右侧选中的Trace详情
+                    this.renderActiveTraceDetail();
+                    // 4. 更新时间轴视图（如果实现了）
+                    this.renderTimeline();
+                }, 250);
+            }
+
+            renderTraceList() {
+                const listContainer = document.getElementById('trace-list-container');
+                const summaries = this.traceProcessor.getTraceSummaries();
+
+                if (summaries.length === 0) {
+                    listContainer.innerHTML = `<div class="placeholder">等待追踪数据...</div>`;
+                    return;
+                }
+
+                listContainer.innerHTML = summaries.map(trace => {
+                    const duration = trace.duration !== null ? `${trace.duration.toFixed(2)}ms` : '运行中...';
+                    const errorClass = trace.hasError ? 'has-error' : '';
+                    const selectedClass = trace.id === this.activeTraceId ? 'selected' : '';
+                    return `
+                        <div class="trace-list-item ${errorClass} ${selectedClass}" data-trace-id="${trace.id}">
+                            <div class="trace-name">${trace.name}</div>
+                            <div class="trace-id">${trace.id}</div>
+                            <div class="trace-duration">耗时: ${duration}</div>
+                        </div>
+                    `;
+                }).join('');
+
+                this.attachListEventListeners();
+            }
+
+            renderActiveTraceDetail() {
+                const treeContainer = document.getElementById('tree-container');
+                if (!this.activeTraceId) {
+                    treeContainer.innerHTML = `<div class="placeholder">点击左侧列表中的一个Trace来查看详情</div>`;
+                    this.updateTraceDetailStats(null);
+                    return;
+                }
+
+                const trace = this.traceProcessor.traces.get(this.activeTraceId);
+
+                if (trace && trace.rootSpans.length > 0) {
+                    let html = '';
+                    // 一个Trace可能有多个根节点（并行任务）
+                    trace.rootSpans.forEach(rootSpan => {
+                        html += this.renderSpanNode(rootSpan, 0);
+                    });
+                    treeContainer.innerHTML = html;
+                    this.attachTreeEventListeners();
+                    this.updateTraceDetailStats(trace);
+                } else {
+                    treeContainer.innerHTML = `<div class="placeholder">加载中或未找到Trace...</div>`;
+                    this.updateTraceDetailStats(null);
+                }
+            }
+
+            // 最终版的递归渲染函数
+            renderSpanNode(span, depth) {
+                const hasChildren = span.children.length > 0;
+
+                // **核心修正 1: 使用 depth 来计算缩进**
+                const indentStyle = `margin-left: ${depth * 25}px;`;
+
+                // 构建详细的时间信息（这部分你做得很好，保持不变）
+                let timeInfo = '';
+                if (span.duration !== null) {
+                    timeInfo = `${span.duration.toFixed(2)}ms`;
+                    if (span.selfTime !== null && span.selfTime < span.duration) {
+                        timeInfo += ` (自身: ${span.selfTime.toFixed(2)}ms)`;
+                    }
+                } else {
+                    timeInfo = '运行中...';
+                }
+
+                // 设置CSS class
+                let statusClass = span.status === 'completed' ? 'completed' : 'running';
+                if (span.isCritical) {
+                    statusClass += ' critical-path';
+                }
+                const statusIcon = span.isCritical ? '🔥' : (span.status === 'completed' ? '✅' : '🔄');
+                const toggleIcon = hasChildren ? '▶' : '•';
+
+                // 1. 创建当前节点的HTML骨架
+                let html = `
+                    <div class="span-node ${statusClass}" style="${indentStyle}" data-span-id="${span.id}">
+                        <div class="span-header">
+                            <span class="span-toggle">${toggleIcon}</span>
+                            <span class="span-status">${statusIcon}</span>
+                            <span class="span-name">${span.name}</span>
+                            <span class="span-target">${span.target}</span>
+                            <span class="span-duration">${timeInfo}</span>
+                        </div>
+                `;
+
+                // 2. 如果有子节点，创建一个子容器，并在这里进行递归
+                if (hasChildren) {
+                    html += `<div class="span-children" style="display: none;">`;
+
+                    // **核心修正 2: 递归调用时，深度+1**
+                    const sortedChildren = [...span.children].sort((a,b) => (b.duration || 0) - (a.duration || 0));
+                    html += sortedChildren.map(child => this.renderSpanNode(child, depth + 1)).join(''); // 深度加1
+
+                    html += `</div>`;
+                }
+
+                // 3. (可选) 添加显示详细信息的日志div
+                if (span.startTime) {
+                    html += `<div class="span-logs" style="display: none;">`;
+
+                    // 基本时间信息
+                    html += `<div class="span-log-entry">`;
+                    html += `<span class="span-log-time">开始: ${span.startTime.toLocaleTimeString()}</span>`;
+                    html += `</div>`;
+
+                    // 性能信息
+                    if (span.duration !== null) {
+                        html += `<div class="span-log-entry">`;
+                        html += `<span class="span-log-message">总耗时: ${span.duration.toFixed(2)}ms</span>`;
+                        html += `</div>`;
+
+                        if (span.selfTime !== null) {
+                            html += `<div class="span-log-entry">`;
+                            html += `<span class="span-log-message">自身耗时: ${span.selfTime.toFixed(2)}ms</span>`;
+                            html += `</div>`;
+
+                            const waitTime = span.duration - span.selfTime;
+                            if (waitTime > 0.1) {
+                                html += `<div class="span-log-entry">`;
+                                html += `<span class="span-log-message">等待时间: ${waitTime.toFixed(2)}ms</span>`;
+                                html += `</div>`;
+                            }
+                        }
+
+                        if (span.isCritical) {
+                            html += `<div class="span-log-entry critical">`;
+                            html += `<span class="span-log-message">🔥 关键路径</span>`;
+                            html += `</div>`;
+                        }
+                    }
+
+                    html += `</div>`;
+                }
+
+                html += `</div>`;
+                return html;
+            }
+
+            // 新增：绑定Trace列表的点击事件
+            attachListEventListeners() {
+                const listContainer = document.getElementById('trace-list-container');
+                if (!listContainer) return;
+
+                listContainer.addEventListener('click', (e) => {
+                    const item = e.target.closest('.trace-list-item');
+                    if (item) {
+                        const newTraceId = item.dataset.traceId;
+                        // 如果点击的已经是当前选中的，则不执行任何操作
+                        if (newTraceId === this.activeTraceId) return;
+
+                        // 更新 activeTraceId
+                        this.activeTraceId = newTraceId;
+
+                        // 优化：不再重新渲染整个列表，而是手动更新class
+                        // 1. 移除旧的选中项的 'selected' class
+                        const currentSelected = listContainer.querySelector('.trace-list-item.selected');
+                        if (currentSelected) {
+                            currentSelected.classList.remove('selected');
+                        }
+                        // 2. 给新点击的项添加 'selected' class
+                        item.classList.add('selected');
+
+                        // 渲染详情（这是主要任务）
+                        this.renderActiveTraceDetail();
+                    }
+                });
+            }
+
+            // 更新详情面板的统计数据
+            updateTraceDetailStats(trace) {
+                const selectedTraceIdEl = document.getElementById('selected-trace-id');
+                const selectedTraceDurationEl = document.getElementById('selected-trace-duration');
+
+                if (selectedTraceIdEl) {
+                    selectedTraceIdEl.textContent = trace ? trace.id : '无';
+                }
+                if (selectedTraceDurationEl) {
+                    selectedTraceDurationEl.textContent = (trace && trace.duration !== null) ? `${trace.duration.toFixed(2)}ms` : '--';
+                }
+            }
+
+            attachTreeEventListeners() {
+                const treeContainer = document.getElementById('tree-container');
+                if (!treeContainer) return;
+
+                // 使用事件委托，性能更好，且能处理动态添加的元素
+                treeContainer.addEventListener('click', (e) => {
+                    const target = e.target;
+
+                    // 处理展开/折叠
+                    if (target.classList.contains('span-toggle')) {
+                        e.stopPropagation();
+                        const header = target.closest('.span-header');
+                        const childrenContainer = header.nextElementSibling;
+
+                        if (childrenContainer && childrenContainer.classList.contains('span-children')) {
+                            const isExpanded = childrenContainer.style.display !== 'none';
+                            childrenContainer.style.display = isExpanded ? 'none' : 'block';
+                            target.textContent = isExpanded ? '▶' : '▼';
+                            header.parentElement.classList.toggle('expanded', !isExpanded);
+                        }
+                    }
+                    // 处理点击整个节点，可以用来显示详细信息
+                    else if (target.closest('.span-node')) {
+                        const node = target.closest('.span-node');
+                        const logs = node.querySelector('.span-logs');
+
+                        // 切换日志显示
+                        if (logs) {
+                            const isVisible = logs.style.display !== 'none';
+                            logs.style.display = isVisible ? 'none' : 'block';
+                        }
+
+                        // 可以把这个节点设为"选中"状态，并显示更详细的信息
+                        console.log('Clicked span:', node.dataset.spanId);
+
+                        // 示例：切换一个 .selected class
+                        // 先移除其他节点的选中状态
+                        treeContainer.querySelectorAll('.span-node.selected').forEach(n => n.classList.remove('selected'));
+                        node.classList.add('selected');
+                    }
+                });
+            }
+
+            renderTimeline() {
+                const timelineContent = document.getElementById('timeline-content');
+                const timelineRuler = document.getElementById('timeline-ruler');
+                if (!timelineContent || !timelineRuler) return;
+
+                const rootSpans = this.traceProcessor.getAllRootSpansForRender();
+                if (rootSpans.length === 0) {
+                    timelineContent.innerHTML = `
+                        <div class="placeholder">
+                            <div>
+                                <h3>📊 时间轴视图</h3>
+                                <p>等待span数据...</p>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // 获取最小耗时过滤器的值
+                const minDurationFilter = parseFloat(document.getElementById('min-duration-filter')?.value || 0);
+
+                // 收集所有span并按开始时间排序
+                const allSpans = [];
+                this.collectAllSpans(rootSpans, allSpans);
+
+                // 应用过滤器
+                const filteredSpans = allSpans.filter(span =>
+                    span.duration === null || span.duration >= minDurationFilter
+                );
+
+                if (filteredSpans.length === 0) {
+                    timelineContent.innerHTML = `
+                        <div class="placeholder">
+                            <div>
+                                <h3>📊 时间轴视图</h3>
+                                <p>没有符合过滤条件的span数据</p>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // 计算时间范围
+                const timeRange = this.calculateTimeRange(filteredSpans);
+                if (timeRange.duration <= 0) return;
+
+                // 渲染时间标尺
+                this.renderTimelineRuler(timelineRuler, timeRange);
+
+                // 渲染时间轴内容
+                this.renderTimelineContent(timelineContent, filteredSpans, timeRange);
+            }
+
+            collectAllSpans(spans, result) {
+                for (const span of spans) {
+                    result.push(span);
+                    if (span.children && span.children.length > 0) {
+                        this.collectAllSpans(span.children, result);
+                    }
+                }
+            }
+
+            calculateTimeRange(spans) {
+                let minStart = Infinity;
+                let maxEnd = -Infinity;
+
+                // 找到最早的开始时间作为基准
+                let baseTime = null;
+                for (const span of spans) {
+                    if (span.startTime) {
+                        if (!baseTime || span.startTime < baseTime) {
+                            baseTime = span.startTime;
+                        }
+                    }
+                }
+
+                if (!baseTime) {
+                    return { start: 0, end: 100, duration: 100 };
+                }
+
+                for (const span of spans) {
+                    if (span.startTime) {
+                        const relativeStart = span.startTime - baseTime;
+                        minStart = Math.min(minStart, relativeStart);
+                        if (span.duration !== null) {
+                            maxEnd = Math.max(maxEnd, relativeStart + span.duration);
+                        }
+                    }
+                }
+
+                return {
+                    start: minStart === Infinity ? 0 : minStart,
+                    end: maxEnd === -Infinity ? 100 : maxEnd,
+                    duration: maxEnd === -Infinity || minStart === Infinity ? 100 : maxEnd - minStart
+                };
+            }
+
+            renderTimelineRuler(ruler, timeRange) {
+                const tickCount = 10;
+                const tickInterval = timeRange.duration / tickCount;
+
+                let rulerHTML = '';
+                for (let i = 0; i <= tickCount; i++) {
+                    const time = timeRange.start + (i * tickInterval);
+                    const position = (i / tickCount) * 100;
+                    rulerHTML += `
+                        <div class="timeline-tick" style="left: ${position}%;">
+                            <div class="timeline-tick-label">${time.toFixed(1)}ms</div>
+                        </div>
+                    `;
+                }
+
+                ruler.innerHTML = rulerHTML;
+            }
+
+            renderTimelineContent(container, spans, timeRange) {
+                // 按层级分组span
+                const tracks = this.groupSpansIntoTracks(spans);
+
+                let html = '';
+                tracks.forEach((trackSpans, trackIndex) => {
+                    html += `<div class="timeline-track">`;
+                    html += `<div class="timeline-track-label">Track ${trackIndex + 1}</div>`;
+                    html += `<div class="timeline-track-content">`;
+
+                    trackSpans.forEach(span => {
+                        html += this.renderTimelineSpanBar(span, timeRange);
+                    });
+
+                    html += `</div></div>`;
+                });
+
+                container.innerHTML = html;
+
+                // 添加hover事件
+                this.attachTimelineEventListeners();
+            }
+
+            groupSpansIntoTracks(spans) {
+                // 简单的分组算法：按深度分组
+                const tracks = [];
+                const spanDepths = new Map();
+
+                // 计算每个span的深度
+                for (const span of spans) {
+                    const depth = this.calculateSpanDepth(span, spans);
+                    spanDepths.set(span.id, depth);
+                }
+
+                // 按深度分组
+                for (const span of spans) {
+                    const depth = spanDepths.get(span.id);
+                    if (!tracks[depth]) {
+                        tracks[depth] = [];
+                    }
+                    tracks[depth].push(span);
+                }
+
+                return tracks.filter(track => track && track.length > 0);
+            }
+
+            calculateSpanDepth(span, allSpans) {
+                // 通过parentId来计算深度
+                let depth = 0;
+                let currentSpan = span;
+
+                while (currentSpan && currentSpan.parentId) {
+                    const parent = allSpans.find(s => s.id === currentSpan.parentId);
+                    if (parent) {
+                        depth++;
+                        currentSpan = parent;
+                    } else {
+                        break;
+                    }
+                }
+
+                return depth;
+            }
+
+            renderTimelineSpanBar(span, timeRange) {
+                if (!span.startTime || span.duration === null) {
+                    return '';
+                }
+
+                // 计算相对于时间范围开始的偏移
+                const baseTime = new Date(timeRange.start);
+                const relativeStart = span.startTime - baseTime;
+
+                const leftPercent = (relativeStart / timeRange.duration) * 100;
+                const widthPercent = (span.duration / timeRange.duration) * 100;
+
+                const statusClass = span.status === 'completed' ? 'completed' : 'running';
+                const criticalClass = span.isCritical ? 'critical-path' : '';
+
+                const title = `${span.name} (${span.target})\\n耗时: ${span.duration.toFixed(2)}ms\\n开始: +${relativeStart.toFixed(1)}ms`;
+
+                return `
+                    <div class="timeline-span-bar ${statusClass} ${criticalClass}"
+                         style="left: ${leftPercent}%; width: ${Math.max(widthPercent, 0.5)}%;"
+                         title="${title}"
+                         data-span-id="${span.id}">
+                        ${span.name}
+                    </div>
+                `;
+            }
+
+            attachTimelineEventListeners() {
+                const spanBars = document.querySelectorAll('.timeline-span-bar');
+                spanBars.forEach(bar => {
+                    bar.addEventListener('click', (e) => {
+                        const spanId = e.target.getAttribute('data-span-id');
+                        console.log('点击了span:', spanId);
+                        // TODO: 可以添加更多交互功能，如高亮对应的树节点
+                    });
+                });
+            }
+            
+            updateStats() {
+                const countEl = document.getElementById('total-logs-count');
+                const timeEl = document.getElementById('last-update-time');
+                const durationEl = document.getElementById('connection-duration');
+                
+                if (countEl) countEl.textContent = this.logCount;
+                if (timeEl && this.lastLogTime) {
+                    timeEl.textContent = this.lastLogTime.toLocaleTimeString();
+                }
+                if (durationEl) {
+                    const duration = Math.floor((Date.now() - this.startTime) / 1000);
+                    const hours = Math.floor(duration / 3600).toString().padStart(2, '0');
+                    const minutes = Math.floor((duration % 3600) / 60).toString().padStart(2, '0');
+                    const seconds = (duration % 60).toString().padStart(2, '0');
+                    durationEl.textContent = `${hours}:${minutes}:${seconds}`;
+                }
+            }
+            
+            setConnectionStatus(connected) {
+                this.isConnected = connected;
+                const statusEl = document.getElementById('connection-status');
+                const rawLogsStatusEl = document.getElementById('raw-logs-status');
+                
+                if (statusEl) {
+                    statusEl.textContent = connected ? '已连接' : '连接断开';
+                    statusEl.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+                }
+                
+                if (rawLogsStatusEl) {
+                    rawLogsStatusEl.textContent = connected ? '运行中' : '连接断开';
+                    rawLogsStatusEl.className = `panel-status ${connected ? 'status-running' : 'status-error'}`;
+                }
+            }
+        }
+        
+        // 全局状态实例
+        const traceViewerState = new TraceViewerState();
+        
+        // 终端管理器
+        class TerminalManager {
+            constructor() {
+                this.terminals = new Map();
+                this.fitAddons = new Map();
+                this.searchAddons = new Map();
+                this.logBuffers = new Map();
+                this.maxLines = 10000000;
+                
+                this.terminalTheme = {
+                    background: '#000000',
+                    foreground: '#00ff00',
+                    cursor: '#00ff00',
+                    cursorAccent: '#000000',
+                    selectionBackground: 'rgba(255, 255, 255, 0.3)',
+                    black: '#000000',
+                    red: '#ff0000',
+                    green: '#00ff00',
+                    yellow: '#ffff00',
+                    blue: '#0066ff',
+                    magenta: '#ff00ff',
+                    cyan: '#00ffff',
+                    white: '#ffffff'
+                };
+            }
+            
+            createTerminal(containerId, terminalName) {
+                const container = document.getElementById(containerId);
+                if (!container) {
+                    console.error(`找不到容器: ${containerId}`);
+                    return null;
+                }
+                
+                const terminal = new Terminal({
+                    theme: this.terminalTheme,
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    fontSize: 13,
+                    lineHeight: 1.2,
+                    cursorBlink: false,
+                    scrollback: this.maxLines,
+                    convertEol: true,
+                    disableStdin: true,
+                    allowTransparency: true
+                });
+                
+                const fitAddon = new FitAddon.FitAddon();
+                const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+                
+                let searchAddon = null;
+                try {
+                    if (window.SearchAddon && typeof window.SearchAddon.SearchAddon === 'function') {
+                        searchAddon = new window.SearchAddon.SearchAddon();
+                    }
+                } catch (error) {
+                    console.error('创建搜索插件失败:', error);
+                    searchAddon = {
+                        onDidChangeResults: () => {},
+                        findNext: () => {},
+                        findPrevious: () => {},
+                        clearDecorations: () => {}
+                    };
+                }
+                
+                terminal.loadAddon(fitAddon);
+                terminal.loadAddon(webLinksAddon);
+                if (searchAddon) terminal.loadAddon(searchAddon);
+                
+                terminal.open(container);
+                setTimeout(() => fitAddon.fit(), 0);
+                
+                this.terminals.set(terminalName, terminal);
+                this.fitAddons.set(terminalName, fitAddon);
+                this.searchAddons.set(terminalName, searchAddon);
+                this.logBuffers.set(terminalName, []);
+                
+                return terminal;
+            }
+            
+            // 新增方法：直接显示原始JSON字符串（极速通道）
+            appendRawJsonToLogs(jsonString) {
+                const terminal = this.terminals.get('raw-logs');
+                if (!terminal) return;
+
+                const buffer = this.logBuffers.get('raw-logs');
+                if (!buffer) return;
+
+                // 更新统计信息（移到这里，避免在主处理流程中计算）
+                traceViewerState.logCount++;
+                traceViewerState.lastLogTime = new Date();
+                traceViewerState.updateStats();
+
+                // 直接显示原始JSON，不做任何格式化
+                buffer.push(jsonString);
+                terminal.write(jsonString + '\r\n');
+
+                // 保持最大行数限制
+                if (buffer.length > this.maxLines) {
+                    buffer.shift();
+                }
+            }
+
+            // 新增方法：保存所有日志到文件
+            saveLogsToFile(terminalName = 'raw-logs') {
+                const buffer = this.logBuffers.get(terminalName);
+                if (!buffer || buffer.length === 0) {
+                    alert('没有日志数据可以保存');
+                    return;
+                }
+
+                try {
+                    // 生成文件名（包含时间戳）
+                    const now = new Date();
+                    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                    const filename = `trace-logs-${timestamp}.json`;
+
+                    // 将所有日志合并为一个字符串
+                    const logContent = buffer.join('\n');
+
+                    // 创建Blob并下载
+                    const blob = new Blob([logContent], { type: 'application/json;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    console.log(`✅ 日志已保存到文件: ${filename} (${buffer.length} 条记录)`);
+
+                    // 显示保存成功的提示
+                    const statusEl = document.getElementById('raw-logs-search-status');
+                    if (statusEl) {
+                        const originalText = statusEl.textContent;
+                        const originalClass = statusEl.className;
+                        statusEl.textContent = `💾 已保存 ${buffer.length} 条日志到 ${filename}`;
+                        statusEl.className = 'search-status has-results';
+
+                        setTimeout(() => {
+                            statusEl.textContent = originalText;
+                            statusEl.className = originalClass;
+                        }, 3000);
+                    }
+                } catch (error) {
+                    console.error('保存日志文件失败:', error);
+                    alert('保存日志文件失败: ' + error.message);
+                }
+            }
+
+            // 新增方法：清空所有日志
+            clearLogs(terminalName = 'raw-logs') {
+                const terminal = this.terminals.get(terminalName);
+                const buffer = this.logBuffers.get(terminalName);
+
+                if (!terminal || !buffer) return;
+
+                // 确认清空操作
+                if (!confirm(`确定要清空所有日志吗？当前有 ${buffer.length} 条记录。`)) {
+                    return;
+                }
+
+                try {
+                    // 清空缓冲区
+                    buffer.length = 0;
+
+                    // 清空终端显示
+                    terminal.clear();
+
+                    // 重置统计信息
+                    traceViewerState.logCount = 0;
+                    traceViewerState.updateStats();
+
+                    console.log('✅ 日志已清空');
+
+                    // 显示清空成功的提示
+                    const statusEl = document.getElementById('raw-logs-search-status');
+                    if (statusEl) {
+                        const originalText = statusEl.textContent;
+                        const originalClass = statusEl.className;
+                        statusEl.textContent = '🗑️ 日志已清空';
+                        statusEl.className = 'search-status';
+
+                        setTimeout(() => {
+                            statusEl.textContent = originalText;
+                            statusEl.className = originalClass;
+                        }, 2000);
+                    }
+                } catch (error) {
+                    console.error('清空日志失败:', error);
+                    alert('清空日志失败: ' + error.message);
+                }
+            }
+
+
+            
+
+        }
+        
+        // 全局终端管理器实例
+        let terminalManager = null;
+        
+        // WebSocket连接管理
+        class WebSocketManager {
+            constructor() {
+                this.ws = null;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.reconnectDelay = 3000;
+            }
+            
+            connect() {
+                try {
+                    // 动态获取当前页面的端口
+                    const wsUrl = `ws://${window.location.host}/ws`;
+                    this.ws = new WebSocket(wsUrl);
+                    
+                    this.ws.onopen = () => {
+                        console.log('✅ WebSocket连接已建立');
+                        this.reconnectAttempts = 0;
+                        traceViewerState.setConnectionStatus(true);
+
+                        // ✨ 发送订阅消息 - 这个页面只关心Trace日志
+                        const subscriptionMessage = {
+                            subscribe: 'trace'
+                        };
+                        this.ws.send(JSON.stringify(subscriptionMessage));
+                        console.log('📤 已发送订阅请求: trace');
+                    };
+                    
+                    this.ws.onmessage = (event) => {
+                        // 管道 A：原始日志快速通道
+                        // 立即将原始字符串发送给TerminalManager，不做任何解析和等待
+                        if (terminalManager) {
+                            terminalManager.appendRawJsonToLogs(event.data);
+                        }
+
+                        // 管道 B：路径可视化异步处理通道
+                        try {
+                            // 1. 解析完整的JSON字符串
+                            const parsedData = JSON.parse(event.data);
+
+                            // 2. 检查是否存在 "data" 字段，如果存在，则使用其内部的对象
+                            //    这使得代码能够兼容两种格式（有包装和无包装）
+                            const eventObject = parsedData.data || parsedData;
+
+                            // 3. 将解包后的、正确的事件对象放入处理队列
+                            traceViewerState.queueEventForProcessing(eventObject);
+                        } catch (e) {
+                            console.error('解析消息失败:', e, '原始数据:', event.data);
+                            // 即使解析失败，原始日志也已经显示了，不影响用户观察
+                        }
+                    };
+                    
+                    this.ws.onclose = () => {
+                        console.log('❌ WebSocket连接已断开');
+                        traceViewerState.setConnectionStatus(false);
+                        this.scheduleReconnect();
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket错误:', error);
+                        traceViewerState.setConnectionStatus(false);
+                    };
+                } catch (error) {
+                    console.error('WebSocket连接失败:', error);
+                    this.scheduleReconnect();
+                }
+            }
+            
+            // handleMessage 方法现在不再需要，因为分发逻辑已经在 onmessage 中完成
+            // 所有处理逻辑都移到了 TraceViewerState.handleEvent 中进行异步处理
+
+            scheduleReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    console.log(`🔄 ${this.reconnectDelay/1000}秒后尝试重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                    setTimeout(() => this.connect(), this.reconnectDelay);
+                } else {
+                    console.log('❌ 达到最大重连次数，停止重连');
+                }
+            }
+        }
+        
+        // 初始化应用
+        function initializeApp() {
+            console.log('🔧 初始化Trace Viewer应用');
+            
+            // 创建终端管理器
+            terminalManager = new TerminalManager();
+            
+            // 创建原始日志终端
+            terminalManager.createTerminal('raw-logs-terminal', 'raw-logs');
+            
+            // 初始化搜索功能
+            initializeSearch();
+            
+            // 初始化视图切换
+            initializeViewToggle();
+
+            // 初始化过滤器
+            initializeFilters();
+
+            // 初始化原始日志显示/隐藏功能
+            initializeRawLogsToggle();
+
+            // 连接WebSocket
+            const wsManager = new WebSocketManager();
+            wsManager.connect();
+            
+            // 启动连接时长计时器
+            setInterval(() => {
+                traceViewerState.updateStats();
+            }, 1000);
+            
+            console.log('✅ Trace Viewer初始化完成');
+        }
+        
+        // 初始化搜索功能
+        function initializeSearch() {
+            const searchInput = document.getElementById('raw-logs-search-input');
+            const searchBtn = document.getElementById('raw-logs-search-btn');
+            const clearBtn = document.getElementById('raw-logs-search-clear');
+            const prevBtn = document.getElementById('raw-logs-search-prev');
+            const nextBtn = document.getElementById('raw-logs-search-next');
+            const saveBtn = document.getElementById('raw-logs-save-btn');
+            const clearLogsBtn = document.getElementById('raw-logs-clear-btn');
+
+            if (!searchInput || !terminalManager.searchAddons.get('raw-logs')) return;
+            
+            const searchAddon = terminalManager.searchAddons.get('raw-logs');
+            let isSearchActive = false;
+            let lastSearchTerm = '';
+            
+            searchAddon.onDidChangeResults((results) => {
+                updateSearchStatus(results.resultCount, results.resultIndex);
+                updateNavigationButtons(results.resultCount > 0);
+            });
+            
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    performSearch();
+                } else if (e.key === 'Escape') {
+                    clearSearch();
+                }
+            });
+            
+            searchBtn?.addEventListener('click', performSearch);
+            clearBtn?.addEventListener('click', clearSearch);
+            prevBtn?.addEventListener('click', () => navigateMatch(-1));
+            nextBtn?.addEventListener('click', () => navigateMatch(1));
+            saveBtn?.addEventListener('click', () => terminalManager.saveLogsToFile('raw-logs'));
+            clearLogsBtn?.addEventListener('click', () => terminalManager.clearLogs('raw-logs'));
+            
+            function performSearch() {
+                const term = searchInput.value;
+                if (!term) {
+                    clearSearch();
+                    return;
+                }
+                
+                isSearchActive = true;
+                lastSearchTerm = term;
+                searchAddon.findNext(term, { caseSensitive: false, regex: false });
+            }
+            
+            function navigateMatch(direction) {
+                if (!isSearchActive) return;
+                if (direction > 0) {
+                    searchAddon.findNext(lastSearchTerm, { caseSensitive: false, regex: false });
+                } else {
+                    searchAddon.findPrevious(lastSearchTerm, { caseSensitive: false, regex: false });
+                }
+            }
+            
+            function clearSearch() {
+                searchAddon.clearDecorations();
+                isSearchActive = false;
+                lastSearchTerm = '';
+                searchInput.value = '';
+                updateSearchStatus(0, -1);
+                updateNavigationButtons(false);
+            }
+            
+            function updateSearchStatus(count, index) {
+                const statusEl = document.getElementById('raw-logs-search-status');
+                if (!statusEl) return;
+                
+                if (!isSearchActive || count === 0) {
+                    if (isSearchActive) {
+                        statusEl.textContent = `未找到匹配项: "${lastSearchTerm}"`;
+                        statusEl.className = 'search-status no-results';
+                    } else {
+                        statusEl.textContent = '输入关键词开始搜索';
+                        statusEl.className = 'search-status';
+                    }
+                } else {
+                    statusEl.textContent = `🔍 找到 ${count} 个匹配项 | 当前: ${index + 1}/${count}`;
+                    statusEl.className = 'search-status has-results';
+                }
+            }
+            
+            function updateNavigationButtons(hasMatches) {
+                if (prevBtn) prevBtn.disabled = !hasMatches;
+                if (nextBtn) nextBtn.disabled = !hasMatches;
+            }
+        }
+        
+        // 初始化视图切换
+        function initializeViewToggle() {
+            const treeViewBtn = document.getElementById('tree-view-btn');
+            const timelineViewBtn = document.getElementById('timeline-view-btn');
+            const treeView = document.getElementById('trace-tree-view');
+            const timelineView = document.getElementById('timeline-view');
+
+            treeViewBtn?.addEventListener('click', () => {
+                treeViewBtn.classList.add('active');
+                timelineViewBtn.classList.remove('active');
+
+                if (treeView) treeView.style.display = 'block';
+                if (timelineView) timelineView.style.display = 'none';
+
+                console.log('切换到调用树视图');
+            });
+
+            timelineViewBtn?.addEventListener('click', () => {
+                timelineViewBtn.classList.add('active');
+                treeViewBtn.classList.remove('active');
+
+                if (treeView) treeView.style.display = 'none';
+                if (timelineView) timelineView.style.display = 'block';
+
+                console.log('切换到时间轴视图');
+            });
+        }
+
+        // 初始化过滤器
+        function initializeFilters() {
+            const applyFilterBtn = document.getElementById('apply-filter-btn');
+            const resetFilterBtn = document.getElementById('reset-filter-btn');
+            const minDurationInput = document.getElementById('min-duration-filter');
+
+            applyFilterBtn?.addEventListener('click', () => {
+                traceViewerState.renderTimeline();
+            });
+
+            resetFilterBtn?.addEventListener('click', () => {
+                if (minDurationInput) {
+                    minDurationInput.value = '0';
+                }
+                traceViewerState.renderTimeline();
+            });
+
+            // 回车键应用过滤
+            minDurationInput?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    traceViewerState.renderTimeline();
+                }
+            });
+        }
+
+        // 初始化原始日志显示/隐藏功能
+        function initializeRawLogsToggle() {
+            const toggleBtn = document.getElementById('toggle-raw-logs-btn');
+            const leftPanel = document.querySelector('.left-panel');
+            const rightPanel = document.querySelector('.right-panel');
+
+            let isRawLogsVisible = true; // 默认显示
+
+            toggleBtn?.addEventListener('click', () => {
+                isRawLogsVisible = !isRawLogsVisible;
+
+                if (isRawLogsVisible) {
+                    // 显示原始日志
+                    leftPanel.classList.remove('hidden');
+                    rightPanel.classList.remove('full-width');
+                    toggleBtn.textContent = '📋 隐藏原始日志';
+                } else {
+                    // 隐藏原始日志
+                    leftPanel.classList.add('hidden');
+                    rightPanel.classList.add('full-width');
+                    toggleBtn.textContent = '📋 显示原始日志';
+                }
+            });
+        }
+
+        // 等待页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 等待xterm.js库加载完成
+            const checkLibraries = () => {
+                if (typeof Terminal !== 'undefined' && 
+                    typeof FitAddon !== 'undefined' && 
+                    typeof WebLinksAddon !== 'undefined') {
+                    initializeApp();
+                } else {
+                    setTimeout(checkLibraries, 100);
+                }
+            };
+            checkLibraries();
+        });
+    </script>
+</body>
+</html>

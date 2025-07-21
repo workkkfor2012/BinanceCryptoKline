@@ -14,11 +14,261 @@ use std::collections::HashMap;
 pub fn parse_tracing_log_line(line: &str) -> Option<LogEntry> {
     // 只解析JSON格式的tracing日志
     if let Ok(json_value) = serde_json::from_str::<Value>(line) {
+        // 🏷️ 检查新的 log_type 字段来决定解析方式
+        if let Some(log_type) = json_value.get("log_type").and_then(|v| v.as_str()) {
+            match log_type {
+                "trace" => {
+                    // trace 可视化日志：检查 fields.event_type
+                    if let Some(trace_event) = parse_trace_visualization_json(&json_value) {
+                        return Some(trace_event);
+                    }
+                }
+                "module" => {
+                    // 模块化日志：直接解析
+                    return parse_module_log_json(&json_value);
+                }
+                _ => {
+                    // 未知类型，尝试通用解析
+                }
+            }
+        }
+
+        // 兼容旧格式：首先检查是否是span事件格式
+        if let Some(span_event) = parse_span_event_json(&json_value) {
+            return Some(span_event);
+        }
+
+        // 然后尝试解析标准tracing格式
         return parse_tracing_json(&json_value);
     }
 
     // 不是有效的JSON格式，返回None
     None
+}
+
+/// 解析 trace 可视化日志（新格式）
+fn parse_trace_visualization_json(json: &Value) -> Option<LogEntry> {
+    // 检查是否有 fields.event_type
+    let event_type = json.get("fields")
+        .and_then(|f| f.get("event_type"))
+        .and_then(|v| v.as_str())?;
+
+    if !["span_start", "span_end", "log"].contains(&event_type) {
+        return None;
+    }
+
+    // 必需字段
+    let timestamp_str = json.get("timestamp")?.as_str()?;
+    let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+        .ok()?
+        .with_timezone(&Utc);
+
+    let level = json.get("level")?.as_str()?.to_string();
+    let target = json.get("target")?.as_str()?.to_string();
+    let message = json.get("message")?.as_str()?.to_string();
+
+    // 提取 fields 对象
+    let mut fields = HashMap::new();
+    if let Some(fields_obj) = json.get("fields").and_then(|f| f.as_object()) {
+        for (key, value) in fields_obj {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+
+    // 构建span信息（如果是span事件）
+    let span = if ["span_start", "span_end"].contains(&event_type) {
+        let span_name = fields.get("span_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let span_id = fields.get("span_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let parent_id = fields.get("parent_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Some(SpanInfo {
+            name: span_name,
+            target: target.clone(),
+            id: span_id,
+            parent_id,
+            hierarchy: None, // trace 日志不包含 hierarchy
+        })
+    } else {
+        None
+    };
+
+    Some(LogEntry {
+        timestamp,
+        level,
+        target,
+        message,
+        module_path: None,
+        file: None,
+        line: None,
+        fields,
+        span,
+        log_type: Some("trace".to_string()),
+    })
+}
+
+/// 解析模块化日志（新格式）
+fn parse_module_log_json(json: &Value) -> Option<LogEntry> {
+    // 必需字段
+    let timestamp_str = json.get("timestamp")?.as_str()?;
+    let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+        .ok()?
+        .with_timezone(&Utc);
+    let level = json.get("level")?.as_str()?.to_string();
+    let target = json.get("target")?.as_str()?.to_string();
+    let message = json.get("message")?.as_str()?.to_string();
+
+    // 提取 fields
+    let mut fields = HashMap::new();
+    if let Some(fields_obj) = json.get("fields").and_then(|f| f.as_object()) {
+        for (key, value) in fields_obj {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+
+    // 提取 span 信息（包含 hierarchy）
+    let span = if let Some(span_obj) = json.get("span") {
+        // 提取 hierarchy 数组
+        let hierarchy = span_obj.get("hierarchy")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            });
+
+        Some(SpanInfo {
+            name: span_obj.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            target: span_obj.get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&target)
+                .to_string(),
+            id: span_obj.get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            parent_id: span_obj.get("parent_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            hierarchy,
+        })
+    } else {
+        None
+    };
+
+    Some(LogEntry {
+        timestamp,
+        level,
+        target,
+        message,
+        module_path: None,
+        file: None,
+        line: None,
+        fields,
+        span,
+        log_type: Some("module".to_string()),
+    })
+}
+
+/// 解析span事件JSON格式（兼容旧格式）
+fn parse_span_event_json(json: &Value) -> Option<LogEntry> {
+    // 检查是否是span事件格式
+    let event_type = json.get("type")?.as_str()?;
+    if !["span_start", "span_end", "log"].contains(&event_type) {
+        return None;
+    }
+
+    // 必需字段
+    let timestamp_str = json.get("timestamp")?.as_str()?;
+    let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+        .ok()?
+        .with_timezone(&Utc);
+
+    let trace_id = json.get("trace_id")?.as_str()?.to_string();
+    let span_id = json.get("span_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown_span")
+        .to_string();
+
+    // 根据事件类型构建不同的消息
+    let (level, target, message) = match event_type {
+        "span_start" => {
+            let name = json.get("name")?.as_str()?.to_string();
+            let target = json.get("target")?.as_str()?.to_string();
+            ("INFO".to_string(), target, format!("Span started: {}", name))
+        }
+        "span_end" => {
+            let duration_ms = json.get("duration_ms")?.as_f64().unwrap_or(0.0);
+            ("INFO".to_string(), "span".to_string(), format!("Span ended: {:.2}ms", duration_ms))
+        }
+        "log" => {
+            let level = json.get("level")?.as_str()?.to_string();
+            let message = json.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(empty message)")
+                .to_string();
+            (level, "log".to_string(), message)
+        }
+        _ => return None,
+    };
+
+    // 构建结构化字段
+    let mut fields = HashMap::new();
+    fields.insert("event_type".to_string(), serde_json::Value::String(event_type.to_string()));
+    fields.insert("trace_id".to_string(), serde_json::Value::String(trace_id.clone()));
+    fields.insert("span_id".to_string(), serde_json::Value::String(span_id.clone()));
+
+    if let Some(parent_id) = json.get("parent_id").and_then(|v| v.as_str()) {
+        fields.insert("parent_id".to_string(), serde_json::Value::String(parent_id.to_string()));
+    }
+
+    if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
+        fields.insert("span_name".to_string(), serde_json::Value::String(name.to_string()));
+    }
+
+    if let Some(duration_ms) = json.get("duration_ms").and_then(|v| v.as_f64()) {
+        fields.insert("duration_ms".to_string(), serde_json::Value::Number(
+            serde_json::Number::from_f64(duration_ms).unwrap_or_else(|| serde_json::Number::from(0))
+        ));
+    }
+
+    // 构建span信息
+    let span = Some(SpanInfo {
+        name: json.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        target: json.get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&target)
+            .to_string(),
+        id: Some(span_id.clone()),
+        parent_id: json.get("parent_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        hierarchy: None, // 兼容旧格式，不包含 hierarchy
+    });
+
+    Some(LogEntry {
+        timestamp,
+        level,
+        target,
+        message,
+        module_path: None,
+        file: None,
+        line: None,
+        fields,
+        span,
+        log_type: Some("trace".to_string()), // 兼容旧格式，标记为 trace
+    })
 }
 
 /// 解析JSON格式的tracing日志（符合WebLog规范）
@@ -85,6 +335,7 @@ fn parse_tracing_json(json: &Value) -> Option<LogEntry> {
             parent_id: span_obj.get("parent_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            hierarchy: None, // 兼容旧格式，不包含 hierarchy
         })
     } else {
         None
@@ -100,6 +351,7 @@ fn parse_tracing_json(json: &Value) -> Option<LogEntry> {
         line,
         fields,
         span,
+        log_type: None, // 兼容旧格式，不指定类型
     })
 }
 
@@ -135,10 +387,8 @@ pub enum SpanEvent {
 
 /// 验证日志条目的完整性
 pub fn validate_log_entry(entry: &LogEntry) -> bool {
-    // 检查必需字段
-    !entry.level.is_empty()
-        && !entry.target.is_empty()
-        && !entry.message.is_empty()
+    // 检查必需字段 - 对于span事件，message可以为空
+    !entry.level.is_empty() && !entry.target.is_empty()
 }
 
 /// 标准化日志级别
@@ -202,6 +452,7 @@ mod tests {
             line: None,
             fields: HashMap::new(),
             span: None,
+            log_type: None,
         };
         assert!(validate_log_entry(&valid_entry));
 
@@ -215,6 +466,7 @@ mod tests {
             line: None,
             fields: HashMap::new(),
             span: None,
+            log_type: None,
         };
         assert!(!validate_log_entry(&invalid_entry));
     }

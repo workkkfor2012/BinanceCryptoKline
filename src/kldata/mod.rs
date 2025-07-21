@@ -4,7 +4,6 @@ pub mod latest_kline_updater;
 pub mod timestamp_checker; // 时间戳检查器模块
 
 // 重新导出常用模块，方便使用
-pub use crate::klcommon::websocket::{ContinuousKlineClient, ContinuousKlineConfig};
 pub use crate::klcommon::ServerTimeSyncManager; // 服务器时间同步管理器
 pub use backfill::KlineBackfiller;
 pub use latest_kline_updater::LatestKlineUpdater;

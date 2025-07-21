@@ -3,15 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebLog - 前端聚合版本</title>
+    <title>WebLog - 前端聚合版本 v2.6</title>
 
     <!-- Xterm.js CSS -->
     <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css" />
 
     <!-- Xterm.js JavaScript -->
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js" defer></script>
+    <!-- [最终、完美方案] 使用用户验证可用的最新版 v0.15.0 -->
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js" defer></script>
 
     <style>
         * {
@@ -54,6 +56,7 @@
             display: flex;
             gap: 10px;
             flex-shrink: 0;
+            margin-right: 150px; /* 向左移动100px，避免与右上角连接状态重叠 */
         }
 
         .main-content {
@@ -92,6 +95,12 @@
             min-height: 0;
         }
 
+        /* 确保静态模块区域中的两个模块平分空间 */
+        .static-modules-content .static-module {
+            flex: 1;
+            min-height: 0;
+        }
+
         .dynamic-modules-area {
             flex: 1;
             display: grid;
@@ -110,7 +119,6 @@
         }
 
         .static-module {
-            flex: 1;
             display: flex;
             flex-direction: column;
             min-height: 0;
@@ -133,6 +141,7 @@
 
         .static-modules-area .module-terminal {
             flex: 1;
+            min-height: 0; /* 确保终端可以被压缩 */
         }
 
         .module-header {
@@ -268,6 +277,31 @@
             box-shadow: 0 2px 6px rgba(68, 255, 68, 0.4);
         }
 
+        /* 内联切换按钮样式 - 适应标题栏 */
+        .inline-toggle-button {
+            background-color: #0066ff;
+            color: #ffffff;
+            border: 1px solid #3388ff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .inline-toggle-button:hover {
+            background-color: #3388ff;
+            transform: scale(1.05);
+        }
+
+        .inline-toggle-button.active {
+            background-color: #44ff44;
+            color: #000000;
+            border-color: #66ff66;
+        }
+
         .module-names-section {
             flex: 1;
             min-width: 300px;
@@ -317,6 +351,154 @@
 
         .dynamic-modules-area .module {
             min-height: 400px;
+            transition: all 0.3s ease;
+        }
+
+        /* 模块扩展状态样式 */
+        .dynamic-modules-area.has-expanded-module {
+            display: block; /* 改为块布局以支持单个模块占满 */
+        }
+
+        .dynamic-modules-area .module.expanded {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 1000;
+            background-color: #0a0a0a;
+            border: 2px solid #00ffff;
+            border-radius: 0;
+            margin: 0;
+            min-height: 100vh;
+        }
+
+        .dynamic-modules-area .module.expanded .module-title {
+            color: #ffff00;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .dynamic-modules-area .module.expanded .module-title:hover {
+            color: #ffffff;
+            text-shadow: 0 0 5px #ffff00;
+        }
+
+        /* 普通模块标题样式 */
+        .module-title {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s ease;
+        }
+
+        .module-title:hover {
+            color: #ffffff;
+            text-shadow: 0 0 3px #00ffff;
+        }
+
+        /* 搜索面板样式 */
+        .search-panel {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            background-color: #1a1a1a;
+            font-size: 12px;
+            flex-shrink: 0; /* 确保搜索面板不会被压缩 */
+        }
+
+        .search-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 5px;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 4px 8px;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 3px;
+            color: #00ff00;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #00ff00;
+            box-shadow: 0 0 3px rgba(0, 255, 0, 0.3);
+        }
+
+        .search-btn, .search-nav-btn {
+            padding: 4px 8px;
+            background-color: #0066ff;
+            color: white;
+            border: 1px solid #3388ff;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .search-btn:hover, .search-nav-btn:hover:not(:disabled) {
+            background-color: #3388ff;
+            transform: scale(1.05);
+        }
+
+        .search-btn:disabled, .search-nav-btn:disabled {
+            background-color: #333;
+            color: #666;
+            cursor: not-allowed;
+            border-color: #444;
+        }
+
+        .search-option {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .search-option input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .search-status {
+            color: #888;
+            font-size: 11px;
+            font-style: italic;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: all 0.3s ease;
+        }
+
+        .search-status.has-results {
+            color: #00ff00;
+            background-color: rgba(0, 255, 0, 0.1);
+            border: 1px solid rgba(0, 255, 0, 0.3);
+        }
+
+        .search-status.no-results {
+            color: #ff6600;
+            background-color: rgba(255, 102, 0, 0.1);
+            border: 1px solid rgba(255, 102, 0, 0.3);
+        }
+
+        /* [新增] 搜索插件高亮样式 */
+        .xterm .xterm-search-layer .xterm-search-layer__term {
+            background-color: #fce100; /* 所有匹配项：亮黄色背景 */
+            color: #000; /* 黑色文字，形成高对比度 */
+            border-radius: 2px;
+            box-sizing: border-box; /* 确保边框和内边距不影响布局 */
+        }
+
+        .xterm .xterm-search-layer .xterm-search-layer__term.xterm-search-layer__term-active {
+            background-color: #ff6600; /* 当前激活的匹配项：亮橙色背景 */
+            color: #fff; /* 白色文字，同样高对比度 */
         }
 
         @media (max-width: 1200px) {
@@ -345,7 +527,6 @@
 
             <div class="header-buttons">
                 <button class="header-copy-button" id="header-copy-modules" title="复制所有模块名称">🔥 复制全部模块</button>
-                <button class="header-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button>
             </div>
         </div>
     </div>
@@ -353,27 +534,29 @@
     <div class="main-content">
         <!-- 左侧静态模块区域 -->
         <div class="static-modules-area">
-            <div class="static-modules-title">📊 静态模块区域 - 日志监控</div>
             <div class="static-modules-content">
                 <!-- 实时原始日志模块 (默认隐藏) -->
                 <div class="module static-module" id="realtime-logs-module" style="display: none;">
                     <div class="module-header">
-                        <div class="module-title">实时原始日志 (RealtimeLogs)</div>
+                        <div class="module-title">原始日志 | 日志数: <span id="realtime-log-count">0</span> | 最后更新: <span id="last-log-time">--:--:--</span> | <button class="inline-toggle-button" id="toggle-collapsed-logs" title="显示/隐藏高频折叠日志">📊 显示高频折叠日志</button></div>
                         <div class="module-status status-waiting" id="realtime-logs-status">等待日志</div>
                     </div>
-                    <div class="module-stats">
-                        <div class="stat-line">
-                            <span>实时日志数:</span>
-                            <span id="realtime-log-count">0</span>
+                    <!-- 搜索控制面板 -->
+                    <div class="search-panel" id="realtime-logs-search-panel">
+                        <div class="search-controls">
+                            <input type="text" id="realtime-logs-search-input" placeholder="搜索日志内容..." class="search-input">
+                            <button id="realtime-logs-search-btn" class="search-btn" title="开始搜索">🔍</button>
+                            <button id="realtime-logs-search-clear" class="search-btn" title="清除搜索">✖</button>
+                            <button id="realtime-logs-search-prev" class="search-nav-btn" title="上一个匹配" disabled>↑</button>
+                            <button id="realtime-logs-search-next" class="search-nav-btn" title="下一个匹配" disabled>↓</button>
+                            <label class="search-option">
+                                <input type="checkbox" id="realtime-logs-search-case"> 区分大小写
+                            </label>
+                            <label class="search-option">
+                                <input type="checkbox" id="realtime-logs-search-regex"> 正则表达式
+                            </label>
                         </div>
-                        <div class="stat-line">
-                            <span>最后更新:</span>
-                            <span id="last-log-time">--:--:--</span>
-                        </div>
-                        <div class="stat-line">
-                            <span>日志频率:</span>
-                            <span id="log-frequency">-- 条/秒</span>
-                        </div>
+                        <div class="search-status" id="realtime-logs-search-status">输入关键词开始搜索</div>
                     </div>
                     <div class="module-terminal" id="realtime-logs-terminal"></div>
                 </div>
@@ -381,22 +564,25 @@
                 <!-- 原始日志高频折叠模块 -->
                 <div class="module static-module" id="raw-logs-module">
                     <div class="module-header">
-                        <div class="module-title">原始日志高频折叠 (HighFreqCollapsed)</div>
-                        <div class="module-status status-waiting" id="raw-logs-status">等待折叠</div>
+                        <div class="module-title">原始日志折叠 | 总数: <span id="total-log-count">--</span> | 折叠后: <span id="displayed-log-count">--</span> | 时间: <span id="collapse-timestamp">--:--:--</span> | <button class="inline-toggle-button" id="toggle-realtime-logs" title="显示/隐藏实时原始日志">📊 显示实时原始日志</button></div>
+                        <div class="module-status status-waiting" id="raw-logs-status">等待日志</div>
                     </div>
-                    <div class="module-stats">
-                        <div class="stat-line">
-                            <span>处理时间:</span>
-                            <span id="collapse-timestamp">--:--:--</span>
+                    <!-- 搜索控制面板 -->
+                    <div class="search-panel" id="raw-logs-search-panel">
+                        <div class="search-controls">
+                            <input type="text" id="raw-logs-search-input" placeholder="搜索日志内容..." class="search-input">
+                            <button id="raw-logs-search-btn" class="search-btn" title="开始搜索">🔍</button>
+                            <button id="raw-logs-search-clear" class="search-btn" title="清除搜索">✖</button>
+                            <button id="raw-logs-search-prev" class="search-nav-btn" title="上一个匹配" disabled>↑</button>
+                            <button id="raw-logs-search-next" class="search-nav-btn" title="下一个匹配" disabled>↓</button>
+                            <label class="search-option">
+                                <input type="checkbox" id="raw-logs-search-case"> 区分大小写
+                            </label>
+                            <label class="search-option">
+                                <input type="checkbox" id="raw-logs-search-regex"> 正则表达式
+                            </label>
                         </div>
-                        <div class="stat-line">
-                            <span>原始日志数:</span>
-                            <span id="total-log-count">--</span>
-                        </div>
-                        <div class="stat-line">
-                            <span>折叠后条数:</span>
-                            <span id="displayed-log-count">--</span>
-                        </div>
+                        <div class="search-status" id="raw-logs-search-status">输入关键词开始搜索</div>
                     </div>
                     <div class="module-terminal" id="raw-logs-terminal"></div>
                 </div>
@@ -438,9 +624,36 @@
 
             // 处理新的日志条目
             processLogEntry(logEntry) {
+                // 🏷️ 【关键过滤】index.html 只处理模块日志，忽略 trace 日志
+                if (logEntry.log_type === 'trace') {
+                    // trace 类型的日志应该由 trace_viewer.html 处理，这里直接忽略
+                    return;
+                }
+
                 this.allLogs.push(logEntry);
                 this.logCount++;
                 this.lastLogTime = new Date();
+
+                // 【新增】实时更新 "实时原始日志" 面板的统计数据和状态
+                const countEl = document.getElementById('realtime-log-count');
+                const timeEl = document.getElementById('last-log-time');
+                const realtimeStatusEl = document.getElementById('realtime-logs-status');
+
+                if (countEl) countEl.textContent = this.logCount;
+                if (timeEl && this.lastLogTime) timeEl.textContent = this.lastLogTime.toLocaleTimeString();
+
+                // 更新实时原始日志状态为"运行中"
+                if (realtimeStatusEl && this.logCount > 0) {
+                    realtimeStatusEl.textContent = '运行中';
+                    realtimeStatusEl.className = 'module-status status-running';
+                }
+
+                // 【新增】更新原始日志折叠模块状态为"运行中"
+                const rawLogsStatusEl = document.getElementById('raw-logs-status');
+                if (rawLogsStatusEl && this.logCount > 0) {
+                    rawLogsStatusEl.textContent = '运行中';
+                    rawLogsStatusEl.className = 'module-status status-running';
+                }
 
                 // 按模块分类
                 const moduleName = logEntry.target;
@@ -480,13 +693,18 @@
                 // 高频聚合处理
                 this.highFreqAggregator.processLog(logEntry);
 
+                // 【新增】立即更新实时日志（如果显示），使其与高频折叠行为一致
+                // 无论是否是历史数据，都追加到实时原始日志终端
+                if (terminalManager) {
+                    terminalManager.appendToRealtimeLogs(logEntry);
+                }
+
                 // 立即增量更新 - 无需节流，直接追加到终端
-                if (this.isHistoryLoaded && terminalManager) {
+                // 注意：这里只处理动态模块，实时原始日志已在上面处理
+                // [修改] 移除 isHistoryLoaded 的判断，确保新会话的实时日志也能创建模块
+                if (terminalManager) {
                     // 立即追加到对应模块终端
                     terminalManager.appendLogToTerminal(moduleName, logEntry);
-
-                    // 立即更新实时日志（如果显示）
-                    terminalManager.appendToRealtimeLogs(logEntry);
 
                     // 更新模块统计
                     this.updateModuleStatsIncremental(moduleName, moduleInfo);
@@ -529,8 +747,8 @@
             // 更新界面 - 保留用于历史数据加载时的全量更新
             updateUI() {
                 this.updateModuleNames();
-                this.updateRealtimeLogs();
-                this.updateHighFreqCollapsed();
+                // this.updateRealtimeLogs(); // 禁用：避免清空已实时填充的内容
+                // this.updateHighFreqCollapsed(); // 禁用：避免清空已实时填充的内容
                 this.updateDynamicModules();
             }
 
@@ -552,21 +770,15 @@
             updateRealtimeLogs() {
                 const countEl = document.getElementById('realtime-log-count');
                 const timeEl = document.getElementById('last-log-time');
-                const freqEl = document.getElementById('log-frequency');
 
                 if (countEl) countEl.textContent = this.logCount;
                 if (timeEl && this.lastLogTime) {
                     timeEl.textContent = this.lastLogTime.toLocaleTimeString();
                 }
-                if (freqEl) {
-                    const elapsed = (Date.now() - this.startTime) / 1000;
-                    const frequency = elapsed > 0 ? (this.logCount / elapsed).toFixed(2) : '0.00';
-                    freqEl.textContent = `${frequency} 条/秒`;
-                }
 
                 // 更新实时日志终端
                 if (terminalManager && this.isHistoryLoaded) {
-                    const recentLogs = this.allLogs.slice(-20); // 最近20条
+                    const recentLogs = this.allLogs.slice(-100); // 最近100条，与高频折叠保持一致
                     terminalManager.updateRealtimeLogs(recentLogs);
                 }
             }
@@ -593,9 +805,87 @@
 
             // 更新单个动态模块 - 增量更新（用于实时日志）
             updateDynamicModule(moduleName, moduleInfo) {
-                if (terminalManager && this.isHistoryLoaded) {
+                // [修改] 移除 isHistoryLoaded 的判断，确保新会话的实时日志也能更新模块
+                if (terminalManager) {
                     terminalManager.updateModuleTerminal(moduleName, moduleInfo);
                 }
+            }
+
+            // 清空所有数据 - 用于新会话开始时重置前端状态
+            clearAllData() {
+                console.log('🧹 清空前端缓存数据');
+
+                // 重置所有状态
+                this.allLogs = [];
+                this.moduleData.clear();
+                this.isHistoryLoaded = false;
+                this.logCount = 0;
+                this.lastLogTime = null;
+                this.startTime = Date.now();
+
+                // 重置高频聚合器
+                this.highFreqAggregator = new HighFreqAggregator();
+
+                // 重置节流更新状态
+                this.isUiUpdateScheduled = false;
+                this.pendingUpdates = {
+                    moduleNames: false,
+                    realtimeLogs: false,
+                    highFreqCollapsed: false,
+                    dynamicModules: new Set()
+                };
+
+                // 清空所有终端和动态模块
+                if (terminalManager) {
+                    // 清空实时日志终端
+                    const realtimeTerminal = terminalManager.terminals.get('realtime-logs');
+                    if (realtimeTerminal) {
+                        realtimeTerminal.clear();
+                        terminalManager.logBuffers.set('realtime-logs', []);
+                    }
+
+                    // 清空高频折叠终端
+                    const rawLogsTerminal = terminalManager.terminals.get('raw-logs');
+                    if (rawLogsTerminal) {
+                        rawLogsTerminal.clear();
+                        terminalManager.logBuffers.set('raw-logs', []);
+                    }
+
+                    // 彻底清理所有动态模块
+                    terminalManager.clearAllDynamicModules();
+                }
+
+                // 清空UI显示
+                this.updateModuleNames();
+
+                // 重置统计显示
+                const countEl = document.getElementById('realtime-log-count');
+                const timeEl = document.getElementById('last-log-time');
+                const totalCountEl = document.getElementById('total-log-count');
+                const displayedCountEl = document.getElementById('displayed-log-count');
+                const timestampEl = document.getElementById('collapse-timestamp');
+
+                if (countEl) countEl.textContent = '0';
+                if (timeEl) timeEl.textContent = '--';
+                if (totalCountEl) totalCountEl.textContent = '0';
+                if (displayedCountEl) displayedCountEl.textContent = '0';
+                if (timestampEl) timestampEl.textContent = '--';
+
+                // 重置状态显示
+                const realtimeStatusEl = document.getElementById('realtime-logs-status');
+                const rawLogsStatusEl = document.getElementById('raw-logs-status');
+
+                if (realtimeStatusEl) {
+                    realtimeStatusEl.textContent = '等待日志';
+                    realtimeStatusEl.className = 'module-status status-waiting';
+                }
+
+                if (rawLogsStatusEl) {
+                    rawLogsStatusEl.textContent = '等待日志';
+                    rawLogsStatusEl.className = 'module-status status-waiting';
+                }
+
+                console.log('✅ 前端缓存清空完成');
             }
         }
 
@@ -730,6 +1020,148 @@
             }
         }
 
+        // [修改] SearchManager 完全重构，使用 xterm-addon-search
+        class SearchManager {
+            constructor() {
+                this.terminalName = '';
+                this.searchAddon = null;
+                this.isSearchActive = false;
+                this.lastSearchTerm = '';
+            }
+
+            initializeSearch(terminalName) {
+                this.terminalName = terminalName;
+                this.searchAddon = terminalManager.searchAddons.get(terminalName);
+
+                if (!this.searchAddon) {
+                    console.error(`搜索插件初始化失败: ${terminalName}`);
+                    return;
+                }
+
+                const searchInput = document.getElementById(`${terminalName}-search-input`);
+                const searchBtn = document.getElementById(`${terminalName}-search-btn`);
+                const clearBtn = document.getElementById(`${terminalName}-search-clear`);
+                const prevBtn = document.getElementById(`${terminalName}-search-prev`);
+                const nextBtn = document.getElementById(`${terminalName}-search-next`);
+                const caseCheckbox = document.getElementById(`${terminalName}-search-case`);
+                const regexCheckbox = document.getElementById(`${terminalName}-search-regex`);
+
+                this.searchAddon.onDidChangeResults((results) => {
+                    this.updateSearchStatus(results.resultCount, results.resultIndex);
+                    this.updateNavigationButtons(results.resultCount > 0);
+                });
+
+                searchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        if(searchInput.value !== this.lastSearchTerm) {
+                            this.performSearch();
+                        } else {
+                            this.navigateMatch(1);
+                        }
+                    } else if (e.key === 'Escape') {
+                        this.clearSearch();
+                    }
+                });
+
+                searchBtn?.addEventListener('click', () => this.performSearch());
+                clearBtn?.addEventListener('click', () => this.clearSearch());
+                prevBtn?.addEventListener('click', () => this.navigateMatch(-1));
+                nextBtn?.addEventListener('click', () => this.navigateMatch(1));
+
+                const performSearchIfActive = () => {
+                    if (this.isSearchActive) this.performSearch();
+                };
+
+                caseCheckbox?.addEventListener('change', performSearchIfActive);
+                regexCheckbox?.addEventListener('change', performSearchIfActive);
+            }
+
+            getSearchOptions() {
+                const caseCheckbox = document.getElementById(`${this.terminalName}-search-case`);
+                const regexCheckbox = document.getElementById(`${this.terminalName}-search-regex`);
+                return {
+                    regex: regexCheckbox ? regexCheckbox.checked : false,
+                    caseSensitive: caseCheckbox ? caseCheckbox.checked : false,
+                    incremental: false, // 我们手动触发搜索，而非输入时即时搜索
+                    decorations: {
+                        // 不设置背景色，保持透明
+                        matchBorder: '#FF0000',            // 红色边框 - 普通匹配项
+                        matchOverviewRuler: '#FF0000',     // 红色概览标尺 - 普通匹配项
+                        // 不设置背景色，保持透明
+                        activeMatchBorder: '#FFFF00',      // 黄色边框 - 当前激活匹配项
+                        activeMatchColorOverviewRuler: '#FFFF00' // 黄色概览标尺 - 当前激活匹配项
+                    }
+                };
+            }
+
+            performSearch() {
+                const searchInput = document.getElementById(`${this.terminalName}-search-input`);
+                const term = searchInput.value;
+
+                if (!term) {
+                    this.clearSearch();
+                    return;
+                }
+
+                this.isSearchActive = true;
+                this.lastSearchTerm = term;
+                this.searchAddon.findNext(term, this.getSearchOptions());
+            }
+
+            navigateMatch(direction) {
+                if (!this.isSearchActive) return;
+                const term = this.lastSearchTerm;
+                if (direction > 0) {
+                    this.searchAddon.findNext(term, this.getSearchOptions());
+                } else {
+                    this.searchAddon.findPrevious(term, this.getSearchOptions());
+                }
+            }
+
+            clearSearch() {
+                this.searchAddon.clearDecorations();
+                this.isSearchActive = false;
+                this.lastSearchTerm = '';
+
+                const searchInput = document.getElementById(`${this.terminalName}-search-input`);
+                if (searchInput) searchInput.value = '';
+
+                this.updateSearchStatus(0, -1);
+                this.updateNavigationButtons(false);
+                const statusEl = document.getElementById(`${this.terminalName}-search-status`);
+                if(statusEl) {
+                    statusEl.textContent = '输入关键词开始搜索';
+                    statusEl.className = 'search-status';
+                }
+            }
+
+            updateSearchStatus(count, index) {
+                const statusEl = document.getElementById(`${this.terminalName}-search-status`);
+                if (!statusEl) return;
+
+                if (!this.isSearchActive || count === 0) {
+                    if(this.isSearchActive) {
+                        statusEl.textContent = `未找到匹配项: "${this.lastSearchTerm}"`;
+                        statusEl.className = 'search-status no-results';
+                    } else {
+                         statusEl.textContent = '输入关键词开始搜索';
+                         statusEl.className = 'search-status';
+                    }
+                } else {
+                    statusEl.textContent = `🔍 找到 ${count} 个匹配项 | 当前: ${index + 1}/${count}`;
+                    statusEl.className = 'search-status has-results';
+                }
+            }
+
+            updateNavigationButtons(hasMatches) {
+                const prevBtn = document.getElementById(`${this.terminalName}-search-prev`);
+                const nextBtn = document.getElementById(`${this.terminalName}-search-next`);
+
+                if (prevBtn) prevBtn.disabled = !hasMatches;
+                if (nextBtn) nextBtn.disabled = !hasMatches;
+            }
+        }
+
         // 全局状态实例
         const webLogState = new WebLogState();
 
@@ -738,15 +1170,20 @@
             constructor() {
                 this.terminals = new Map();
                 this.fitAddons = new Map();
+                this.searchAddons = new Map(); // [新增] 用于存储搜索插件实例
                 this.logBuffers = new Map(); // 日志缓冲区，用于管理每个终端的日志
+                this.searchManagers = new Map(); // 搜索管理器
                 this.maxLines = 100000000; // 每个终端最大行数
+                this.expandedModule = null; // 当前扩展的模块名称
 
                 this.terminalTheme = {
                     background: '#000000',
                     foreground: '#00ff00',
                     cursor: '#00ff00',
                     cursorAccent: '#000000',
-                    selection: 'rgba(255, 255, 255, 0.3)',
+                    // [修改] selection的颜色现在只用于手动选择，不再影响搜索
+                    selectionBackground: 'rgba(255, 255, 255, 0.3)',
+                    selectionForeground: '#000000', // 可选，为选择文本添加前景色
                     black: '#000000',
                     red: '#ff0000',
                     green: '#00ff00',
@@ -766,7 +1203,7 @@
                 };
             }
 
-            // 创建终端
+            // [修改] 创建终端时加载搜索插件
             createTerminal(containerId, moduleName) {
                 const container = document.getElementById(containerId);
                 if (!container) {
@@ -777,26 +1214,65 @@
                 const terminal = new Terminal({
                     theme: this.terminalTheme,
                     fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                    fontSize: 13,
+                    fontSize: 15,  // 增大字体从13到15
                     lineHeight: 1.2,
                     cursorBlink: false,
                     scrollback: this.maxLines,
                     convertEol: true,
                     disableStdin: true,
-                    allowTransparency: true
+                    allowTransparency: true,
+                    allowProposedApi: true  // 启用提议API以支持搜索装饰功能
                 });
 
+                // [修正] 通过 "命名空间.构造函数" 的方式实例化插件
                 const fitAddon = new FitAddon.FitAddon();
                 const webLinksAddon = new WebLinksAddon.WebLinksAddon();
 
+                let searchAddon = null;
+                try {
+                    // [修正] 使用正确的全局变量 SearchAddon 和正确的实例化方式
+                    if (window.SearchAddon && typeof window.SearchAddon.SearchAddon === 'function') {
+                        // 创建搜索插件时配置边框装饰颜色（无背景）
+                        const searchOptions = {
+                            decorations: {
+                                // 不设置背景色，保持透明
+                                matchBorder: '#FF0000',            // 红色边框 - 普通匹配项
+                                matchOverviewRuler: '#FF0000',     // 红色概览标尺 - 普通匹配项
+                                // 不设置背景色，保持透明
+                                activeMatchBorder: '#FFFF00',      // 黄色边框 - 当前激活匹配项
+                                activeMatchColorOverviewRuler: '#FFFF00' // 黄色概览标尺 - 当前激活匹配项
+                            }
+                        };
+                        searchAddon = new window.SearchAddon.SearchAddon(searchOptions);
+                        console.log(`✅ 搜索插件创建成功 for ${moduleName} (高对比度配色)`);
+                    } else {
+                        // 更新错误信息以反映正确的变量名
+                        throw new Error('SearchAddon 未在 window 对象上正确定义。请检查 xterm-addon-search 脚本是否正确加载。');
+                    }
+                } catch (error) {
+                    console.error('❌ 创建搜索插件失败:', error);
+                    // 创建一个模拟的搜索插件对象，避免后续代码崩溃
+                    searchAddon = {
+                        activate: () => {},
+                        onDidChangeResults: () => {},
+                        findNext: () => {},
+                        findPrevious: () => {},
+                        clearDecorations: () => {},
+                        clearActiveDecoration: () => {}
+                    };
+                    console.log('⚠️ 已创建模拟搜索对象，搜索功能将不可用。');
+                }
+
                 terminal.loadAddon(fitAddon);
                 terminal.loadAddon(webLinksAddon);
+                terminal.loadAddon(searchAddon); // 加载真实的或模拟的插件
 
                 terminal.open(container);
                 setTimeout(() => fitAddon.fit(), 0);
 
                 this.terminals.set(moduleName, terminal);
                 this.fitAddons.set(moduleName, fitAddon);
+                this.searchAddons.set(moduleName, searchAddon);
                 this.logBuffers.set(moduleName, []); // 初始化日志缓冲区
 
                 return terminal;
@@ -852,12 +1328,113 @@
                 terminal.write(command);
             }
 
-            // 格式化日志条目
+            // 格式化日志条目 - 用于高频折叠终端（显示模块名）
             formatLogEntry(logEntry) {
                 const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
                 const level = logEntry.level.padEnd(5);
-                const target = logEntry.target.padEnd(20);
+                const target = logEntry.target; // target不再需要填充，因为缩进会处理对齐
 
+                // 1. 根据日志级别设置颜色
+                let color = '';
+                switch (logEntry.level.toUpperCase()) {
+                    case 'ERROR': color = '\x1b[31m'; break; // 红色
+                    case 'WARN':  color = '\x1b[33m'; break; // 黄色
+                    case 'INFO':  color = '\x1b[32m'; break; // 绿色
+                    case 'DEBUG': color = '\x1b[36m'; break; // 青色
+                    default:      color = '\x1b[37m'; break; // 白色
+                }
+                const reset = '\x1b[0m';
+
+                // 2. 【核心增强】检查并根据 span.hierarchy 生成缩进
+                let indent = '';
+                if (logEntry.span && logEntry.span.hierarchy && logEntry.span.hierarchy.length > 1) {
+                    const depth = logEntry.span.hierarchy.length - 1;
+                    // 使用空格和连接符创建视觉上的树状结构
+                    indent = '  '.repeat(depth - 1) + '└─ ';
+                }
+
+                // 3. 提取消息内容
+                const message = logEntry.message || JSON.stringify(logEntry.fields);
+
+                // 4. 组合成最终的、带缩进的日志行
+                // 格式: [时间] LEVEL   [缩进]TARGET: message
+                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
+                return `${color}[${timestamp}] ${level}${reset} ${indent}\x1b[33m${target.padEnd(25 - indent.length)}\x1b[0m: ${aggregatedPrefix}${message}`;
+            }
+
+            // 格式化模块内日志条目 - 用于模块终端（不显示模块名，简化日志级别）
+            formatModuleLogEntry(logEntry) {
+                const timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
+
+                // 1. 根据日志级别设置颜色和简化显示
+                let color = '';
+                let levelChar = '';
+                switch (logEntry.level.toUpperCase()) {
+                    case 'ERROR':
+                        color = '\x1b[31m';
+                        levelChar = 'E';
+                        break; // 红色
+                    case 'WARN':
+                        color = '\x1b[33m';
+                        levelChar = 'W';
+                        break; // 黄色
+                    case 'INFO':
+                        color = '\x1b[32m';
+                        levelChar = 'I';
+                        break; // 绿色
+                    case 'DEBUG':
+                        color = '\x1b[36m';
+                        levelChar = 'D';
+                        break; // 青色
+                    case 'TRACE':
+                        color = '\x1b[37m';
+                        levelChar = 'T';
+                        break; // 白色
+                    default:
+                        color = '\x1b[37m';
+                        levelChar = logEntry.level.charAt(0).toUpperCase();
+                        break; // 白色
+                }
+                const reset = '\x1b[0m';
+
+                // 2. 【核心增强】检查并根据 span.hierarchy 生成缩进
+                let indent = '';
+                if (logEntry.span && logEntry.span.hierarchy && logEntry.span.hierarchy.length > 1) {
+                    const depth = logEntry.span.hierarchy.length - 1;
+                    // 使用空格和连接符创建视觉上的树状结构
+                    indent = '  '.repeat(depth - 1) + '└─ ';
+                }
+
+                // 3. 提取消息内容
+                const message = logEntry.message || JSON.stringify(logEntry.fields);
+
+                // 4. 组合成最终的、带缩进的日志行（不显示模块名）
+                // 格式: [时间] L [缩进]message
+                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
+                return `${color}[${timestamp}] ${levelChar}${reset} ${indent}${aggregatedPrefix}${message}`;
+            }
+
+            // 格式化原始日志条目 - 用于实时原始日志，显示完整JSON格式
+            formatRawLogEntry(logEntry) {
+                // 创建一个干净的日志对象，移除内部处理字段
+                const cleanLogEntry = {
+                    timestamp: logEntry.timestamp,
+                    level: logEntry.level,
+                    target: logEntry.target,
+                    message: logEntry.message
+                };
+
+                // 如果有fields字段，添加到输出中
+                if (logEntry.fields && Object.keys(logEntry.fields).length > 0) {
+                    cleanLogEntry.fields = logEntry.fields;
+                }
+
+                // 如果有span信息，添加到输出中
+                if (logEntry.span) {
+                    cleanLogEntry.span = logEntry.span;
+                }
+
+                // 根据日志级别设置颜色
                 let color = '';
                 switch (logEntry.level.toUpperCase()) {
                     case 'ERROR': color = '\x1b[31m'; break; // 红色
@@ -868,9 +1445,12 @@
                 }
 
                 const reset = '\x1b[0m';
-                const aggregatedPrefix = logEntry.isAggregated ? '\x1b[35m[聚合]\x1b[0m ' : '';
 
-                return `${color}[${timestamp}] ${level} ${target}${reset} ${aggregatedPrefix}${logEntry.message}`;
+                // 格式化JSON，使其更易读
+                const jsonString = JSON.stringify(cleanLogEntry, null, 2);
+
+                // 为JSON添加颜色
+                return `${color}${jsonString}${reset}`;
             }
 
             // 增量追加日志到指定模块终端 - 关键方法，无闪烁
@@ -886,7 +1466,8 @@
                 }
 
                 if (terminal) {
-                    const formattedLog = this.formatLogEntry(logEntry);
+                    // 使用模块内日志格式化方法（不显示模块名，简化日志级别）
+                    const formattedLog = this.formatModuleLogEntry(logEntry);
 
                     // 获取日志缓冲区
                     let logBuffer = this.logBuffers.get(moduleName);
@@ -908,11 +1489,11 @@
                 }
             }
 
-            // 追加到实时日志终端
+            // 追加到实时日志终端 - 显示原始JSON格式
             appendToRealtimeLogs(logEntry) {
                 const terminal = this.terminals.get('realtime-logs');
                 if (terminal) {
-                    const formattedLog = this.formatLogEntry(logEntry);
+                    const formattedLog = this.formatRawLogEntry(logEntry);
 
                     // 获取实时日志缓冲区
                     let logBuffer = this.logBuffers.get('realtime-logs');
@@ -924,7 +1505,7 @@
                     // 添加到缓冲区
                     logBuffer.push(formattedLog);
 
-                    // 实时日志只保留最近50条
+                    // 实时日志保留大量历史数据，让历史加载过程能够填满终端
                     if (logBuffer.length > 50000000) {
                         logBuffer.shift();
                     }
@@ -939,7 +1520,7 @@
                 return this.terminals.has(moduleName);
             }
 
-            // 更新实时日志 - 仅用于历史数据加载
+            // 更新实时日志 - 仅用于历史数据加载，显示原始JSON格式
             updateRealtimeLogs(logs) {
                 const terminal = this.terminals.get('realtime-logs');
                 if (!terminal) return;
@@ -948,10 +1529,10 @@
                 terminal.clear();
                 this.logBuffers.set('realtime-logs', []);
 
-                // 重新加载所有历史日志
+                // 重新加载所有历史日志，使用原始JSON格式
                 const logBuffer = [];
                 logs.forEach(log => {
-                    const formattedLog = this.formatLogEntry(log);
+                    const formattedLog = this.formatRawLogEntry(log);
                     logBuffer.push(formattedLog);
                     terminal.write(formattedLog + '\r\n');
                 });
@@ -998,7 +1579,8 @@
                     const displayLogs = moduleInfo.logs.slice(-50); // 显示最近50条
                     const logBuffer = [];
                     displayLogs.forEach(log => {
-                        const formattedLog = this.formatLogEntry(log);
+                        // 使用模块内日志格式化方法（不显示模块名，简化日志级别）
+                        const formattedLog = this.formatModuleLogEntry(log);
                         logBuffer.push(formattedLog);
                         terminal.write(formattedLog + '\r\n');
                     });
@@ -1019,32 +1601,46 @@
 
                 moduleDiv.innerHTML = `
                     <div class="module-header">
-                        <div class="module-title">${moduleName}</div>
+                        <div class="module-title" id="title-${moduleName}" title="双击切换全屏显示">${moduleName} | 总日志: <span id="stats-${moduleName}-total">${moduleInfo.totalLogs}</span></div>
                         <div class="module-status status-running">运行中</div>
                     </div>
-                    <div class="module-stats">
-                        <div class="stat-line">
-                            <span>总日志:</span>
-                            <span id="stats-${moduleName}-total">${moduleInfo.totalLogs}</span>
+                    <!-- 搜索控制面板 -->
+                    <div class="search-panel" id="${moduleName}-search-panel">
+                        <div class="search-controls">
+                            <input type="text" id="${moduleName}-search-input" placeholder="搜索日志内容..." class="search-input">
+                            <button id="${moduleName}-search-btn" class="search-btn" title="开始搜索">🔍</button>
+                            <button id="${moduleName}-search-clear" class="search-btn" title="清除搜索">✖</button>
+                            <button id="${moduleName}-search-prev" class="search-nav-btn" title="上一个匹配" disabled>↑</button>
+                            <button id="${moduleName}-search-next" class="search-nav-btn" title="下一个匹配" disabled>↓</button>
+                            <label class="search-option">
+                                <input type="checkbox" id="${moduleName}-search-case"> 区分大小写
+                            </label>
+                            <label class="search-option">
+                                <input type="checkbox" id="${moduleName}-search-regex"> 正则表达式
+                            </label>
                         </div>
-                        <div class="stat-line">
-                            <span>错误:</span>
-                            <span id="stats-${moduleName}-error">${moduleInfo.errorCount}</span>
-                        </div>
-                        <div class="stat-line">
-                            <span>警告:</span>
-                            <span id="stats-${moduleName}-warn">${moduleInfo.warnCount}</span>
-                        </div>
-                        <div class="stat-line">
-                            <span>信息:</span>
-                            <span id="stats-${moduleName}-info">${moduleInfo.infoCount}</span>
-                        </div>
+                        <div class="search-status" id="${moduleName}-search-status">输入关键词开始搜索</div>
                     </div>
                     <div class="module-terminal" id="terminal-${moduleName}"></div>
                 `;
 
                 container.appendChild(moduleDiv);
                 this.createTerminal(`terminal-${moduleName}`, moduleName);
+
+                // 为动态模块初始化搜索功能
+                const searchManager = new SearchManager();
+                searchManager.initializeSearch(moduleName);
+                this.searchManagers.set(moduleName, searchManager);
+
+                // 为模块标题添加双击事件监听器
+                const titleElement = document.getElementById(`title-${moduleName}`);
+                if (titleElement) {
+                    titleElement.addEventListener('dblclick', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.toggleModuleExpansion(moduleName);
+                    });
+                }
 
                 // 更新统计信息
                 this.updateModuleStats(moduleName, moduleInfo);
@@ -1053,20 +1649,157 @@
             // 更新模块统计信息
             updateModuleStats(moduleName, moduleInfo) {
                 const totalEl = document.getElementById(`stats-${moduleName}-total`);
-                const errorEl = document.getElementById(`stats-${moduleName}-error`);
-                const warnEl = document.getElementById(`stats-${moduleName}-warn`);
-                const infoEl = document.getElementById(`stats-${moduleName}-info`);
-
                 if (totalEl) totalEl.textContent = moduleInfo.totalLogs;
-                if (errorEl) errorEl.textContent = moduleInfo.errorCount;
-                if (warnEl) warnEl.textContent = moduleInfo.warnCount;
-                if (infoEl) infoEl.textContent = moduleInfo.infoCount;
+            }
+
+            // 彻底清理所有动态模块 - 用于新会话开始时重置
+            clearAllDynamicModules() {
+                console.log('🧹 开始清理所有动态模块');
+
+                // 1. 清理所有动态模块的终端和相关数据
+                const dynamicModulesToRemove = [];
+                for (const [moduleName, terminal] of this.terminals) {
+                    if (moduleName !== 'realtime-logs' && moduleName !== 'raw-logs') {
+                        dynamicModulesToRemove.push(moduleName);
+                        // 清理终端
+                        terminal.dispose();
+                        // 清理相关的插件和缓冲区
+                        this.fitAddons.delete(moduleName);
+                        this.searchAddons.delete(moduleName);
+                        this.logBuffers.delete(moduleName);
+                        this.searchManagers.delete(moduleName);
+                    }
+                }
+
+                // 2. 从terminals Map中移除动态模块
+                dynamicModulesToRemove.forEach(moduleName => {
+                    this.terminals.delete(moduleName);
+                });
+
+                // 3. 清理DOM元素 - 移除所有动态模块的DOM节点
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+                if (dynamicContainer) {
+                    dynamicContainer.innerHTML = '';
+                }
+
+                // 4. 重置扩展状态
+                this.expandedModule = null;
+                const dynamicModulesArea = document.querySelector('.dynamic-modules-area');
+                if (dynamicModulesArea) {
+                    dynamicModulesArea.classList.remove('has-expanded-module');
+                }
+
+                console.log(`✅ 已清理 ${dynamicModulesToRemove.length} 个动态模块:`, dynamicModulesToRemove);
+            }
+
+            // 切换模块扩展状态
+            toggleModuleExpansion(moduleName) {
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) {
+                    console.error('找不到模块或容器:', moduleName);
+                    return;
+                }
+
+                if (this.expandedModule === moduleName) {
+                    // 当前模块已扩展，恢复正常大小
+                    this.collapseModule(moduleName);
+                } else {
+                    // 扩展当前模块
+                    this.expandModule(moduleName);
+                }
+            }
+
+            // 扩展模块到全屏
+            expandModule(moduleName) {
+                // 如果有其他模块已扩展，先收起
+                if (this.expandedModule && this.expandedModule !== moduleName) {
+                    this.collapseModule(this.expandedModule);
+                }
+
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) return;
+
+                // 添加扩展样式
+                moduleDiv.classList.add('expanded');
+                dynamicContainer.classList.add('has-expanded-module');
+
+                // 记录当前扩展的模块
+                this.expandedModule = moduleName;
+
+                // 延迟适配终端大小，确保DOM更新完成
+                setTimeout(() => {
+                    const fitAddon = this.fitAddons.get(moduleName);
+                    if (fitAddon) {
+                        try {
+                            fitAddon.fit();
+                            console.log(`📏 模块 ${moduleName} 已扩展并重新适配终端大小`);
+                        } catch (e) {
+                            console.error('适配终端大小失败:', e);
+                        }
+                    }
+                }, 100);
+            }
+
+            // 收起模块到正常大小
+            collapseModule(moduleName) {
+                const moduleDiv = document.getElementById(`module-${moduleName}`);
+                const dynamicContainer = document.getElementById('dynamic-modules-container');
+
+                if (!moduleDiv || !dynamicContainer) return;
+
+                // 移除扩展样式
+                moduleDiv.classList.remove('expanded');
+                dynamicContainer.classList.remove('has-expanded-module');
+
+                // 清除扩展状态
+                this.expandedModule = null;
+
+                // 延迟适配终端大小，确保DOM更新完成
+                setTimeout(() => {
+                    const fitAddon = this.fitAddons.get(moduleName);
+                    if (fitAddon) {
+                        try {
+                            fitAddon.fit();
+                            console.log(`📏 模块 ${moduleName} 已收起并重新适配终端大小`);
+                        } catch (e) {
+                            console.error('适配终端大小失败:', e);
+                        }
+                    }
+                }, 100);
             }
 
             // 初始化静态终端
             initializeStaticTerminals() {
                 this.createTerminal('realtime-logs-terminal', 'realtime-logs');
                 this.createTerminal('raw-logs-terminal', 'raw-logs');
+
+                // 为实时日志终端初始化搜索功能
+                const realtimeSearchManager = new SearchManager();
+                realtimeSearchManager.initializeSearch('realtime-logs');
+                this.searchManagers.set('realtime-logs', realtimeSearchManager);
+
+                // 为原始日志折叠终端初始化搜索功能
+                const rawLogsSearchManager = new SearchManager();
+                rawLogsSearchManager.initializeSearch('raw-logs');
+                this.searchManagers.set('raw-logs', rawLogsSearchManager);
+
+                // 添加全局键盘事件监听器
+                this.initializeGlobalKeyboardEvents();
+            }
+
+            // 初始化全局键盘事件
+            initializeGlobalKeyboardEvents() {
+                document.addEventListener('keydown', (e) => {
+                    // ESC键退出全屏模式
+                    if (e.key === 'Escape' && this.expandedModule) {
+                        e.preventDefault();
+                        this.collapseModule(this.expandedModule);
+                    }
+                });
             }
         }
 
@@ -1078,8 +1811,8 @@
             constructor() {
                 this.ws = null;
                 this.reconnectAttempts = 0;
-                this.maxReconnectAttempts = 5;
-                this.reconnectDelay = 1000;
+                this.maxReconnectAttempts = 300; // 5分钟 × 60秒 ÷ 1秒 = 300次
+                this.reconnectDelay = 1000; // 1秒间隔
                 this.isConnected = false;
             }
 
@@ -1106,6 +1839,14 @@
                     console.log('✅ WebSocket连接成功');
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
+                    this.updateConnectionStatus('已连接, 正在订阅...');
+
+                    // ✨ 发送订阅消息 - 这个页面只关心模块日志
+                    const subscriptionMessage = {
+                        subscribe: 'module'
+                    };
+                    this.ws.send(JSON.stringify(subscriptionMessage));
+                    console.log('📤 已发送订阅请求: module');
                     this.updateConnectionStatus('已连接');
                 };
 
@@ -1137,6 +1878,12 @@
             // 处理消息
             handleMessage(message) {
                 switch (message.type) {
+                    case 'SessionStart':
+                        console.log('🆕 新会话开始:', message.session_id);
+                        this.updateConnectionStatus('新会话开始');
+                        // 清空前端缓存并重新初始化
+                        webLogState.clearAllData();
+                        break;
                     case 'LogEntry':
                         webLogState.processLogEntry(message.data);
                         break;
@@ -1156,7 +1903,7 @@
             handleConnectionError() {
                 if (this.reconnectAttempts < this.maxReconnectAttempts) {
                     this.reconnectAttempts++;
-                    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                    const delay = this.reconnectDelay; // 固定1秒间隔，不使用指数退避
 
                     console.log(`🔄 ${delay}ms后尝试重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
                     this.updateConnectionStatus(`重连中... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
@@ -1214,23 +1961,113 @@
         }
 
         function toggleRealtimeLogs() {
-            const module = document.getElementById('realtime-logs-module');
+            const realtimeModule = document.getElementById('realtime-logs-module');
+            const rawLogsModule = document.getElementById('raw-logs-module');
             const button = document.getElementById('toggle-realtime-logs');
 
-            if (module.style.display === 'none') {
-                module.style.display = 'flex';
+            // 检查实时日志模块当前是否是隐藏的
+            if (realtimeModule.style.display === 'none') {
+                // 如果是隐藏的，就显示它，并【隐藏】另一个
+                realtimeModule.style.display = 'flex';
+                rawLogsModule.style.display = 'none'; // <-- 关键：隐藏高频折叠模块
+
                 button.classList.add('active');
-                button.textContent = '📊 隐藏实时原始日志';
+                button.textContent = '📊 显示高频折叠日志'; // <-- 修改按钮文本，更符合当前状态
             } else {
-                module.style.display = 'none';
+                // 如果是显示的，就隐藏它，并【显示】另一个
+                realtimeModule.style.display = 'none';
+                rawLogsModule.style.display = 'flex'; // <-- 关键：显示高频折叠模块
+
                 button.classList.remove('active');
-                button.textContent = '📊 显示实时原始日志';
+                button.textContent = '📊 显示实时原始日志'; // <-- 恢复按钮默认文本
             }
+
+            // 【重要】切换显示后，需要让两个模块的终端重新计算尺寸
+            // 因为模块的尺寸发生了变化，xterm.js需要重新适配
+            // 我们延迟执行以确保DOM更新完成
+            setTimeout(() => {
+                try {
+                    if (rawLogsModule.style.display !== 'none') {
+                        terminalManager.fitAddons.get('raw-logs')?.fit();
+                    }
+                    if (realtimeModule.style.display !== 'none') {
+                        terminalManager.fitAddons.get('realtime-logs')?.fit();
+                    }
+                } catch(e) {
+                    console.error("Error fitting terminal:", e);
+                }
+            }, 10);
+        }
+
+        function toggleCollapsedLogs() {
+            const realtimeModule = document.getElementById('realtime-logs-module');
+            const rawLogsModule = document.getElementById('raw-logs-module');
+            const button = document.getElementById('toggle-collapsed-logs');
+
+            // 从原始日志切换到原始日志折叠
+            realtimeModule.style.display = 'none';
+            rawLogsModule.style.display = 'flex';
+
+            // 更新按钮状态
+            button.classList.add('active');
+
+            // 同时更新另一个按钮的状态
+            const otherButton = document.getElementById('toggle-realtime-logs');
+            if (otherButton) {
+                otherButton.classList.remove('active');
+                otherButton.textContent = '📊 显示实时原始日志';
+            }
+
+            // 重新适配终端尺寸
+            setTimeout(() => {
+                try {
+                    if (rawLogsModule.style.display !== 'none') {
+                        terminalManager.fitAddons.get('raw-logs')?.fit();
+                    }
+                } catch(e) {
+                    console.error("Error fitting terminal:", e);
+                }
+            }, 10);
         }
 
         // 页面初始化
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('🎯 页面加载完成，初始化WebLog系统');
+        window.addEventListener('load', function() {
+            // ================== 插件加载状态诊断 ==================
+            console.log('--- 插件加载状态诊断 ---');
+            console.log('1. Terminal 核心库:', typeof Terminal);
+            console.log('2. FitAddon 插件对象:', window.FitAddon);
+            console.log('3. WebLinksAddon 插件对象:', window.WebLinksAddon);
+            // 修正了诊断代码，检查正确的全局变量 SearchAddon
+            console.log('4. SearchAddon 插件对象 (关键):', window.SearchAddon);
+
+            // 更详细的 SearchAddon 诊断
+            if (window.SearchAddon) {
+                console.log('   SearchAddon 详细信息:');
+                console.log('   - 类型:', typeof window.SearchAddon);
+                console.log('   - 属性:', Object.keys(window.SearchAddon));
+                console.log('   - SearchAddon 构造函数类型:', typeof window.SearchAddon.SearchAddon);
+            } else {
+                console.log('   ❌ SearchAddon 完全未定义');
+
+                // 检查是否有其他可能的全局变量名
+                console.log('5. 检查其他可能的搜索插件全局变量:');
+                console.log('   - window.XtermAddonSearch:', window.XtermAddonSearch);
+                console.log('   - window.AddonSearch:', window.AddonSearch);
+                console.log('   - window.xtermAddonSearch:', window.xtermAddonSearch);
+
+                // 检查所有以 'Search' 开头的全局变量
+                const searchGlobals = Object.keys(window).filter(key => key.toLowerCase().includes('search'));
+                console.log('   - 所有包含"search"的全局变量:', searchGlobals);
+
+                // 检查脚本是否成功加载
+                const scripts = Array.from(document.querySelectorAll('script[src*="addon-search"]'));
+                console.log('   - 搜索插件脚本标签:', scripts.map(s => ({src: s.src, loaded: s.readyState || 'unknown'})));
+            }
+
+            console.log('--- 诊断结束 ---');
+            // =======================================================
+
+            console.log('🎯 页面及所有资源加载完成，初始化WebLog系统');
 
             // 初始化终端
             terminalManager.initializeStaticTerminals();
@@ -1238,6 +2075,7 @@
             // 绑定事件
             document.getElementById('header-copy-modules').addEventListener('click', copyAllModules);
             document.getElementById('toggle-realtime-logs').addEventListener('click', toggleRealtimeLogs);
+            document.getElementById('toggle-collapsed-logs').addEventListener('click', toggleCollapsedLogs);
 
             // 连接WebSocket
             wsManager.connect();
@@ -1251,13 +2089,28 @@
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(() => {
                     console.log('🔄 窗口大小改变，适配所有终端');
-                    terminalManager.fitAddons.forEach(fitAddon => {
-                        try {
-                            fitAddon.fit();
-                        } catch (e) {
-                            // 忽略可能的错误，例如当终端容器被隐藏时
+
+                    // 如果有扩展的模块，优先适配它
+                    if (terminalManager.expandedModule) {
+                        const expandedFitAddon = terminalManager.fitAddons.get(terminalManager.expandedModule);
+                        if (expandedFitAddon) {
+                            try {
+                                expandedFitAddon.fit();
+                                console.log(`📏 优先适配扩展模块: ${terminalManager.expandedModule}`);
+                            } catch (e) {
+                                console.error('适配扩展模块失败:', e);
+                            }
                         }
-                    });
+                    } else {
+                        // 没有扩展模块时，适配所有终端
+                        terminalManager.fitAddons.forEach(fitAddon => {
+                            try {
+                                fitAddon.fit();
+                            } catch (e) {
+                                // 忽略可能的错误，例如当终端容器被隐藏时
+                            }
+                        });
+                    }
                 }, 250); // 250ms延迟
             });
         });

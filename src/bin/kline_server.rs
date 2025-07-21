@@ -6,7 +6,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry
 
 // 使用库中的模块
 use kline_server::klcommon::Database;
-use kline_server::klserver::web;
+use kline_server::klcommon::log::context::init_tracing_config;
+// use kline_server::klserver::web; // 暂时注释掉，klserver模块不存在
 
 // 硬编码参数
 const VERBOSE: bool = true;
@@ -17,6 +18,9 @@ const SKIP_CHECK: bool = false;
 async fn main() -> Result<()> {
     // 使用硬编码参数
     let verbose = VERBOSE;
+
+    // Initialize tracing configuration
+    init_tracing_config(cfg!(debug_assertions)); // 调试模式启用，发布模式禁用
 
     // Initialize logging
     init_logging(verbose);
@@ -128,7 +132,8 @@ async fn main() -> Result<()> {
         "启动Web服务器..."
     );
 
-    // 启动Web服务器
+    // 启动Web服务器 - 暂时注释掉，klserver模块不存在
+    /*
     match web::start_web_server(db.clone()).await {
         Ok(_) => info!(
             target = "kline_server::web_server",
@@ -142,6 +147,13 @@ async fn main() -> Result<()> {
             "启动Web服务器失败"
         ),
     }
+    */
+
+    info!(
+        target = "kline_server::web_server",
+        event_type = "web_server_disabled",
+        "Web服务器功能暂时禁用"
+    );
 
     Ok(())
 }
@@ -149,18 +161,39 @@ async fn main() -> Result<()> {
 
 
 /// 初始化tracing日志系统
+/// 加载日志配置
+fn load_logging_config() -> Result<String> {
+    use kline_server::klcommon::AggregateConfig;
+
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/BinanceKlineConfig.toml".to_string());
+
+    if std::path::Path::new(&config_path).exists() {
+        let config = AggregateConfig::from_file(&config_path)?;
+        Ok(config.logging.log_level)
+    } else {
+        // 配置文件不存在，返回错误
+        Err(anyhow::anyhow!("配置文件不存在: {}，无法加载日志配置", config_path).into())
+    }
+}
+
 fn init_logging(verbose: bool) {
     // 设置RUST_BACKTRACE为1，以便更好地报告错误
     std::env::set_var("RUST_BACKTRACE", "1");
 
     // 确保日志目录存在
     let log_dir = "logs";
-    std::fs::create_dir_all(log_dir).unwrap_or_else(|e| {
-        eprintln!("Failed to create logs directory: {}", e);
+    std::fs::create_dir_all(log_dir).unwrap_or_else(|_| {
+        // 日志目录创建失败，忽略错误
     });
 
-    // 设置日志级别
-    let log_level = if verbose { "trace" } else { "trace" };
+    // 从配置文件读取日志级别
+    let log_level = load_logging_config()
+        .unwrap_or_else(|_| if verbose { "trace".to_string() } else { "trace".to_string() });
+
+    // 显示读取到的日志配置
+    eprintln!("📋 K线服务器日志配置:");
+    eprintln!("  日志级别: {}", log_level);
+    eprintln!("  详细模式: {}", if verbose { "启用" } else { "禁用" });
 
     // 创建文件输出层
     let file_appender = tracing_appender::rolling::daily(log_dir, "kline_server.log");
@@ -186,7 +219,7 @@ fn init_logging(verbose: bool) {
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| {
-                    tracing_subscriber::EnvFilter::new(log_level)
+                    tracing_subscriber::EnvFilter::new(&log_level)
                         .add_directive("hyper=warn".parse().unwrap())
                         .add_directive("reqwest=warn".parse().unwrap())
                 })

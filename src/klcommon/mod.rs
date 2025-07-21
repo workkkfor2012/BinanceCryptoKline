@@ -7,6 +7,8 @@ pub mod websocket;
 pub mod server_time_sync; // 服务器时间同步模块
 // pub mod aggkline; // 归集交易K线模块 - 暂时注释掉
 pub mod proxy; // 代理配置模块
+pub mod log;
+pub mod config; // 配置模块
 
 // 重新导出常用类型，方便使用
 pub use models::{Kline, Symbol, ExchangeInfo, DownloadTask, DownloadResult, KlineData, BinanceRawAggTrade};
@@ -14,9 +16,9 @@ pub use db::Database;
 pub use error::{Result, AppError};
 pub use api::BinanceApi;
 pub use websocket::{
-    WebSocketClient, WebSocketConnection, WebSocketConfig,
-    ContinuousKlineClient, ContinuousKlineConfig,
-    AggTradeClient, AggTradeConfig,
+    WebSocketClient, WebSocketConnection,
+    AggTradeClient, AggTradeConfig, AggTradeData,
+    MiniTickerClient, MiniTickerConfig, MiniTickerData, MiniTickerMessageHandler,
     BINANCE_WS_URL, WEBSOCKET_CONNECTION_COUNT
 };
 pub use server_time_sync::ServerTimeSyncManager; // 导出服务器时间同步管理器
@@ -29,3 +31,34 @@ pub use server_time_sync::ServerTimeSyncManager; // 导出服务器时间同步�
 //     KLINE_PERIODS_MS, NUM_WEBSOCKET_CONNECTIONS, AGG_TRADE_STREAM_NAME
 // };
 pub use proxy::{ProxyConfig, get_proxy_url, PROXY_HOST, PROXY_PORT};
+// 导出AI日志系统相关类型
+pub use log::{
+    // AI日志系统核心
+    McpLayer,
+    init_log_sender,
+    ProblemSummaryLayer,
+    init_problem_summary_log,
+    SpanModel,
+    SpanEvent,
+    StructuredLog,
+    // 健康监控系统
+    WatchdogV2,
+    HealthReporter,
+    HealthReport,
+    ComponentStatus,
+};
+// 导出配置相关类型
+pub use config::{
+    AggregateConfig,
+    DatabaseConfig,
+    WebSocketConfig,
+    BufferConfig,
+    PersistenceConfig,
+    LoggingConfig,
+};
+
+// 测试模块
+#[cfg(test)]
+mod tests {
+    pub mod mini_ticker_tests;
+}

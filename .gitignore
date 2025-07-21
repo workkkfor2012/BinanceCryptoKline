@@ -30,3 +30,5 @@ config.local.toml
 /tempfold
 /src/weblog/src/tempfold
 
+/logs
+/src/Log-MCP-Server/target

@@ -16,69 +16,80 @@ path = "src/bin/kline_server.rs"
 name = "kline_data_service"
 path = "src/bin/kline_data_service.rs"
 
-
-
-
+[[bin]]
+name = "klagg_sub_threads"
+path = "src/bin/klagg_sub_threads.rs"
 
 [[bin]]
-name = "compare_klines"
-path = "src/bin/compare_klines.rs"
-
-[[bin]]
-name = "kline_aggregate_service"
-path = "src/bin/kline_aggregate_service.rs"
+name = "test_aggtrade_time"
+path = "src/bin/test_aggtrade_time.rs"
 
 
 
-# 测试文件配置
-[[test]]
-name = "test_binance_ws"
-path = "tests/test_binance_ws.rs"
-harness = false
 
-[[test]]
-name = "test_binance_kline_ws"
-path = "tests/test_binance_kline_ws.rs"
-harness = false
 
-[[test]]
-name = "test_binance_continuous_kline_ws"
-path = "tests/test_binance_continuous_kline_ws.rs"
-harness = false
 
-[[test]]
-name = "test_binance_ws_multi_libs"
-path = "tests/test_binance_ws_multi_libs.rs"
-harness = false
 
-[[test]]
-name = "test_binance_async_tungstenite"
-path = "tests/test_binance_async_tungstenite.rs"
-harness = false
+# 暂时注释掉缺失的测试二进制文件
+# [[bin]]
+# name = "test_cerberus"
+# path = "src/bin/test_cerberus.rs"
+
+# [[bin]]
+# name = "test_soft_assert"
+# path = "src/bin/test_soft_assert.rs"
+
+
+
+# 测试文件配置 - 暂时注释掉缺失的测试文件
+# [[test]]
+# name = "test_binance_ws"
+# path = "tests/test_binance_ws.rs"
+# harness = false
+
+# [[test]]
+# name = "test_binance_kline_ws"
+# path = "tests/test_binance_kline_ws.rs"
+# harness = false
+
+# [[test]]
+# name = "test_binance_continuous_kline_ws"
+# path = "tests/test_binance_continuous_kline_ws.rs"
+# harness = false
+
+# [[test]]
+# name = "test_binance_ws_multi_libs"
+# path = "tests/test_binance_ws_multi_libs.rs"
+# harness = false
+
+# [[test]]
+# name = "test_binance_async_tungstenite"
+# path = "tests/test_binance_async_tungstenite.rs"
+# harness = false
 
 # 聚合交易测试
-[[test]]
-name = "test_binance_aggtrade_fastws"
-path = "tests/test_binance_aggtrade_fastws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_aggtrade_fastws"
+# path = "tests/test_binance_aggtrade_fastws.rs"
+# harness = false
 
 # fastwebsockets 测试
-[[test]]
-name = "test_binance_fasws"
-path = "tests/test_binance_fasws.rs"
-harness = false
+# [[test]]
+# name = "test_binance_fasws"
+# path = "tests/test_binance_fasws.rs"
+# harness = false
 
-# 服务器时间测试
-[[test]]
-name = "test_server_time"
-path = "tests/test_server_time.rs"
-harness = false
+# 服务器时间测试 - 暂时注释掉缺失的测试文件
+# [[test]]
+# name = "test_server_time"
+# path = "tests/test_server_time.rs"
+# harness = false
 
 # 服务器时间同步测试
-[[test]]
-name = "test_server_time_sync"
-path = "tests/test_server_time_sync.rs"
-harness = false
+# [[test]]
+# name = "test_server_time_sync"
+# path = "tests/test_server_time_sync.rs"
+# harness = false
 
 
 [lib]
@@ -91,20 +102,26 @@ reqwest = { version = "0.11", features = ["json", "socks"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
+core_affinity = "0.8"
 clap = { version = "4.3", features = ["derive"] }
 log = "0.4"
 env_logger = "0.10"
 fern = "0.6" # Add fern
 anyhow = "1.0"
 thiserror = "1.0"
-futures = "0.3"
+futures = "0.3.31"
 futures-util = "0.3.28"
 tokio-stream = "0.1"
 csv = "1.2"
-tracing = "0.1"
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
+# 追踪上下文传递支持
+tracing-futures = "0.2"
+# 性能分析支持
+tracing-flame = "0.2"
+kline-macros = { path = "macros" }
 rusqlite = { version = "0.29", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.22"
@@ -140,3 +157,15 @@ scopeguard = "1.2"
 crossbeam-channel = "0.5"
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros"] }
 toml = "0.8"
+dashmap = "5.5"
+uuid = { version = "1.0", features = ["v4"] }
+md5 = "0.7"
+async-trait = "0.1.88"
+rand = "0.9.1"
+wide = { version = "0.7", optional = true }
+
+[features]
+default = []
+simd = ["wide"]
+
+

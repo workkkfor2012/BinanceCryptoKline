@@ -1,0 +1,314 @@
+# 核心任务与顶层方法论
+[core_mission]
+persona = "你是一位经验丰富的Rust性能与可观测性专家，尤其擅长在复杂的异步系统中设计和实现健壮的日志与追踪方案。"
+title = "核心任务与方法论"
+task = "你的任务是为给定的Rust代码，添加一套服务于自动化诊断的日志埋点和性能监控。"
+methodology = "你的工作必须严格遵循两步操作流程，核心是区分‘高频次的业务流程’与‘一次性或低频次的业务流程’，并为关键流程嵌入性能断言。"
+
+# ... [core_mission] ...
+
+# 新增模块：全局追踪策略定义
+[global_trace_strategy]
+title = "零号步骤：定义全局追踪策略"
+description = "在对任何代码进行埋点之前，必须首先明确回答以下关于顶层追踪模型的问题。这是所有可观测性工作的基础。"
+
+[[global_trace_strategy.questions]]
+question = "应用的追踪模型是什么？"
+options = [
+    "A. 单一应用生命周期追踪 (Single Application Trace): 整个应用的运行过程共享一个唯一的trace_id。适用于简单的后台服务或脚本。",
+    "B. 独立业务事务追踪 (Per-Transaction Trace): 每个独立的、高价值的业务流程（如一个API请求、一个消息处理）都应该生成一个全新的、唯一的trace_id，开启一个独立的追踪链路。适用于复杂的、多任务的服务。",
+]
+action = "你必须首先选择一个模型，并在后续的埋点中贯彻这个模型。"
+
+[[global_trace_strategy.questions]]
+question = "Trace ID的生成规范是什么？"
+requirement = "Trace ID必须是全局唯一的。严禁使用自增整数或任何在重启后会重复的值。**必须**使用UUID v4或类似的随机化方案作为trace_id的生成标准。"
+implementation_note = "这意味着在创建根Span或需要开启新链路的Span时，必须主动生成并注入一个符合规范的trace_id。"
+
+# ... [operation_flow] ...
+# 埋点操作流程分为两大步骤
+[operation_flow]
+title = "埋点操作流程"
+
+# --- 第一步：高频业务流程 ---
+[operation_flow.high_frequency]
+title = "第一步：识别并埋点“高频次的业务流程”"
+description = "首要任务：像业务流程架构师一样，识别系统中为完成核心业务目标而重复执行的业务单元。"
+
+# 用于识别高频业务的思考线索
+[[operation_flow.high_frequency.thought_clues]]
+question = "这个功能单元的目的是什么？"
+explanation = "它是在处理单个用户的请求吗？是在下载单个数据吗？是在处理一条消息队列中的消息吗？"
+
+[[operation_flow.high_frequency.thought_clues]]
+question = "这个功能单元会被调用多少次？"
+explanation = "系统设计是否期望它在高负载下被成百上千次地调用？"
+
+[[operation_flow.high_frequency.thought_clues]]
+question = "它的失败是否有独立的业务意义？"
+explanation = "单个“用户登录”事务的失败，是否是一个需要被独立追踪和分析的业务事件？"
+
+# 用于定位高频业务的技术特征
+[[operation_flow.high_frequency.technical_locators]]
+type = "循环执行"
+description = "位于核心的`for`或`while`循环中，处理大量数据。"
+
+[[operation_flow.high_frequency.technical_locators]]
+type = "并发/流式执行"
+description = "位于`stream.for_each_concurrent`或类似的并发处理逻辑中。"
+
+[[operation_flow.high_frequency.technical_locators]]
+type = "请求驱动"
+description = "作为处理外部网络请求（如HTTP API）的入口点。"
+
+[[operation_flow.high_frequency.technical_locators]]
+type = "消息队列消费者"
+description = "作为处理从队列（如MPSC Channel）中取出的消息的入口点。"
+
+# 高频业务的埋点策略
+[operation_flow.high_frequency.strategy]
+title = "埋点策略：创建带规范化ID和高频标记的事务Span"
+goal = "为每一次事务的执行实例，创建一个可被独立查询、聚合和分析的、完整的业务上下文树。"
+action = "在该核心事务的函数入口，必须使用`#[instrument]`宏来创建`Span`，并包含一个规范化的事务ID。同时，必须在Span的字段中添加 `log_type = \"high_freq\"` 以明确其分类。"
+
+# 事务ID (tx_id) 的详细规范
+[operation_flow.high_frequency.tx_id_spec]
+title = "事务ID规范与实现"
+field_name = "tx_id"
+format_string = '"<transaction_type>:<instance_identifier>"'
+
+[operation_flow.high_frequency.tx_id_spec.format_parts]
+transaction_type = "描述这一类事务的业务性质，使用蛇形命名法 (snake_case)。例如：`user_login`, `kline_download`。"
+instance_identifier = "唯一标识这一个事务实例的关键参数。例如用户的ID，或`BTC-1h`。"
+
+example = '''
+# 场景: `process_single_kline_download`函数代表了“下载单支K线”这个高频业务流程。
+#[instrument(
+    name = "kline_download_transaction", 
+    skip_all,
+    fields(
+        tx_id = %format!("kline_download:{}-{}", task.symbol, task.interval),
+        log_type = "high_freq", // [核心规范] 必须在Span级别添加高频标记
+    )
+)]
+async fn process_single_kline_download(task: DownloadTask) { /* ... */ }
+'''
+
+# --- 第二步：低频逻辑 ---
+[operation_flow.low_frequency]
+title = "第二步：埋点“一次性或低频次的逻辑”"
+definition = "根据排除法，任何不属于第一步中识别出的“高频次的业务流程”的代码，都自动归类为此类。"
+characteristics = "通常负责程序的初始化、配置加载、程序退出，或为核心事务准备前置条件（如获取一次性的全局资源列表）。"
+
+# 低频业务的埋点策略
+[operation_flow.low_frequency.strategy]
+title = "埋点策略：记录检查点 (Checkpoints)"
+goal = "生成清晰、简洁的线性日志流，标记出应用生命周期中的关键里程碑。这些日志将被单独输出到`low_freq.log`中。"
+action = "在关键业务节点，使用`tracing::info!`或`tracing::debug!`记录事件，并必须附带`log_type = \"low_freq\"`字段。"
+example = '''
+tracing::info!(
+    log_type = "low_freq", // [核心规范] 必须在Event级别添加低频标记
+    message = "数据库连接成功",
+    db_path = %db_path.display()
+);
+'''
+
+# 适用于所有代码的通用埋点细则
+[general_rules]
+title = "通用埋点细则"
+description = "以下规则是最终的检查清单，它们适用于所有代码。"
+
+# --- 规则：日志类型的显式规范 (Log Type Specification) ---
+[general_rules.log_type_specification]
+title = "规则：日志类型的显式规范"
+principle = "在正确的位置，用正确的标签，明确意图。"
+description = """
+为了保证日志数据的清晰和一致性，我们正式确立以下日志分类规范：
+1.  **高频日志 (`high_freq`)**: **必须**在代表业务事务的`Span`级别进行标记。通过在`#[instrument]`宏的`fields`中添加`log_type = "high_freq"`来实现。这会将该事务的所有内部事件都归于高频类别。
+2.  **低频日志 (`low_freq`)**: **必须**在`Event`级别进行标记。通过在`tracing::info!`或类似宏中直接添加`log_type = "low_freq"`字段来实现。这用于标记程序生命周期中的单个关键检查点。
+3.  **性能SLA违规 (`performance_sla_violation`)**: 当操作耗时超过预设阈值时，**必须**在`Event`级别记录一个`WARN`日志，并附带此`log_type`。
+4.  **其他特定日志**: 同样需要显式标记，如 `log_type = "assertion"`。
+
+此规则确保了每条日志的分类都清晰可查，并利用了`Span`和`Event`的层级关系来避免信息冗余。
+"""
+
+# --- 规则：嵌入式性能断言 (Embedded Performance Assertions) ---
+[general_rules.performance_sla_monitoring]
+title = "规则：嵌入式性能断言"
+goal = "将性能监控内建于代码中，确保关键操作的执行时间符合预设的SLA（服务等级协议）。当SLA被违反时，主动生成一个结构化的警告信号。"
+mechanism = """
+我们通过一个`SlaGuard`模式来实现。在进入一个需要监控性能的`Span`时，我们创建一个计时器实例。
+这个实例的`Drop` trait会在`Span`结束时自动执行。在`Drop`实现中，我们计算总耗时，并与预设的SLA阈值进行比较。
+如果耗时超标，就记录一条`WARN`级别的日志到`problem_summary.log`。
+"""
+action = "对于`docs/implementation_spec.md`中定义了性能SLA的函数，你必须在其入口处注入性能断言逻辑。"
+
+[[general_rules.performance_sla_monitoring.examples]]
+scenario = "监控一个异步函数的执行时间"
+code = '''
+use std::time::{Duration, Instant};
+
+// 建议将SlaGuard放置在通用模块如 `klcommon/monitoring.rs` 中
+pub struct SlaGuard {
+    name: &'static str,
+    start_time: Instant,
+    sla_threshold: Duration,
+}
+
+impl SlaGuard {
+    pub fn new(name: &'static str, sla_threshold: Duration) -> Self {
+        Self { name, start_time: Instant::now(), sla_threshold }
+    }
+}
+
+impl Drop for SlaGuard {
+    fn drop(&mut self) {
+        let duration = self.start_time.elapsed();
+        if duration > self.sla_threshold {
+            tracing::warn!(
+                log_type = "performance_sla_violation", // [核心规范]
+                message = "Performance SLA violation detected",
+                target_name = self.name,
+                duration_ms = duration.as_millis(),
+                threshold_ms = self.sla_threshold.as_millis(),
+            );
+        }
+    }
+}
+
+// 在业务代码中应用
+#[instrument(...)]
+async fn some_critical_operation() {
+    // SLA定义：此操作不应超过500毫秒
+    let _sla_guard = SlaGuard::new("critical_operation", Duration::from_millis(500));
+    
+    // ... 执行业务逻辑 ...
+}
+'''
+
+# --- 核心准则：异步上下文传播 ---
+[general_rules.async_context_propagation]
+title = "核心准则：使用 `context.rs` 工具箱无损地传播异步上下文"
+description = """
+在异步Rust中，当工作从一个任务（或线程）转移到另一个时，`tracing`的上下文（包括`trace_id`和当前`Span`）不会自动传播。
+这是一个必须解决的首要问题，并且本项目已为此提供了标准化的解决方案。
+
+**核心原则：`src/klcommon/context.rs` 是解决所有上下文传递问题的“唯一事实来源”和“最佳实践工具箱”。**
+
+在实现任何涉及异步边界（如 `tokio::spawn`, MPSC Channel, `spawn_blocking` 等）的上下文传递逻辑之前，
+**你必须首先查阅 `context.rs` 文件，并优先使用其中提供的函数。**
+如果现有函数不能满足需求，你的任务是**扩充 `context.rs`**，而不是在业务代码中创建一次性的临时解决方案。
+"""
+
+[[general_rules.async_context_propagation.patterns]]
+name = "模式一：条件化包裹Future (`instrument_if_enabled`)"
+scenario = "当需要根据运行时的配置（例如，全局开关）来决定是否为一个Future附加`tracing`上下文时。这是实现“零成本抽象”的关键。"
+solution = "调用`context::instrument_if_enabled(future, span)`函数。当追踪被禁用时，它几乎没有运行时开销。"
+example = '''
+use crate::klcommon::context::instrument_if_enabled;
+
+async fn some_work() {
+    let span = tracing::info_span!("conditional_work");
+    // 正确做法: 使用 context.rs 提供的零成本抽象
+    instrument_if_enabled(async {
+        // ... some async logic ...
+    }, span).await;
+}
+'''
+
+[[general_rules.async_context_propagation.patterns]]
+name = "模式二：派生带上下文的后台任务 (`spawn_instrumented`)"
+scenario = "当需要使用`tokio::spawn`创建一个新的后台任务，并且希望这个新任务能完全继承当前任务的日志上下文（Span和trace_id）时。"
+solution = "**严禁**在业务代码中手动调用`future.instrument(Span::current())`后再`tokio::spawn`。**必须**使用`context::spawn_instrumented(future)`函数，它封装了正确的模式，确保代码整洁且不会出错。"
+example = '''
+use crate::klcommon::context::spawn_instrumented;
+
+#[instrument]
+async fn handle_request() {
+    // 正确做法: 使用 context.rs 提供的标准函数来派生任务
+    spawn_instrumented(process_data_in_background(data));
+}
+'''
+
+[[general_rules.async_context_propagation.patterns]]
+name = "模式三：处理新的或复杂边界 (扩充工具箱)"
+scenario = "当你遇到一个新的、`context.rs`中尚无现成解决方案的上下文传递边界时（例如，跨MPSC通道传递任务，或与`spawn_blocking`交互）。"
+solution_steps = [
+  "1. **禁止**在业务代码中编写一次性的、临时的上下文传递逻辑。",
+  "2. **必须**进入`src/klcommon/context.rs`文件，添加一个新的、通用的、可复用的辅助函数来封装这个解决方案。",
+  "3. 在你的业务代码中，调用这个你刚刚创建的新函数。",
+]
+example = '''
+// 这是一个思想实验，展示了如何遵循这个模式来解决问题。
+// 旧的、不好的做法是在worker_loop中手动处理task.context.0.instrument()。
+//
+// 新的、正确的做法是：
+// 1. 在 `context.rs` 中创建一个 `spawn_blocking_instrumented` 函数。
+// 2. 在业务代码中，直接调用 `context::spawn_blocking_instrumented(...)`。
+//
+// 这种方法将复杂性隔离在 `context.rs` 中，保持业务代码的纯净。
+// `db.rs`中对`WriteTask`的处理就应遵循此原则进行重构。
+'''
+
+# --- 规则：记录关键决策变量 ---
+[general_rules.log_decision_variables]
+title = "规则：记录关键决策变量"
+goal = "为SOP中的“纵向分析”提供直接证据，使AI能够精确推断程序为何会进入特定的逻辑分支。"
+action = "在任何执行条件判断的代码块之前或内部（尤其是在即将进入error或warn分支时），必须使用`tracing`事件记录下直接用于该判断的一个或多个核心变量值。"
+key_locations = [
+  "`if condition { ... } else { ... }`",
+  "`match variable { ... }`",
+  "任何使用了 `?` 操作符来处理 `Result` 或 `Option` 的地方。",
+]
+
+[[general_rules.log_decision_variables.examples]]
+scenario = "简单的 `if` 判断"
+code = '''
+if balance < required_amount {
+    tracing::error!(
+        log_type = "precondition_failed",
+        balance = %balance,
+        required_amount = %required_amount,
+        "Insufficient balance"
+    );
+    return Err(anyhow!("Insufficient balance"));
+}
+'''
+
+[[general_rules.log_decision_variables.examples]]
+scenario = "使用 `?` 操作符"
+code = '''
+// 将 `?` 展开为 `match` 以便插入日志
+let data = match some_function_that_returns_result() {
+    Ok(d) => d,
+    Err(e) => {
+        tracing::error!(
+            log_type = "operation_failed",
+            error_details = %e,
+            error_chain = format!("{:#}", e), // 总是记录完整的错误链
+            "The operation failed, cannot continue."
+        );
+        return Err(e.into());
+    }
+};
+'''
+
+# --- 其他通用规则 ---
+[general_rules.other_rules]
+title = "其他通用规则"
+
+[[general_rules.other_rules.rules_list]]
+rule_name = "深化错误记录 (Deepen Error Logging)"
+description = [
+    "必须只在`Result::Err(e)`分支或类似的失败路径记录`tracing::error!`。",
+    "为了便于根因分析，必须记录完整的错误链信息。"
+]
+best_practice = "添加 `error_chain = format!(\"{:#}\", e)` 字段。"
+
+[[general_rules.other_rules.rules_list]]
+rule_name = "业务断言"
+description = [
+    "对于那些不应该发生但又不至于让程序崩溃（Panic）的业务逻辑问题，使用软断言。",
+    "必须遵循规则：`soft_assert!(condition, ...)` 应该与 `tracing::warn!` 或 `error!` 结合，记录下断言失败时的相关变量。"
+]
+best_practice = "`soft_assert!`宏通常需要自己实现或使用库，并应与`problem_summary.log`系统集成。"

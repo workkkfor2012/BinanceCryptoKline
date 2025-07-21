@@ -1,0 +1,68 @@
+# 币安K线系统统一配置文件
+# K线聚合系统配置 - 符合 AggregateConfig 结构体格式
+
+# 支持的时间周期列表
+supported_intervals = ["1m", "5m", "30m", "1h", "4h", "1d", "1w"]
+
+# 最大支持的品种数量
+max_symbols = 10000
+
+# 缓冲区切换间隔（毫秒）
+buffer_swap_interval_ms = 1000
+
+# 持久化间隔（毫秒）
+persistence_interval_ms = 5000
+
+# Actor心跳间隔（秒）
+actor_heartbeat_interval_s = 5
+
+# Watchdog检查间隔（秒）
+watchdog_check_interval_s = 15
+
+# Watchdog Actor超时阈值（秒）
+watchdog_actor_timeout_s = 60
+
+# Actor通道容量（有界通道的缓冲区大小）
+channel_capacity = 100
+
+[database]
+database_path = "data/klines.db"
+pool_size = 10
+connection_timeout_secs = 30
+enable_wal = true
+
+[websocket]
+use_proxy = true
+proxy_host = "127.0.0.1"
+proxy_port = 1080
+websocket_url = "wss://fstream.binance.com/ws"
+connection_timeout_secs = 30
+reconnect_interval_secs = 1
+max_reconnect_attempts = 300
+heartbeat_interval_secs = 30
+
+[buffer]
+initial_capacity = 70000
+enable_preallocation = true
+alignment_size = 64
+
+[persistence]
+batch_size = 1000
+queue_size = 5000
+write_timeout_secs = 30
+enable_compressed_logging = true
+
+[logging]
+log_level = "info"
+log_transport = "named_pipe"
+pipe_name = "kline_mcp_log_pipe"
+# 是否启用完全追踪功能（包括跨线程上下文传递）
+enable_full_tracing = true
+
+# Log MCP Server配置 - 为AI模型提供日志查询服务
+[log_mcp_server]
+# 命名管道名称（用于接收日志数据）
+
+weblog_pipe_name = "weblog_pipe"
+# MCP查询HTTP端口
+mcp_port = 9001

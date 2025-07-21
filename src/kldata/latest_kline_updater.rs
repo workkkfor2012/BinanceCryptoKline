@@ -1,5 +1,5 @@
 use crate::klcommon::{BinanceApi, Database, DownloadTask, Result, ServerTimeSyncManager};
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error, debug, Instrument};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -94,13 +94,21 @@ impl LatestKlineUpdater {
     /// 更新所有品种、所有周期的最新一根K线
     async fn update_latest_klines(&self) -> Result<usize> {
         // 1. 获取所有正在交易的U本位永续合约交易对
-        let all_symbols = match self.api.get_trading_usdt_perpetual_symbols().await {
-            Ok(symbols) => symbols,
+        let (all_symbols, delisted_symbols) = match self.api.get_trading_usdt_perpetual_symbols().await {
+            Ok((trading, delisted)) => (trading, delisted),
             Err(e) => {
                 error!("获取交易对信息失败: {}", e);
                 return Err(e);
             }
         };
+
+        // 处理已下架的品种（在这里只记录，不删除数据）
+        if !delisted_symbols.is_empty() {
+            info!(
+                "发现已下架品种: {}，这些品种不会更新最新K线",
+                delisted_symbols.join(", ")
+            );
+        }
 
         info!("获取到 {} 个交易对", all_symbols.len());
 
@@ -166,6 +174,8 @@ impl LatestKlineUpdater {
             let db_clone = self.db.clone();
             let success_count_clone = success_count.clone();
 
+            let symbol = task.symbol.clone();
+            let interval = task.interval.clone();
             let handle = tokio::spawn(async move {
                 // 获取信号量许可
                 let _permit = semaphore_clone.acquire().await.unwrap();
@@ -186,7 +196,7 @@ impl LatestKlineUpdater {
                         sorted_klines.sort_by_key(|k| k.open_time);
 
                         // 保存到数据库
-                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines)?;
+                        let _count = db_clone.save_klines(&symbol, &interval, &sorted_klines).await?;
 
                         // 增加成功计数
                         success_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -199,7 +209,12 @@ impl LatestKlineUpdater {
                         Err(e)
                     }
                 }
-            });
+            }.instrument(tracing::info_span!(
+                "update_latest_kline_task",
+                symbol = %symbol,
+                interval = %interval,
+                target = "latest_updater"
+            )));
 
             handles.push(handle);
         }

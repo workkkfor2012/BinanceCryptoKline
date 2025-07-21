@@ -2,6 +2,8 @@
 ///
 /// 集中管理所有代理设置，便于统一修改
 
+
+
 /// 代理服务器地址
 pub const PROXY_HOST: &str = "127.0.0.1";
 
@@ -21,6 +23,7 @@ pub enum ProxyType {
 pub const DEFAULT_PROXY_TYPE: ProxyType = ProxyType::Socks5;
 
 /// 获取完整的代理URL
+// #[instrument] 移除：这是纯配置读取函数，追踪会产生噪音
 pub fn get_proxy_url() -> String {
     match DEFAULT_PROXY_TYPE {
         ProxyType::Http => format!("http://{}:{}", PROXY_HOST, PROXY_PORT),
@@ -44,7 +47,7 @@ pub struct ProxyConfig {
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
-            use_proxy: true,
+            use_proxy: false, // 临时禁用代理进行测试
             host: PROXY_HOST.to_string(),
             port: PROXY_PORT,
             proxy_type: DEFAULT_PROXY_TYPE,
@@ -54,11 +57,13 @@ impl Default for ProxyConfig {
 
 impl ProxyConfig {
     /// 创建新的代理配置
+    // #[instrument] 移除：简单的构造函数，追踪会产生噪音
     pub fn new() -> Self {
         Self::default()
     }
 
     /// 创建指定类型的代理配置
+    // #[instrument] 移除：简单的构造函数，追踪会产生噪音
     pub fn with_type(proxy_type: ProxyType) -> Self {
         Self {
             use_proxy: true,
@@ -69,6 +74,7 @@ impl ProxyConfig {
     }
 
     /// 获取完整的代理URL
+    // #[instrument] 移除：简单的URL构建函数，追踪会产生噪音
     pub fn get_url(&self) -> String {
         match self.proxy_type {
             ProxyType::Http => format!("http://{}:{}", self.host, self.port),
