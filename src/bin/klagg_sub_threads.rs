@@ -13,7 +13,7 @@
 /// 可视化测试模式开关
 /// - true: 启动Web服务器进行K线数据可视化验证，禁用数据库持久化
 /// - false: 正常生产模式，启用数据库持久化，禁用Web服务器
-const VISUAL_TEST_MODE: bool = false;
+const VISUAL_TEST_MODE: bool = true;
 
 /// 测试模式开关（影响数据源）
 /// - true: 使用少量测试品种（BTCUSDT等8个品种）
@@ -22,11 +22,10 @@ const TEST_MODE: bool = false;
 
 use anyhow::Result;
 use chrono;
-use futures::{stream, StreamExt};
 use kline_server::klagg_sub_threads::{self as klagg, InitialKlineData, WorkerCmd};
 use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
-    api::{self, BinanceApi},
+    api::BinanceApi,
     db::Database,
     error::AppError,
     log::{self, init_ai_logging, shutdown_target_log_sender}, // 确保导入了 shutdown_target_log_sender
@@ -628,9 +627,9 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
         warn!(target: "应用生命周期", log_type="low_freq", "警告：程序运行在可视化测试模式，数据库持久化已禁用！");
     }
 
-    let api_client = Arc::new(BinanceApi::new());
+    let api_client = Arc::new(BinanceApi); // [修改] BinanceApi现在是无状态的
 
-    let db = Arc::new(Database::new(&config.database.database_path)?);
+    let db = Arc::new(Database::new_with_config(&config.database.database_path, config.persistence.queue_size)?);
     info!(target: "应用生命周期", log_type = "low_freq", path = %config.database.database_path, "数据库连接成功");
 
     let time_sync_manager = Arc::new(ServerTimeSyncManager::new());
@@ -665,46 +664,49 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
         "✅ [启动流程 | 2/4] 延迟追赶补齐完成"
     );
 
-    // --- 阶段三: 加载状态 ---
-    info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 3/4] 开始从数据库加载最新K线状态...");
-    let stage3_start = std::time::Instant::now();
-    let mut initial_klines = backfiller.load_latest_klines_from_db().await?;
-    let stage3_duration = stage3_start.elapsed();
-    info!(target: "应用生命周期", log_type="startup",
-        duration_ms = stage3_duration.as_millis(),
-        duration_s = stage3_duration.as_secs_f64(),
-        klines_count = initial_klines.len(),
-        "✅ [启动流程 | 3/4] 数据库状态加载完成"
-    );
-    if stage3_duration > std::time::Duration::from_secs(5) {
-        warn!(target: "应用生命周期", log_type="performance_alert",
-            duration_ms = stage3_duration.as_millis(),
-            "⚠️ 性能警告：DB状态加载超过5秒"
-        );
-    }
+    // --- 阶段三: 最终追赶 ---（暂时注释，测试性能）
+    // info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 3/4] 开始最终追赶补齐（最高并发模式）...");
+    // let stage3_start = std::time::Instant::now();
+    // // 使用轮次3，可以在backfill模块中为其配置更高的并发度
+    // backfiller.run_once_with_round(3).await?;
+    // let stage3_duration = stage3_start.elapsed();
+    // info!(target: "应用生命周期", log_type="startup",
+    //     duration_ms = stage3_duration.as_millis(),
+    //     duration_s = stage3_duration.as_secs_f64(),
+    //     "✅ [启动流程 | 3/4] 最终追赶补齐完成"
+    // );
 
-    // --- 阶段四: 微型补齐 ---
-    info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 4/4] 开始进行微型补齐...");
+    // ✨ [新增] 所有补齐轮次完成后，清理连接池
+    backfiller.cleanup_after_all_backfill_rounds().await;
+    let stage3_duration = std::time::Duration::from_secs(0); // 占位符
+
+    // --- 阶段三: 加载状态 ---（重新编号）
+    info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 3/3] 开始从数据库加载最新K线状态...");
     let stage4_start = std::time::Instant::now();
-    time_sync_manager.sync_time_once().await?; // 获取精确的结束时间
-    run_micro_backfill(&api_client, &time_sync_manager, &mut initial_klines, &periods).await?;
+    let initial_klines = backfiller.load_latest_klines_from_db().await?;
     let stage4_duration = stage4_start.elapsed();
     info!(target: "应用生命周期", log_type="startup",
         duration_ms = stage4_duration.as_millis(),
         duration_s = stage4_duration.as_secs_f64(),
-        "✅ [启动流程 | 4/4] 微型补齐完成"
+        klines_count = initial_klines.len(),
+        "✅ [启动流程 | 3/3] 数据库状态加载完成"
     );
+    if stage4_duration > std::time::Duration::from_secs(5) {
+        warn!(target: "应用生命周期", log_type="performance_alert",
+            duration_ms = stage4_duration.as_millis(),
+            "⚠️ 性能警告：DB状态加载超过5秒"
+        );
+    }
 
     let total_startup_duration = startup_data_prep_start.elapsed();
     info!(target: "应用生命周期", log_type="startup",
-        total_duration_ms = total_startup_duration.as_millis(),
-        total_duration_s = total_startup_duration.as_secs_f64(),
-        stage1_ms = stage1_duration.as_millis(),
-        stage2_ms = stage2_duration.as_millis(),
-        stage3_ms = stage3_duration.as_millis(),
-        stage4_ms = stage4_duration.as_millis(),
-        final_klines_count = initial_klines.len(),
-        "✅ [启动流程] 所有数据准备阶段完成 - 性能统计"
+        总耗时_秒 = total_startup_duration.as_secs_f64(),
+        总耗时_毫秒 = total_startup_duration.as_millis(),
+        历史补齐_秒 = stage1_duration.as_secs_f64(),
+        延迟追赶_秒 = stage2_duration.as_secs_f64(),
+        加载状态_秒 = stage4_duration.as_secs_f64(),
+        最终K线数量 = initial_klines.len(),
+        "✅ [启动流程] 所有数据准备阶段完成 - 性能统计（跳过第三阶段）"
     );
     let initial_klines_arc = Arc::new(initial_klines);
 
@@ -1089,7 +1091,8 @@ async fn initialize_symbol_indexing(
             .collect()
     } else {
         info!(target: "应用生命周期", "正在从币安API获取所有U本位永续合约品种...");
-        let (trading_symbols, delisted_symbols) = api.get_trading_usdt_perpetual_symbols().await?;
+        let temp_client = BinanceApi::create_new_client()?;
+        let (trading_symbols, delisted_symbols) = BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?;
 
         // 处理已下架的品种
         if !delisted_symbols.is_empty() {
@@ -1236,12 +1239,15 @@ async fn run_test_symbol_manager(
             low: 99.0,
             close: 100.5,
             volume: 10.0,
+            turnover: 1005.0, // 模拟成交额: close * volume = 100.5 * 10.0
         };
 
         let cmd = WorkerCmd::AddSymbol {
             symbol: symbol.clone(),
             global_index: new_global_index,
             initial_data,
+            // [修改] 为测试模式提供一个当前时间戳作为事件时间
+            first_kline_open_time: chrono::Utc::now().timestamp_millis(),
             ack: ack_tx,
         };
 
@@ -1338,12 +1344,19 @@ async fn run_production_symbol_manager(
                     low: parse_or_zero(&ticker.low_price, "low", &ticker.symbol),
                     close: parse_or_zero(&ticker.close_price, "close", &ticker.symbol),
                     volume: parse_or_zero(&ticker.total_traded_volume, "volume", &ticker.symbol),
+                    turnover: parse_or_zero(&ticker.total_traded_quote_volume, "turnover", &ticker.symbol),
                 };
+
+                // 从 ticker 中获取事件时间戳
+                // ticker.event_time 是 u64 类型，需要转换为 i64
+                let event_time = ticker.event_time as i64;
 
                 let cmd = WorkerCmd::AddSymbol {
                     symbol: ticker.symbol.clone(),
                     global_index: new_global_index,
                     initial_data,
+                    // [修改] 传递从 miniTicker 事件中获取的精确时间戳
+                    first_kline_open_time: event_time,
                     ack: ack_tx,
                 };
 
@@ -1390,250 +1403,5 @@ async fn run_production_symbol_manager(
     Ok(())
 }
 
-/// [启动流程-阶段四] 使用 aggTrades API 对内存中的K线进行微型补齐
-///
-/// 逻辑说明：
-/// 1. 对每个品种每个周期的最新K线，从其close_time+1开始获取aggTrades
-/// 2. 将这些交易数据聚合到对应的K线中，实现实时补齐
-/// 3. 确保每个K线都被独立处理，避免使用全局时间导致的遗漏
-#[instrument(target="应用生命周期", skip_all, name="run_micro_backfill")]
-async fn run_micro_backfill(
-    api: &Arc<BinanceApi>,
-    time_sync: &Arc<ServerTimeSyncManager>,
-    klines: &mut HashMap<(String, String), kline_server::klcommon::models::Kline>,
-    _periods: &Arc<Vec<String>>,
-) -> Result<()> {
-    if klines.is_empty() {
-        info!(target: "应用生命周期", log_type="startup", "没有K线数据需要微型补齐");
-        return Ok(());
-    }
 
-    let current_time = time_sync.get_calibrated_server_time();
-    let mut updated_count = 0;
-    let mut skipped_count = 0;
-
-    // 按品种分组，减少API调用次数
-    let mut symbols_to_process: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut symbol_time_ranges: HashMap<String, (i64, i64)> = HashMap::new();
-
-    // 第一步：分析每个品种需要补齐的时间范围
-    for ((symbol, _period), kline) in klines.iter() {
-        let start_time = kline.close_time + 1;
-        if current_time > start_time {
-            symbols_to_process.insert(symbol.clone());
-            let (existing_start, existing_end) = symbol_time_ranges.get(symbol).unwrap_or(&(i64::MAX, 0));
-            symbol_time_ranges.insert(
-                symbol.clone(),
-                (start_time.min(*existing_start), current_time.max(*existing_end))
-            );
-        }
-    }
-
-    if symbols_to_process.is_empty() {
-        info!(target: "应用生命周期", log_type="startup", "所有K线都已是最新状态，无需微型补齐");
-        return Ok(());
-    }
-
-    info!(target: "应用生命周期", log_type="startup",
-        symbols_to_process = symbols_to_process.len(),
-        "开始为 {} 个品种获取aggTrades进行微型补齐", symbols_to_process.len()
-    );
-
-    // 第二步：并发获取每个品种的aggTrades
-    let trades_by_symbol: HashMap<String, Vec<api::AggTrade>> = stream::iter(symbols_to_process)
-        .map(|symbol| async {
-            let (start_time, end_time) = symbol_time_ranges.get(&symbol).unwrap();
-            let trades = api.get_agg_trades(symbol.clone(), Some(*start_time), Some(*end_time), None).await;
-            (symbol, trades)
-        })
-        .buffer_unordered(20)
-        .filter_map(|(symbol, result)| async {
-            match result {
-                Ok(trades) => {
-                    if !trades.is_empty() {
-                        Some((symbol, trades))
-                    } else {
-                        None
-                    }
-                },
-                Err(e) => {
-                    warn!(target: "应用生命周期", log_type="startup", %symbol, error = %e, "微型补齐时获取aggTrades失败");
-                    None
-                }
-            }
-        })
-        .collect::<HashMap<_, _>>()
-        .await;
-
-    // 第三步：将交易数据聚合到对应的K线中
-    let mut symbol_period_stats: HashMap<String, HashMap<String, (u32, u32, f64)>> = HashMap::new(); // symbol -> period -> (trades_count, updates_count, volume_added)
-
-    for ((symbol, period), kline) in klines.iter_mut() {
-        let kline_start_time = kline.open_time;
-        let kline_end_time = kline.close_time;
-        let original_close = kline.close.clone();
-        let original_volume: f64 = kline.volume.parse().unwrap_or(0.0);
-
-        let mut trades_processed = 0u32;
-        let mut volume_added = 0.0f64;
-        let mut has_updates = false;
-
-        if let Some(trades) = trades_by_symbol.get(symbol) {
-            for trade in trades {
-                // 根据K线是否已结束，采用不同的时间范围判断逻辑
-                let should_process_trade = if current_time <= kline_end_time {
-                    // K线还未结束，处理从数据库中最新记录时间之后的所有交易
-                    trade.timestamp_ms > kline_end_time && trade.timestamp_ms <= current_time
-                } else {
-                    // K线已结束，处理K线结束时间之后的交易
-                    trade.timestamp_ms > kline_end_time && trade.timestamp_ms <= current_time
-                };
-
-                if should_process_trade {
-                    let trade_period_start = api::get_aligned_time(trade.timestamp_ms, period);
-
-                    // 如果交易属于当前K线的时间周期，则更新当前K线
-                    if trade_period_start == kline_start_time {
-                        let price: f64 = trade.price.parse().unwrap_or(0.0);
-                        let qty: f64 = trade.quantity.parse().unwrap_or(0.0);
-                        let high: f64 = kline.high.parse().unwrap_or(0.0);
-                        let low: f64 = kline.low.parse().unwrap_or(f64::MAX);
-
-                        kline.high = high.max(price).to_string();
-                        kline.low = low.min(price).to_string();
-                        kline.close = trade.price.clone();
-                        kline.volume = (kline.volume.parse::<f64>().unwrap_or(0.0) + qty).to_string();
-                        kline.quote_asset_volume = (kline.quote_asset_volume.parse::<f64>().unwrap_or(0.0) + price * qty).to_string();
-
-                        trades_processed += 1;
-                        volume_added += qty;
-                        has_updates = true;
-                    }
-                }
-            }
-        }
-
-        // 记录每个品种每个周期的处理结果
-        if has_updates {
-            updated_count += 1;
-            let new_volume: f64 = kline.volume.parse().unwrap_or(0.0);
-            info!(target: "应用生命周期", log_type="startup",
-                symbol = %symbol,
-                period = %period,
-                trades_processed = trades_processed,
-                volume_added = volume_added,
-                original_close = %original_close,
-                new_close = %kline.close,
-                original_volume = original_volume,
-                new_volume = new_volume,
-                "✅ 微型补齐成功"
-            );
-        } else {
-            skipped_count += 1;
-            let has_symbol_trades = trades_by_symbol.contains_key(symbol);
-            let trades_count = if has_symbol_trades {
-                trades_by_symbol.get(symbol).map(|t| t.len()).unwrap_or(0)
-            } else { 0 };
-
-            info!(target: "应用生命周期", log_type="startup",
-                symbol = %symbol,
-                period = %period,
-                kline_start_time = kline_start_time,
-                kline_end_time = kline_end_time,
-                current_time = current_time,
-                gap_ms = current_time - kline_end_time,
-                has_symbol_trades = has_symbol_trades,
-                trades_count = trades_count,
-                "⏭️ 微型补齐跳过（无新交易或时间范围外）"
-            );
-
-            // 如果有交易数据但没有更新，打印交易详情用于调试
-            if has_symbol_trades && trades_count > 0 {
-                if let Some(trades) = trades_by_symbol.get(symbol) {
-                    for (i, trade) in trades.iter().take(3).enumerate() { // 只打印前3个交易
-                        let trade_period_start = api::get_aligned_time(trade.timestamp_ms, period);
-                        info!(target: "应用生命周期", log_type="startup",
-                            symbol = %symbol,
-                            period = %period,
-                            trade_index = i,
-                            trade_timestamp = trade.timestamp_ms,
-                            trade_period_start = trade_period_start,
-                            kline_start_time = kline_start_time,
-                            trade_in_range = trade.timestamp_ms > kline_end_time && trade.timestamp_ms <= current_time,
-                            period_match = trade_period_start == kline_start_time,
-                            trade_price = %trade.price,
-                            "🔍 交易详情调试"
-                        );
-                    }
-                }
-            }
-        }
-
-        // 统计数据收集
-        symbol_period_stats
-            .entry(symbol.clone())
-            .or_insert_with(HashMap::new)
-            .insert(period.clone(), (trades_processed, if has_updates { 1 } else { 0 }, volume_added));
-    }
-
-    // 第四步：生成详细的汇总统计
-    let mut total_trades_processed = 0u32;
-    let mut total_volume_added = 0.0f64;
-    let mut symbols_with_updates = 0u32;
-    let mut periods_with_updates = 0u32;
-
-    for (symbol, period_stats) in &symbol_period_stats {
-        let mut symbol_has_updates = false;
-        let mut symbol_trades = 0u32;
-        let mut symbol_volume = 0.0f64;
-
-        for (_period, (trades, updates, volume)) in period_stats {
-            total_trades_processed += trades;
-            total_volume_added += volume;
-            symbol_trades += trades;
-            symbol_volume += volume;
-
-            if *updates > 0 {
-                periods_with_updates += 1;
-                symbol_has_updates = true;
-            }
-        }
-
-        if symbol_has_updates {
-            symbols_with_updates += 1;
-            info!(target: "应用生命周期", log_type="startup",
-                symbol = %symbol,
-                periods_updated = period_stats.values().filter(|(_, updates, _)| *updates > 0).count(),
-                total_periods = period_stats.len(),
-                symbol_trades = symbol_trades,
-                symbol_volume = symbol_volume,
-                "📊 品种微型补齐汇总"
-            );
-        }
-    }
-
-    // 最终汇总统计
-    info!(target: "应用生命周期", log_type="startup",
-        total_klines = klines.len(),
-        updated_klines = updated_count,
-        skipped_klines = skipped_count,
-        symbols_with_updates = symbols_with_updates,
-        periods_with_updates = periods_with_updates,
-        total_trades_processed = total_trades_processed,
-        total_volume_added = total_volume_added,
-        update_rate = format!("{:.1}%", (updated_count as f64 / klines.len() as f64) * 100.0),
-        "🎯 微型补齐最终统计汇总"
-    );
-
-    if updated_count == 0 {
-        info!(target: "应用生命周期", log_type="startup", "ℹ️ 所有K线均为最新状态，无需微型补齐");
-    } else {
-        info!(target: "应用生命周期", log_type="startup",
-            "✅ 微型补齐完成，成功更新了 {} 个品种的 {} 条K线记录",
-            symbols_with_updates, updated_count
-        );
-    }
-
-    Ok(())
-}
 

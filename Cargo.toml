@@ -20,9 +20,7 @@ path = "src/bin/kline_data_service.rs"
 name = "klagg_sub_threads"
 path = "src/bin/klagg_sub_threads.rs"
 
-[[bin]]
-name = "test_aggtrade_time"
-path = "src/bin/test_aggtrade_time.rs"
+
 
 
 

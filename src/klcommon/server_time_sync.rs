@@ -28,7 +28,7 @@ impl ServerTimeSyncManager {
     #[instrument(target = "服务器校时", skip_all)]
     pub fn new() -> Self {
         Self {
-            api: BinanceApi::new(),
+            api: BinanceApi, // [修改] BinanceApi现在是无状态的
             time_diff: Arc::new(AtomicI64::new(0)), // 初始时间差为0
             network_delay: Arc::new(AtomicI64::new(0)), // 初始网络延迟为0
             last_sync_time: Arc::new(AtomicI64::new(0)), // 初始最后同步时间为0
@@ -111,7 +111,8 @@ impl ServerTimeSyncManager {
         let start_time = Instant::now();
 
         // 与币安服务器时间同步
-        let server_time = self.api.get_server_time().await?;
+        let temp_client = BinanceApi::create_new_client()?;
+        let server_time = BinanceApi::get_server_time(&temp_client).await?;
 
         // 计算网络延迟（往返时间的一半）
         let network_delay = start_time.elapsed().as_millis() as i64 / 2;
@@ -189,7 +190,14 @@ impl ServerTimeSyncManager {
                 let start_time = Instant::now();
 
                 // 获取服务器时间
-                match api.get_server_time().await {
+                let temp_client = match BinanceApi::create_new_client() {
+                    Ok(client) => client,
+                    Err(e) => {
+                        error!(target: "服务器校时", "创建HTTP客户端失败: {}", e);
+                        continue;
+                    }
+                };
+                match BinanceApi::get_server_time(&temp_client).await {
                     Ok(server_time) => {
                         // 计算网络延迟（往返时间的一半）
                         let new_network_delay = start_time.elapsed().as_millis() as i64 / 2;

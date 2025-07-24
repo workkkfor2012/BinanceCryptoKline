@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use once_cell::sync::Lazy;
 use tokio::task;
-use tracing::{Span, debug, info};
+use tracing::{Span, debug, info, trace};
 use kline_macros::perf_profile;
 use std::collections::HashMap;
 
@@ -223,6 +223,11 @@ pub struct Database {
 impl Database {
     /// Create a new database connection with WAL mode and optimized settings
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
+        Self::new_with_config(db_path, 5000) // 默认队列大小
+    }
+
+    /// Create a new database connection with custom queue size
+    pub fn new_with_config<P: AsRef<Path>>(db_path: P, queue_size: usize) -> Result<Self> {
         let db_path = db_path.as_ref();
 
         if let Some(parent) = db_path.parent() {
@@ -244,7 +249,7 @@ impl Database {
             .build(manager)
             .map_err(|e| AppError::DatabaseError(format!("Failed to create connection pool: {}", e)))?;
 
-        let (sender, receiver) = mpsc::channel(5000);
+        let (sender, receiver) = mpsc::channel(queue_size);
 
         // [MODIFIED] 直接创建处理器并启动，不再保留其状态
         let processor = DbWriteQueueProcessor::new(receiver, pool.clone());
@@ -327,7 +332,51 @@ impl Database {
         perform_batch_upsert(&mut conn, klines_to_save)
     }
 
-    /// [MODIFIED] 使用写入队列异步保存K线数据
+    /// 真正的异步保存K线数据（发后不管模式）
+    #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval, kline_count = klines.len()))]
+    pub async fn save_klines_async(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<()> {
+        if klines.is_empty() {
+            return Ok(());
+        }
+
+        // 确保表存在，这是一个快速的内存检查
+        self.ensure_symbol_table(symbol, interval)?;
+
+        // 将数据打包成统一的批量格式
+        let klines_to_save: Vec<(String, String, Kline)> = klines.iter()
+            .map(|k| (symbol.to_string(), interval.to_string(), k.clone()))
+            .collect();
+
+        let kline_count = klines_to_save.len();
+
+        // 创建一个不需要等待结果的任务
+        let (result_sender, _result_receiver) = oneshot::channel();
+
+        let task = WriteTask {
+            klines_to_save,
+            result_sender,
+            span: Span::current(),
+        };
+
+        // 发送到队列后立即返回，不等待写入完成
+        if let Err(e) = self.write_queue_sender.send(task).await {
+            let queue_error = AppError::DatabaseError(format!("无法将写入任务添加到队列: {}", e));
+            return Err(queue_error);
+        }
+
+        // 立即返回成功，不等待数据库写入
+        trace!(
+            log_type = "high_freq",
+            symbol = %symbol,
+            interval = %interval,
+            kline_count = kline_count,
+            "K线数据已提交到写入队列"
+        );
+
+        Ok(())
+    }
+
+    /// [MODIFIED] 使用写入队列异步保存K线数据（等待结果）
     #[perf_profile(skip_all, fields(symbol = %symbol, interval = %interval, kline_count = klines.len()))]
     pub async fn save_klines(&self, symbol: &str, interval: &str, klines: &[Kline]) -> Result<usize> {
         if klines.is_empty() {

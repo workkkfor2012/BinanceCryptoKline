@@ -226,4 +226,36 @@ impl AppError {
     }
 }
 
+impl Clone for AppError {
+    fn clone(&self) -> Self {
+        match self {
+            AppError::ApiError(msg) => AppError::ApiError(msg.clone()),
+            AppError::HttpError(e) => AppError::ApiError(format!("HTTP错误: {}", e)),
+            AppError::IoError(e) => AppError::ApiError(format!("IO错误: {}", e)),
+            AppError::JsonError(e) => AppError::ApiError(format!("JSON解析错误: {}", e)),
+            AppError::CsvError(e) => AppError::ApiError(format!("CSV错误: {}", e)),
+            AppError::TimeParseError(e) => AppError::ApiError(format!("时间解析错误: {}", e)),
+            AppError::ConfigError(msg) => AppError::ConfigError(msg.clone()),
+            AppError::DataError(msg) => AppError::DataError(msg.clone()),
+            AppError::DatabaseError(msg) => AppError::DatabaseError(msg.clone()),
+            AppError::WebSocketError(msg) => AppError::WebSocketError(msg.clone()),
+            AppError::UrlParseError(e) => AppError::ApiError(format!("URL解析错误: {}", e)),
+            AppError::WebSocketProtocolError(msg) => AppError::WebSocketProtocolError(msg.clone()),
+            AppError::HttpRequestError(e) => AppError::ApiError(format!("HTTP请求错误: {}", e)),
+            AppError::AddrParseError(e) => AppError::ApiError(format!("地址解析错误: {}", e)),
+            AppError::SqliteError(e) => AppError::DatabaseError(format!("SQLite错误: {}", e)),
+            AppError::WebServerError(msg) => AppError::WebServerError(msg.clone()),
+            AppError::AggregationError(msg) => AppError::AggregationError(msg.clone()),
+            AppError::ParseError(msg) => AppError::ParseError(msg.clone()),
+            AppError::ChannelError(msg) => AppError::ChannelError(msg.clone()),
+            AppError::ActorError(msg) => AppError::ActorError(msg.clone()),
+            AppError::ChannelClosed(msg) => AppError::ChannelClosed(msg.clone()),
+            AppError::Timeout(msg) => AppError::Timeout(msg.clone()),
+            AppError::InvalidInput(msg) => AppError::InvalidInput(msg.clone()),
+            AppError::InitializationError(msg) => AppError::InitializationError(msg.clone()),
+            AppError::Unknown(msg) => AppError::Unknown(msg.clone()),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, AppError>;

@@ -25,7 +25,7 @@ impl LatestKlineUpdater {
         time_sync_manager: Arc<ServerTimeSyncManager>,
         concurrency: usize,
     ) -> Self {
-        let api = BinanceApi::new();
+        let api = BinanceApi; // [修改] BinanceApi现在是无状态的
         Self {
             db,
             api,
@@ -94,7 +94,8 @@ impl LatestKlineUpdater {
     /// 更新所有品种、所有周期的最新一根K线
     async fn update_latest_klines(&self) -> Result<usize> {
         // 1. 获取所有正在交易的U本位永续合约交易对
-        let (all_symbols, delisted_symbols) = match self.api.get_trading_usdt_perpetual_symbols().await {
+        let temp_client = BinanceApi::create_new_client()?;
+        let (all_symbols, delisted_symbols) = match BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await {
             Ok((trading, delisted)) => (trading, delisted),
             Err(e) => {
                 error!("获取交易对信息失败: {}", e);
@@ -184,7 +185,14 @@ impl LatestKlineUpdater {
                 let interval = task.interval.clone();
 
                 // 下载任务
-                match api_clone.download_continuous_klines(&task).await {
+                let temp_client = match BinanceApi::create_new_client() {
+                    Ok(client) => client,
+                    Err(e) => {
+                        error!("{}/{}: 创建HTTP客户端失败: {}", symbol, interval, e);
+                        return Err(e);
+                    }
+                };
+                match BinanceApi::download_continuous_klines(&temp_client, &task).await {
                     Ok(klines) => {
                         if klines.is_empty() {
                             debug!("{}/{}: 没有新的K线数据", symbol, interval);

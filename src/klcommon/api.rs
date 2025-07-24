@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
-use tracing::{warn, error, info}; // 导入 warn, error 和 info 宏
+use tracing::{warn, error, info, trace}; // 导入 warn, error, info 和 trace 宏
 use kline_macros::perf_profile;
 use chrono::TimeZone; // 添加TimeZone导入
 
@@ -85,57 +85,30 @@ pub struct ServerTime {
     pub server_time: i64,
 }
 
-/// 币安API客户端
-#[derive(Clone, Debug)]
-pub struct BinanceApi {
-    api_url: String,
-}
+/// 币安API客户端 - [重构] 变为无状态的静态工具集
+#[derive(Debug, Clone, Copy)]
+pub struct BinanceApi; // 不再有任何字段
 
 impl BinanceApi {
-    /// 创建新的API客户端实例
-    pub fn new() -> Self {
-        let api_url = "https://fapi.binance.com".to_string();
-        Self { api_url }
-    }
-
-    /// 创建新的API客户端实例（带自定义URL）
-    pub fn new_with_url(api_url: String) -> Self {
-        Self { api_url }
-    }
-
-    /// 创建一个新的HTTP客户端实例（每次请求都会创建新的连接）
-    fn create_client(&self) -> Result<Client> {
-        // 创建带有超时设置的HTTP客户端，禁用连接池
+    /// 创建一个新的 reqwest::Client 实例（启用连接池）
+    pub fn create_new_client() -> Result<Client> {
         let client_builder = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
-            .pool_max_idle_per_host(0) // 设置为0，禁用连接池
-            .pool_idle_timeout(Duration::from_secs(0)); // 设置空闲超时为0，确保连接不会被重用
+            .timeout(Duration::from_secs(5))        // [优化] 总超时从30秒减少到15秒
+            .connect_timeout(Duration::from_secs(2)); // [优化] 连接超时从10秒减少到5秒
 
-        // 添加代理设置
         let proxy_url = get_proxy_url();
-        let client = match reqwest::Proxy::all(&proxy_url) {
-            Ok(proxy) => {
-                client_builder
-                    .proxy(proxy)
-                    .build()
-                    .map_err(|e| AppError::ApiError(format!("创建带代理的HTTP客户端失败: {}", e)))?
-            },
-            Err(_e) => {
-                client_builder
-                    .build()
-                    .map_err(|e| AppError::ApiError(format!("创建HTTP客户端失败: {}", e)))?
-            }
-        };
-
-        Ok(client)
+        match reqwest::Proxy::all(&proxy_url) {
+            Ok(proxy) => client_builder.proxy(proxy).build(),
+            Err(_) => client_builder.build(),
+        }
+        .map_err(|e| AppError::ApiError(format!("创建HTTP客户端失败: {}", e)))
     }
 
-    /// 获取交易所信息
+    /// [重构] 获取交易所信息 - 接受 client 作为参数
     #[perf_profile]
-    pub async fn get_exchange_info(&self) -> Result<ExchangeInfo> {
-        let fapi_url = format!("{}/fapi/v1/exchangeInfo", self.api_url);
-        let client = self.create_client()?;
+    pub async fn get_exchange_info(client: &Client) -> Result<ExchangeInfo> {
+        let api_url = "https://fapi.binance.com";
+        let fapi_url = format!("{}/fapi/v1/exchangeInfo", api_url);
 
         let request = client.get(&fapi_url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
@@ -159,14 +132,14 @@ impl BinanceApi {
         Ok(exchange_info)
     }
 
-    /// 获取正在交易的U本位永续合约，同时返回需要删除的已下架品种
+    /// [重构] 获取正在交易的U本位永续合约，同时返回需要删除的已下架品种 - 接受 client 作为参数
     #[perf_profile]
-    pub async fn get_trading_usdt_perpetual_symbols(&self) -> Result<(Vec<String>, Vec<String>)> {
+    pub async fn get_trading_usdt_perpetual_symbols(client: &Client) -> Result<(Vec<String>, Vec<String>)> {
         const MAX_RETRIES: usize = 5;
         const RETRY_INTERVAL: u64 = 1;
 
         for retry in 0..MAX_RETRIES {
-            match self.get_exchange_info().await {
+            match Self::get_exchange_info(client).await {
                 Ok(exchange_info) => {
                     let mut trading_symbols = Vec::new();
                     let mut delisted_symbols = Vec::new();
@@ -236,9 +209,10 @@ impl BinanceApi {
         Err(AppError::ApiError("获取U本位永续合约交易对失败，已达到最大重试次数".to_string()))
     }
 
-    /// 下载连续合约K线数据 (简化版，无内部重试)
+    /// [重构] 下载连续合约K线数据 - 接受 client 作为参数
     #[perf_profile(skip_all, fields(symbol = %task.symbol, interval = %task.interval))]
-    pub async fn download_continuous_klines(&self, task: &DownloadTask) -> Result<Vec<Kline>> {
+    pub async fn download_continuous_klines(client: &Client, task: &DownloadTask) -> Result<Vec<Kline>> {
+        let api_url = "https://fapi.binance.com";
         // 构建URL参数
         let mut url_params = format!(
             "pair={}&contractType=PERPETUAL&interval={}&limit={}",
@@ -256,10 +230,10 @@ impl BinanceApi {
         }
 
         // 使用fapi.binance.com
-        let fapi_url = format!("{}/fapi/v1/continuousKlines?{}", self.api_url, url_params);
+        let fapi_url = format!("{}/fapi/v1/continuousKlines?{}", api_url, url_params);
 
         // 记录下载URL到日志
-        info!(
+        trace!(
             log_type = "low_freq",
             message = "开始下载K线数据",
             symbol = %task.symbol,
@@ -273,9 +247,6 @@ impl BinanceApi {
             }).unwrap_or_else(|| "无限制".to_string()),
             limit = task.limit,
         );
-
-        // 创建HTTP客户端
-        let client = self.create_client()?;
 
         // 构建请求
         let request = client.get(&fapi_url)
@@ -314,14 +285,13 @@ impl BinanceApi {
         Ok(klines)
     }
 
-    /// 获取币安服务器时间
+    /// [重构] 获取币安服务器时间 - 接受 client 作为参数
     #[perf_profile]
-    pub async fn get_server_time(&self) -> Result<ServerTime> {
-        let fapi_url = format!("{}/fapi/v1/time", self.api_url);
+    pub async fn get_server_time(client: &Client) -> Result<ServerTime> {
+        let api_url = "https://fapi.binance.com";
+        let fapi_url = format!("{}/fapi/v1/time", api_url);
         const MAX_RETRIES: usize = 5;
         const RETRY_INTERVAL: u64 = 1;
-
-        let client = self.create_client()?;
 
         for retry in 0..MAX_RETRIES {
             let request = client.get(&fapi_url)
@@ -368,22 +338,22 @@ impl BinanceApi {
         Err(AppError::ApiError("获取服务器时间失败，已达到最大重试次数".to_string()))
     }
 
-    /// 获取归集交易记录 (aggTrades)
+    /// [重构] 获取归集交易记录 (aggTrades) - 接受 client 作为参数
     #[perf_profile(skip_all, fields(symbol = %symbol))]
     pub async fn get_agg_trades(
-        &self,
+        client: &Client,
         symbol: String,
         start_time: Option<i64>,
         end_time: Option<i64>,
         limit: Option<u16>,
     ) -> Result<Vec<AggTrade>> {
+        let api_url = "https://fapi.binance.com";
         let mut url_params = format!("symbol={}", symbol);
         if let Some(st) = start_time { url_params.push_str(&format!("&startTime={}", st)); }
         if let Some(et) = end_time { url_params.push_str(&format!("&endTime={}", et)); }
         url_params.push_str(&format!("&limit={}", limit.unwrap_or(1000)));
 
-        let fapi_url = format!("{}/fapi/v1/aggTrades?{}", self.api_url, url_params);
-        let client = self.create_client()?;
+        let fapi_url = format!("{}/fapi/v1/aggTrades?{}", api_url, url_params);
         let response = client.get(&fapi_url).send().await?;
 
         if !response.status().is_success() {

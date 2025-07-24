@@ -10,6 +10,10 @@ use futures::{stream, StreamExt};
 use tracing::{info, warn}; // 确保导入了 info 和 warn 宏
 use kline_macros::perf_profile; // 导入性能分析宏
 use chrono::TimeZone; // 添加TimeZone导入
+// [新增] 连接池管理相关导入
+use reqwest::Client;
+use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicUsize as AtomicUsizeOrdering, Ordering as AtomicOrdering};
 
 // 全局统计变量，用于跟踪补齐K线的数量和日志显示
 // 格式: (补齐K线总数, 最后日志时间, 交易对统计Map)
@@ -28,7 +32,10 @@ static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
 const CONCURRENCY: usize = 20; // 第一次补齐并发数
-const SECOND_ROUND_CONCURRENCY: usize = 60; // 第二次补齐并发数（3倍），因为下载的K线数量少
+const SECOND_ROUND_CONCURRENCY: usize = 400; // 第二次补齐并发数
+
+// [新增] 连接池相关常量
+const POOL_TARGET_SIZE: usize = 200; // 目标池大小
 
 // 任务执行结果的枚举，方便模式匹配
 #[derive(Debug)]
@@ -40,39 +47,174 @@ enum TaskResult {
     },
 }
 
+// ✨ [新增] 任务重试跟踪结构
+#[derive(Debug, Clone)]
+struct TaskRetryTracker {
+    task: DownloadTask,
+    error: AppError,
+    retry_count: u32,
+}
+
+impl TaskRetryTracker {
+    fn new(task: DownloadTask, error: AppError) -> Self {
+        Self {
+            task,
+            error,
+            retry_count: 1,
+        }
+    }
+
+    fn increment_retry(&mut self, new_error: AppError) {
+        self.retry_count += 1;
+        self.error = new_error;
+    }
+
+    fn should_retry(&self, max_retries_per_task: u32) -> bool {
+        self.retry_count <= max_retries_per_task && self.error.is_retryable()
+    }
+}
+
 /// K线数据补齐模块
 #[derive(Debug)]
 pub struct KlineBackfiller {
     db: Arc<Database>,
-    api: BinanceApi,
+    // [修改] 不再持有 api 实例，而是持有客户端池
+    client_pool: Arc<RwLock<Vec<Arc<Client>>>>,
+    pool_next_index: Arc<AtomicUsizeOrdering>, // 用于轮询，使用Arc包装以支持Clone
+    pool_maintenance_stop: Arc<std::sync::atomic::AtomicBool>, // 停止后台维护任务的标志
     intervals: Vec<String>,
     test_mode: bool,
     test_symbols: Vec<String>,
 }
 
+impl Clone for KlineBackfiller {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            client_pool: self.client_pool.clone(),
+            pool_next_index: self.pool_next_index.clone(),
+            pool_maintenance_stop: self.pool_maintenance_stop.clone(),
+            intervals: self.intervals.clone(),
+            test_mode: self.test_mode,
+            test_symbols: self.test_symbols.clone(),
+        }
+    }
+}
+
 impl KlineBackfiller {
     /// 创建新的K线补齐器实例
     pub fn new(db: Arc<Database>, intervals: Vec<String>) -> Self {
-        let api = BinanceApi::new();
-        Self {
+        let backfiller = Self {
             db,
-            api,
+            client_pool: Arc::new(RwLock::new(Vec::with_capacity(POOL_TARGET_SIZE))),
+            pool_next_index: Arc::new(AtomicUsizeOrdering::new(0)),
+            pool_maintenance_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             intervals,
             test_mode: false,
             test_symbols: vec![],
-        }
+        };
+
+        // [新增] 启动后台池填充和维护任务
+        backfiller.start_pool_maintenance_task();
+
+        backfiller
     }
 
     /// 创建测试模式的K线补齐器实例
     pub fn new_test_mode(db: Arc<Database>, intervals: Vec<String>, test_symbols: Vec<String>) -> Self {
-        let api = BinanceApi::new();
-        Self {
+        let backfiller = Self {
             db,
-            api,
+            client_pool: Arc::new(RwLock::new(Vec::with_capacity(POOL_TARGET_SIZE))),
+            pool_next_index: Arc::new(AtomicUsizeOrdering::new(0)),
+            pool_maintenance_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             intervals,
             test_mode: true,
             test_symbols,
+        };
+
+        // [新增] 启动后台池填充和维护任务
+        backfiller.start_pool_maintenance_task();
+
+        backfiller
+    }
+
+    /// [新增] 启动后台任务来填充和维护客户端池
+    fn start_pool_maintenance_task(&self) {
+        let pool_clone = self.client_pool.clone();
+        let stop_flag = self.pool_maintenance_stop.clone();
+        tokio::spawn(async move {
+            info!(target: "client_pool", "客户端池维护任务启动，目标大小: {}", POOL_TARGET_SIZE);
+            loop {
+                // 检查停止标志
+                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    info!(target: "client_pool", "收到停止信号，客户端池维护任务退出");
+                    break;
+                }
+                let current_size;
+                {
+                    // 使用单独的块来限制读锁的范围
+                    let pool_guard = pool_clone.read().await;
+                    current_size = pool_guard.len();
+                }
+
+                if current_size >= POOL_TARGET_SIZE {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+
+                if let Ok(new_client) = BinanceApi::create_new_client() {
+                    // [修复] 移除不必要的健康检查，新建的client本身就是健康的
+                    let mut pool_guard = pool_clone.write().await;
+                    if pool_guard.len() < POOL_TARGET_SIZE {
+                        pool_guard.push(Arc::new(new_client));
+                        info!(target: "client_pool", "成功添加新客户端到池中，当前大小: {}", pool_guard.len());
+                    }
+                } else {
+                    // 创建客户端失败时稍作等待
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        });
+    }
+
+    /// [新增] 从池中获取一个客户端用于请求
+    async fn get_client_from_pool(&self) -> Option<Arc<Client>> {
+        let pool_guard = self.client_pool.read().await;
+        if pool_guard.is_empty() {
+            return None;
         }
+        let index = self.pool_next_index.fetch_add(1, AtomicOrdering::Relaxed) % pool_guard.len();
+        pool_guard.get(index).cloned()
+    }
+
+    /// [新增] 当客户端请求失败时，从池中移除它
+    async fn remove_client_from_pool(&self, client_to_remove: &Arc<Client>) {
+        let mut pool_guard = self.client_pool.write().await;
+        let initial_len = pool_guard.len();
+        pool_guard.retain(|c| !Arc::ptr_eq(c, client_to_remove));
+        if pool_guard.len() < initial_len {
+            warn!(target: "client_pool", "检测到失败，已从池中移除一个客户端，当前大小: {}", pool_guard.len());
+        }
+    }
+
+    /// [新增] 清理连接池，释放所有连接（私有方法）
+    async fn cleanup_client_pool(&self) {
+        // 首先停止后台维护任务
+        self.pool_maintenance_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // 然后清理连接池
+        let mut pool_guard = self.client_pool.write().await;
+        let pool_size = pool_guard.len();
+        pool_guard.clear();
+        if pool_size > 0 {
+            info!(target: "client_pool", "连接池已清理，释放了 {} 个连接，后台维护任务已停止", pool_size);
+        }
+    }
+
+    /// [新增] 公共方法：完成所有补齐任务后清理连接池
+    pub async fn cleanup_after_all_backfill_rounds(&self) {
+        info!(log_type = "low_freq", message = "所有补齐轮次完成，开始清理连接池...");
+        self.cleanup_client_pool().await;
     }
 
     /// 更新补齐K线的统计信息并每30秒输出一次摘要日志
@@ -148,7 +290,9 @@ impl KlineBackfiller {
         let exchange_info = if self.test_mode {
             None // 测试模式下不需要获取交易所信息
         } else {
-            Some(self.api.get_exchange_info().await?)
+            // [修改] 使用临时客户端获取交易所信息
+            let temp_client = BinanceApi::create_new_client()?;
+            Some(BinanceApi::get_exchange_info(&temp_client).await?)
         };
 
         let all_symbols = self.get_symbols_with_exchange_info(exchange_info.as_ref()).await?;
@@ -173,8 +317,12 @@ impl KlineBackfiller {
             return Ok(());
         }
 
-        // 根据轮次选择并发数：第一轮使用标准并发，第二轮及以后使用高并发
-        let concurrency = if round == 1 { CONCURRENCY } else { SECOND_ROUND_CONCURRENCY };
+        // 根据轮次选择并发数
+        let concurrency = match round {
+            1 => CONCURRENCY,
+            2 => SECOND_ROUND_CONCURRENCY,
+            _ => SECOND_ROUND_CONCURRENCY, // 默认使用高并发
+        };
         info!(
             log_type = "low_freq",
             message = "开始执行补齐任务",
@@ -198,52 +346,140 @@ impl KlineBackfiller {
             success_rate = format!("{:.1}%", ((tasks.len() - failed_tasks.len()) as f64 / tasks.len() as f64) * 100.0),
         );
 
-        // --- 新增：定义重试参数 ---
-        const MAX_RETRIES: u32 = 3; // 初始轮次 + 最多3轮重试
+        // --- 新增：基于轮次的重试策略 ---
+        const MAX_RETRIES: u32 = 3; // 最多3轮重试
+        const MAX_RETRIES_PER_TASK: u32 = 5; // 单个任务最多重试5次
 
-        // --- 重构后的任务执行与重试逻辑 ---
-        // 执行第一轮下载，并将失败的任务收集起来
-        let mut failed_tasks_with_errors = failed_tasks;
+        // ✨ [优化] 第一轮不重试，直接返回失败任务给第二轮处理
+        if round == 1 {
+            info!(
+                log_type = "low_freq",
+                message = "第一轮补齐策略：快速批量下载，失败任务留给第二轮处理",
+                failed_count = failed_tasks.len(),
+                note = "第一轮专注于速度，不进行重试"
+            );
 
-        // --- 新的、统一的重试循环 ---
+            // 直接报告最终失败，不进行重试
+            if !failed_tasks.is_empty() {
+                self.report_final_failures(failed_tasks);
+            }
+
+            return Ok(());
+        }
+
+        // --- 第二轮及以后：完整的重试逻辑 ---
+        info!(
+            log_type = "low_freq",
+            message = "第二轮补齐策略：精确补齐，启用完整重试机制",
+            failed_count = failed_tasks.len(),
+        );
+
+        // 执行重试逻辑，将失败的任务转换为跟踪器
+        let mut task_trackers: Vec<TaskRetryTracker> = failed_tasks
+            .into_iter()
+            .map(|(task, error)| TaskRetryTracker::new(task, error))
+            .collect();
+
+        // --- 改进的智能重试循环 ---
         for i in 1..=MAX_RETRIES {
-            if failed_tasks_with_errors.is_empty() {
+            if task_trackers.is_empty() {
                 info!(log_type = "low_freq", message = "所有任务已成功，提前结束重试循环。");
-                break; // 没有失败的任务，退出循环
+                break;
+            }
+
+            // ✨ [新增] 智能过滤：基于重试次数和错误类型过滤
+            let current_trackers = std::mem::take(&mut task_trackers);
+            let (retryable_trackers, exhausted_trackers): (Vec<_>, Vec<_>) = current_trackers
+                .into_iter()
+                .partition(|tracker| tracker.should_retry(MAX_RETRIES_PER_TASK));
+
+            if !exhausted_trackers.is_empty() {
+                warn!(
+                    log_type = "low_freq",
+                    message = "发现已达到重试上限或不可重试的任务",
+                    exhausted_count = exhausted_trackers.len(),
+                );
+                // 将已耗尽重试次数的任务加入最终失败列表
+                let final_failures: Vec<(DownloadTask, AppError)> = exhausted_trackers
+                    .into_iter()
+                    .map(|tracker| (tracker.task, tracker.error))
+                    .collect();
+                self.report_final_failures(final_failures);
+            }
+
+            if retryable_trackers.is_empty() {
+                info!(log_type = "low_freq", message = "没有可重试的任务，结束重试循环。");
+                break;
+            }
+
+            // ✨ [新增] 指数退避：每轮重试前等待递增的时间
+            let backoff_seconds = 2_u64.pow(i - 1).min(30); // 2^(i-1)秒，最大30秒
+            if i > 1 {
+                info!(
+                    log_type = "low_freq",
+                    message = "执行指数退避等待",
+                    retry_round = i,
+                    backoff_seconds = backoff_seconds,
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_seconds)).await;
             }
 
             info!(
                 log_type = "low_freq",
                 message = "开始进行重试轮次",
                 retry_round = i,
-                tasks_to_retry = failed_tasks_with_errors.len(),
-                note = "等待本轮执行完成，以实现天然退避。",
+                tasks_to_retry = retryable_trackers.len(),
+                backoff_applied = backoff_seconds,
             );
 
-            // 从失败任务元组中提取出 DownloadTask 列表用于重试
-            let retry_tasks: Vec<DownloadTask> = failed_tasks_with_errors.iter().map(|(task, _)| task.clone()).collect();
+            // 从可重试的跟踪器中提取任务列表
+            let retry_tasks: Vec<DownloadTask> = retryable_trackers.iter().map(|tracker| tracker.task.clone()).collect();
+            task_trackers = retryable_trackers; // 更新为只包含可重试的跟踪器
 
             let retry_start = Instant::now();
-            // 重新执行失败的任务，并用新的失败列表覆盖旧的
-            failed_tasks_with_errors = self.execute_tasks_with_concurrency(retry_tasks.clone(), &format!("retry_download_loop_{}", i), concurrency).await;
+            // 重新执行失败的任务
+            let retry_failures = self.execute_tasks_with_concurrency(retry_tasks.clone(), &format!("retry_download_loop_{}", i), concurrency).await;
             let retry_elapsed = retry_start.elapsed();
+
+            // ✨ [新增] 更新跟踪器：增加重试次数，更新错误信息
+            let mut updated_trackers = Vec::new();
+            let retry_failure_map: std::collections::HashMap<String, AppError> = retry_failures
+                .into_iter()
+                .map(|(task, error)| (format!("{}_{}", task.symbol, task.interval), error))
+                .collect();
+
+            for mut tracker in task_trackers {
+                let task_key = format!("{}_{}", tracker.task.symbol, tracker.task.interval);
+                if let Some(new_error) = retry_failure_map.get(&task_key) {
+                    // 任务仍然失败，更新跟踪器
+                    tracker.increment_retry(new_error.clone());
+                    updated_trackers.push(tracker);
+                }
+                // 如果任务不在失败列表中，说明成功了，不需要加入updated_trackers
+            }
+
+            task_trackers = updated_trackers;
 
             info!(
                 log_type = "low_freq",
                 message = "重试任务完成统计",
                 retry_round = i,
                 retry_tasks_count = retry_tasks.len(),
-                retry_success_count = retry_tasks.len() - failed_tasks_with_errors.len(),
-                retry_failed_count = failed_tasks_with_errors.len(),
+                retry_success_count = retry_tasks.len() - task_trackers.len(),
+                retry_failed_count = task_trackers.len(),
                 retry_elapsed_seconds = retry_elapsed.as_secs_f64(),
-                retry_success_rate = if retry_tasks.is_empty() { "N/A".to_string() } else { format!("{:.1}%", ((retry_tasks.len() - failed_tasks_with_errors.len()) as f64 / retry_tasks.len() as f64) * 100.0) },
+                retry_success_rate = if retry_tasks.is_empty() { "N/A".to_string() } else { format!("{:.1}%", ((retry_tasks.len() - task_trackers.len()) as f64 / retry_tasks.len() as f64) * 100.0) },
             );
         }
 
         // 循环结束后，仍然失败的任务被视为最终失败
-        let final_failed_tasks_count = failed_tasks_with_errors.len();
-        if !failed_tasks_with_errors.is_empty() {
-            self.report_final_failures(failed_tasks_with_errors);
+        let final_failed_tasks_count = task_trackers.len();
+        if !task_trackers.is_empty() {
+            let final_failures: Vec<(DownloadTask, AppError)> = task_trackers
+                .into_iter()
+                .map(|tracker| (tracker.task, tracker.error))
+                .collect();
+            self.report_final_failures(final_failures);
         }
 
         info!(
@@ -274,17 +510,19 @@ impl KlineBackfiller {
             }
         }
 
-        // ✨ [新增验证] 检查所有品种的所有周期是否都补齐到最新
-        info!(log_type = "low_freq", message = "开始验证所有品种的所有周期是否都补齐到最新...");
-        match self.verify_backfill_completeness().await {
-            Ok(()) => {
-                info!(log_type = "low_freq", message = "补齐完整性验证通过，所有品种的所有周期都已补齐到最新");
-            }
-            Err(e) => {
-                warn!(log_type = "low_freq", message = "补齐完整性验证发现问题", error = %e);
-                // 注意：这里不返回错误，只是警告，因为可能存在一些品种暂时无法获取最新数据的情况
-            }
-        }
+        // ✨ [暂时注释] 检查所有品种的所有周期是否都补齐到最新 - 功能稳定，暂时关闭以提升性能
+        // info!(log_type = "low_freq", message = "开始验证所有品种的所有周期是否都补齐到最新...");
+        // match self.verify_backfill_completeness().await {
+        //     Ok(()) => {
+        //         info!(log_type = "low_freq", message = "补齐完整性验证通过，所有品种的所有周期都已补齐到最新");
+        //     }
+        //     Err(e) => {
+        //         warn!(log_type = "low_freq", message = "补齐完整性验证发现问题", error = %e);
+        //         // 注意：这里不返回错误，只是警告，因为可能存在一些品种暂时无法获取最新数据的情况
+        //     }
+        // }
+
+        // 注意：不在这里清理连接池，因为可能还有后续的补齐轮次需要使用连接池
 
         Ok(())
     }
@@ -298,14 +536,68 @@ impl KlineBackfiller {
     async fn execute_tasks_with_concurrency(&self, tasks: Vec<DownloadTask>, _loop_name: &str, concurrency: usize) -> Vec<(DownloadTask, AppError)> {
         let mut success_count = 0;
         let mut failed_tasks = Vec::new();
+        let total_tasks = tasks.len();
+
+        // API请求速率监控
+        let start_time = std::time::Instant::now();
+        let request_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let success_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // 启动速率监控任务
+        let counter_clone = request_counter.clone();
+        let success_clone = success_counter.clone();
+        let monitor_task = tokio::spawn(async move {
+            let mut last_requests = 0;
+            let mut last_success = 0;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+            loop {
+                interval.tick().await;
+                let current_requests = counter_clone.load(std::sync::atomic::Ordering::Relaxed);
+                let current_success = success_clone.load(std::sync::atomic::Ordering::Relaxed);
+
+                let req_rate = (current_requests - last_requests) as f64 / 5.0;
+                let success_rate = (current_success - last_success) as f64 / 5.0;
+
+                info!(
+                    log_type = "low_freq",
+                    message = "API请求速率监控",
+                    并发数 = concurrency,
+                    总请求数 = current_requests,
+                    成功请求数 = current_success,
+                    请求速率_每秒 = format!("{:.1}", req_rate),
+                    成功速率_每秒 = format!("{:.1}", success_rate),
+                    成功率 = format!("{:.1}%", if current_requests > 0 { (current_success as f64 / current_requests as f64) * 100.0 } else { 0.0 }),
+                );
+
+                last_requests = current_requests;
+                last_success = current_success;
+
+                if current_requests >= total_tasks {
+                    break;
+                }
+            }
+        });
 
         let results = stream::iter(tasks)
             .map(|task| {
-                let api = self.api.clone();
-                let db = self.db.clone();
+                // [修改] 克隆 self 以在闭包中使用
+                let backfiller_clone = self.clone();
+                let req_counter = request_counter.clone();
+                let succ_counter = success_counter.clone();
                 async move {
-                    // --- 修改点: 调用新的 instrumented 包装函数 ---
-                    Self::process_single_task_instrumented(api, db, task).await
+                    // 记录请求开始
+                    req_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    // [修改] 调用 &self 的方法
+                    let result = backfiller_clone.process_single_task_instrumented(task).await;
+
+                    // 记录成功请求
+                    if matches!(result, TaskResult::Success(_)) {
+                        succ_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+
+                    result
                 }
             })
             .buffer_unordered(concurrency);
@@ -324,10 +616,30 @@ impl KlineBackfiller {
             })
             .await;
 
+        // 停止监控任务
+        monitor_task.abort();
+
+        let total_duration = start_time.elapsed();
+        let final_requests = request_counter.load(std::sync::atomic::Ordering::Relaxed);
+        let final_success = success_counter.load(std::sync::atomic::Ordering::Relaxed);
+
+        info!(
+            log_type = "low_freq",
+            message = "API请求批次完成统计",
+            并发数 = concurrency,
+            总任务数 = total_tasks,
+            实际请求数 = final_requests,
+            成功请求数 = final_success,
+            总耗时_秒 = total_duration.as_secs_f64(),
+            平均请求速率_每秒 = format!("{:.1}", final_requests as f64 / total_duration.as_secs_f64()),
+            理论最大速率_每秒 = format!("{:.1}", concurrency as f64),
+            实际并发利用率 = format!("{:.1}%", (final_requests as f64 / total_duration.as_secs_f64()) / concurrency as f64 * 100.0),
+        );
+
         failed_tasks
     }
 
-    /// [新增] 对单个任务处理进行 instrument 的包装函数
+    /// [重构] 对单个任务处理进行 instrument 的包装函数
     /// 这是高频业务的核心入口点。
     #[tracing::instrument(
         // ✨ [修改] 遵循规范更新Span定义
@@ -340,68 +652,49 @@ impl KlineBackfiller {
             interval = %task.interval,
         )
     )]
-    async fn process_single_task_instrumented(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
-        Self::process_single_task_with_perf(api, db, task).await
+    async fn process_single_task_instrumented(&self, task: DownloadTask) -> TaskResult {
+        self.process_single_task_with_perf(task).await
     }
 
-    /// [新增] 带性能分析的单个任务处理函数
+    /// [重构] 带性能分析的单个任务处理函数
     #[perf_profile(skip_all, fields(symbol = %task.symbol, interval = %task.interval))]
-    async fn process_single_task_with_perf(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
-        Self::process_single_task(api, db, task).await
-    }
-
-    /// 处理单个下载任务的核心逻辑
-    async fn process_single_task(api: BinanceApi, db: Arc<Database>, task: DownloadTask) -> TaskResult {
-        API_REQUEST_STATS.0.fetch_add(1, Ordering::SeqCst);
-
-        let result: Result<usize> = async {
-            let klines = match api.download_continuous_klines(&task).await {
-                Ok(klines) => {
-                    API_REQUEST_STATS.1.fetch_add(1, Ordering::SeqCst);
-                    klines
-                },
-                Err(e) => {
-                    warn!(
-                        // log_type 会从父Span "high_freq" 继承
-                        // ✨ [修改] 遵循深化错误记录规则
-                        error_chain = format!("{:#}", e),
-                        message = "从API下载K线失败"
-                    );
-                    return Err(e);
-                }
-            };
-
-            if klines.is_empty() {
-                return Ok(0);
+    async fn process_single_task_with_perf(&self, task: DownloadTask) -> TaskResult {
+        let client = match self.get_client_from_pool().await {
+            Some(c) => c,
+            None => {
+                warn!(target: "client_pool", "客户端池为空，任务等待...");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                return TaskResult::Failure { task, error: AppError::ApiError("客户端池为空".into()) };
             }
+        };
 
-
-
-            match db.save_klines(&task.symbol, &task.interval, &klines).await {
-                Ok(count) => {
-                    Self::update_backfill_stats(&task.symbol, &task.interval, count);
-                    Ok(count)
-                },
-                Err(e) => {
-                    warn!(
-                        // log_type 会从父Span "high_freq" 继承
-                        // ✨ [修改] 遵循深化错误记录规则
-                        error_chain = format!("{:#}", e),
-                        message = "保存K线到数据库失败"
-                    );
-                    return Err(e);
+        match BinanceApi::download_continuous_klines(&client, &task).await {
+            Ok(klines) => {
+                if klines.is_empty() {
+                    return TaskResult::Success(0);
                 }
-            }
-        }.await;
 
-        match result {
-            Ok(count) => TaskResult::Success(count),
+                let count = klines.len();
+                if let Err(e) = self.db.save_klines_async(&task.symbol, &task.interval, &klines).await {
+                     warn!(error_chain = format!("{:#}", e), message = "提交K线到写入队列失败");
+                     return TaskResult::Failure { task, error: e };
+                }
+
+                Self::update_backfill_stats(&task.symbol, &task.interval, count);
+                TaskResult::Success(count)
+            },
             Err(e) => {
-                API_REQUEST_STATS.2.fetch_add(1, Ordering::SeqCst);
+                if let AppError::HttpError(ref re) = e {
+                    if re.is_connect() || re.is_timeout() {
+                        self.remove_client_from_pool(&client).await;
+                    }
+                }
                 TaskResult::Failure { task, error: e }
             }
         }
     }
+
+    // 旧的process_single_task方法已被重构为process_single_task_with_perf
 
 
 
@@ -438,13 +731,14 @@ impl KlineBackfiller {
             return Ok(self.test_symbols.clone());
         }
 
-        // 如果已经有交易所信息，直接使用；否则调用API获取
+        // [修改] 如果已经有交易所信息，直接使用；否则使用临时客户端获取
         let (trading_symbols, delisted_symbols) = if let Some(info) = exchange_info {
             // ✨ [优化] 使用已获取的交易所信息，避免重复网络请求
             self.parse_symbols_from_exchange_info(info)
         } else {
-            // 兜底：如果没有交易所信息，仍然调用API
-            self.api.get_trading_usdt_perpetual_symbols().await?
+            // 兜底：如果没有交易所信息，使用临时客户端获取
+            let temp_client = BinanceApi::create_new_client()?;
+            BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?
         };
 
         // 处理已下架的品种
@@ -872,7 +1166,8 @@ impl KlineBackfiller {
         info!(log_type = "low_freq", message = "开始验证补齐完整性，使用BTCUSDT作为标准...");
 
         // 获取当前活跃的交易对列表
-        let (active_symbols, _delisted_symbols) = self.api.get_trading_usdt_perpetual_symbols().await?;
+        let temp_client = BinanceApi::create_new_client()?;
+        let (active_symbols, _delisted_symbols) = BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?;
 
         // 获取数据库中所有已存在的K线表
         let all_existing_tables = self.get_existing_kline_tables()?;
@@ -1105,7 +1400,8 @@ impl KlineBackfiller {
         info!(log_type = "low_freq", message = "开始检查并清理已下架品种的数据...");
 
         // ✨ [修改] 关键修正：直接获取完整的交易所信息，而不是依赖过滤后的活跃列表
-        let exchange_info = match self.api.get_exchange_info().await {
+        let temp_client = BinanceApi::create_new_client()?;
+        let exchange_info = match BinanceApi::get_exchange_info(&temp_client).await {
             Ok(info) => info,
             Err(e) => {
                 warn!(

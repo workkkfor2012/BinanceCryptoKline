@@ -15,7 +15,7 @@ pub struct TimestampChecker {
 impl TimestampChecker {
     /// 创建新的时间戳检查器实例
     pub fn new(db: Arc<Database>, intervals: Vec<String>) -> Self {
-        let api = BinanceApi::new();
+        let api = BinanceApi; // [修改] BinanceApi现在是无状态的
         Self { db, api, intervals }
     }
 
@@ -294,7 +294,14 @@ impl TimestampChecker {
                         info!("{}/1m: 请求URL: {}", symbol, fapi_url);
 
                         // 下载任务
-                        match api_clone.download_continuous_klines(&task).await {
+                        let temp_client = match BinanceApi::create_new_client() {
+                            Ok(client) => client,
+                            Err(e) => {
+                                error!("创建HTTP客户端失败: {}", e);
+                                return Err(e);
+                            }
+                        };
+                        match BinanceApi::download_continuous_klines(&temp_client, &task).await {
                             Ok(klines) => {
                                 if klines.is_empty() {
                                     info!("{}/1m: 没有获取到最新K线数据", symbol);
