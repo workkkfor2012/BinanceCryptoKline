@@ -50,15 +50,24 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
     }
 
     // 获取日志配置 - 只从配置文件读取
-    let (log_level, log_transport, pipe_name, enable_full_tracing) = load_logging_config()
+    let (log_enabled, log_level, log_transport, pipe_name, enable_full_tracing) = load_logging_config()
         .map_err(|e| {
             eprintln!("配置文件读取失败: {}", e);
             eprintln!("请确保 config/BinanceKlineConfig.toml 文件存在且格式正确");
             e
         })?;
 
+    // 检查日志开关
+    if !log_enabled {
+        eprintln!("📋 日志系统已禁用");
+        eprintln!("  如需启用日志，请在配置文件中设置 enabled = true");
+        // 返回一个空的guard，不初始化任何日志系统
+        return Ok(Box::new(DummyGuard));
+    }
+
     // 在控制台显示读取到的日志配置
     eprintln!("📋 日志配置信息:");
+    eprintln!("  日志开关: {}", if log_enabled { "启用" } else { "禁用" });
     eprintln!("  日志级别: {}", log_level);
     eprintln!("  传输方式: {}", log_transport);
     eprintln!("  管道名称: {}", pipe_name);
@@ -133,6 +142,7 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
     info!(
         log_type = "low_freq",
         event_type = "logging_config_loaded",
+        log_enabled = log_enabled,
         log_level = %log_level,
         log_transport = %log_transport,
         pipe_name = %pipe_name,
@@ -148,11 +158,11 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
 }
 
 /// 加载日志配置
-pub fn load_logging_config() -> Result<(String, String, String, bool)> {
+pub fn load_logging_config() -> Result<(bool, String, String, String, bool)> {
     const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
-    
+
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
-    
+
     if Path::new(&config_path).exists() {
         match AggregateConfig::from_file(&config_path) {
             Ok(config) => {
@@ -162,8 +172,9 @@ pub fn load_logging_config() -> Result<(String, String, String, bool)> {
                 } else {
                     format!(r"\\.\pipe\{}", config.logging.pipe_name)
                 };
-                
+
                 Ok((
+                    config.logging.enabled,
                     config.logging.log_level,
                     config.logging.log_transport,
                     pipe_name,

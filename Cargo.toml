@@ -28,6 +28,8 @@ path = "src/bin/klagg_sub_threads.rs"
 
 
 
+
+
 # 暂时注释掉缺失的测试二进制文件
 # [[bin]]
 # name = "test_cerberus"
@@ -161,6 +163,18 @@ md5 = "0.7"
 async-trait = "0.1.88"
 rand = "0.9.1"
 wide = { version = "0.7", optional = true }
+
+[dev-dependencies]
+
+[profile.dev]
+debug = true
+opt-level = 0
+overflow-checks = true
+
+[profile.release]
+debug = true  # 保留调试信息用于性能分析
+opt-level = 3
+lto = true
 
 [features]
 default = []

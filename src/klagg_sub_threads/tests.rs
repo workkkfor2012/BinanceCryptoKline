@@ -613,4 +613,174 @@ mod tests {
         println!("✅ 脏表优化性能测试通过 - 实现了{:.1}倍性能提升",
                 total_klines as f64 / active_klines as f64);
     }
+
+    /// 测试Gateway双缓冲机制的正确性和性能
+    #[tokio::test]
+    async fn test_gateway_double_buffering() {
+        use crate::klagg_sub_threads::gateway::{gateway_task, GlobalKlines};
+        use crate::klcommon::{AggregateConfig, WatchdogV2};
+        use std::time::Instant;
+        use tokio::sync::{mpsc, watch};
+
+        // 创建测试配置
+        let config = Arc::new(AggregateConfig {
+            database: crate::klcommon::config::DatabaseConfig {
+                url: "sqlite::memory:".to_string(),
+                max_connections: 5,
+                connection_timeout_s: 30,
+            },
+            websocket: crate::klcommon::config::WebSocketConfig {
+                url: "wss://stream.binance.com:9443/ws/".to_string(),
+                reconnect_interval_ms: 5000,
+                ping_interval_ms: 30000,
+                max_reconnect_attempts: 10,
+            },
+            buffer: crate::klcommon::config::BufferConfig {
+                kline_buffer_size: 1000,
+                trade_buffer_size: 10000,
+            },
+            persistence: crate::klcommon::config::PersistenceConfig {
+                batch_size: 100,
+                flush_interval_ms: 1000,
+            },
+            gateway: crate::klcommon::config::GatewayConfig {
+                pull_interval_ms: 100,
+                pull_timeout_ms: 50,
+                timeout_alert_threshold: 3,
+            },
+            logging: crate::klcommon::config::LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                max_file_size_mb: 100,
+                max_files: 5,
+            },
+            max_symbols: 10,
+            supported_intervals: vec!["1m".to_string(), "5m".to_string()],
+            buffer_swap_interval_ms: 1000,
+            actor_heartbeat_interval_s: Some(30),
+            watchdog_check_interval_s: Some(10),
+            watchdog_actor_timeout_s: Some(60),
+            channel_capacity: Some(1000),
+        });
+
+        // 创建模拟的Worker handles
+        let worker_handles = Arc::new(vec![]);
+
+        // 创建通道
+        let (klines_watch_tx, mut klines_watch_rx) = watch::channel(Arc::new(GlobalKlines::default()));
+        let (db_queue_tx, mut db_queue_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let watchdog = Arc::new(WatchdogV2::new());
+
+        // 启动gateway任务
+        let gateway_handle = tokio::spawn(gateway_task(
+            worker_handles,
+            klines_watch_tx,
+            db_queue_tx,
+            config.clone(),
+            shutdown_rx,
+            watchdog,
+        ));
+
+        // 等待几个周期，观察双缓冲机制
+        let mut snapshots_received = 0;
+        let start_time = Instant::now();
+        let test_duration = std::time::Duration::from_millis(500);
+
+        while start_time.elapsed() < test_duration {
+            tokio::select! {
+                _ = klines_watch_rx.changed() => {
+                    let snapshot = klines_watch_rx.borrow().clone();
+                    snapshots_received += 1;
+
+                    // 验证快照结构
+                    assert_eq!(snapshot.klines.len(), config.max_symbols * config.supported_intervals.len());
+                    assert!(snapshot.snapshot_time_ms > 0);
+
+                    println!("📊 收到快照 #{}: 时间戳={}, K线数={}",
+                            snapshots_received,
+                            snapshot.snapshot_time_ms,
+                            snapshot.klines.len());
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    // 继续等待
+                }
+            }
+        }
+
+        // 关闭gateway
+        shutdown_tx.send(true).unwrap();
+        let _ = gateway_handle.await;
+
+        println!("✅ Gateway双缓冲测试完成:");
+        println!("   测试时长: {:?}", test_duration);
+        println!("   收到快照数: {}", snapshots_received);
+        println!("   平均快照间隔: {:?}", test_duration / snapshots_received.max(1));
+
+        // 基本断言
+        assert!(snapshots_received > 0, "应该收到至少一个快照");
+
+        println!("✅ Gateway双缓冲机制测试通过");
+    }
+
+    /// 测试双缓冲机制的内存效率
+    #[tokio::test]
+    async fn test_double_buffering_memory_efficiency() {
+        use std::time::Instant;
+
+        // 模拟大量K线数据的场景
+        let large_kline_count = 10000;
+        let mut write_buffer = vec![crate::klagg_sub_threads::KlineData::default(); large_kline_count];
+        let mut read_buffer = vec![crate::klagg_sub_threads::KlineData::default(); large_kline_count];
+
+        // 填充一些测试数据到write_buffer
+        for i in 0..large_kline_count {
+            write_buffer[i].open_time = i as i64;
+            write_buffer[i].open = (i as f64) * 100.0;
+            write_buffer[i].close = (i as f64) * 100.0 + 1.0;
+        }
+
+        println!("🚀 双缓冲内存效率测试:");
+        println!("   K线数量: {}", large_kline_count);
+        println!("   单个K线大小: {} bytes", std::mem::size_of::<crate::klagg_sub_threads::KlineData>());
+        println!("   总数据大小: {} KB", (large_kline_count * std::mem::size_of::<crate::klagg_sub_threads::KlineData>()) / 1024);
+
+        // 测试传统clone方式的性能
+        let clone_iterations = 100;
+        let clone_start = Instant::now();
+        for _ in 0..clone_iterations {
+            let _cloned_data = write_buffer.clone();
+        }
+        let clone_duration = clone_start.elapsed();
+
+        // 测试双缓冲swap方式的性能
+        let swap_iterations = 100;
+        let swap_start = Instant::now();
+        for _ in 0..swap_iterations {
+            std::mem::swap(&mut write_buffer, &mut read_buffer);
+            // 模拟数据移动到Arc中
+            let _moved_data = read_buffer.clone(); // 这里仍需要clone来模拟移动到Arc
+            read_buffer = write_buffer.clone(); // 恢复状态用于下次测试
+        }
+        let swap_duration = swap_start.elapsed();
+
+        println!("📊 性能对比结果:");
+        println!("   Clone方式:");
+        println!("     总耗时: {:?}", clone_duration);
+        println!("     平均每次: {:?}", clone_duration / clone_iterations);
+        println!("   Swap方式:");
+        println!("     总耗时: {:?}", swap_duration);
+        println!("     平均每次: {:?}", swap_duration / swap_iterations);
+
+        if clone_duration > swap_duration {
+            let improvement = clone_duration.as_nanos() as f64 / swap_duration.as_nanos() as f64;
+            println!("   性能提升: {:.2}x", improvement);
+        }
+
+        // 验证数据完整性
+        assert_eq!(write_buffer.len(), large_kline_count);
+        assert_eq!(read_buffer.len(), large_kline_count);
+
+        println!("✅ 双缓冲内存效率测试完成");
+    }
 }

@@ -4,7 +4,7 @@
 //! 这个模块是自包含的，外部只需要调用 `run_visual_test_server` 即可启动。
 
 use crate::{
-    klagg_sub_threads::{KlineData, WorkerReadHandle},
+    klagg_sub_threads::{KlineData, GlobalKlines},
 };
 use axum::{
     extract::{
@@ -16,11 +16,9 @@ use axum::{
     Router,
 };
 use dashmap::DashMap;
-use futures_util::SinkExt;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
-use tokio::time::{interval, Duration};
 use tower_http::services::ServeDir;
 use tracing::{error, info, instrument, trace, warn};
 
@@ -29,13 +27,13 @@ use tracing::{error, info, instrument, trace, warn};
 /// 启动可视化测试服务器。这是从外部调用此模块的唯一入口点。
 #[instrument(target = "WebServer", skip_all)]
 pub async fn run_visual_test_server(
-    worker_handles: Arc<Vec<WorkerReadHandle>>,
+    mut klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     shutdown_rx: watch::Receiver<bool>,
 ) {
     let app_state = Arc::new(AppState {
-        worker_handles,
+        klines_watch_rx,
         index_to_symbol,
         periods,
         subscriptions: Arc::new(DashMap::new()),
@@ -90,36 +88,33 @@ struct ApiKline {
 /// Web服务器的共享状态
 #[derive(Clone)]
 struct AppState {
-    worker_handles: Arc<Vec<WorkerReadHandle>>,
+    klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     subscriptions: Arc<DashMap<String, Vec<mpsc::Sender<String>>>>,
 }
 
-/// 【核心修改】后台任务，现在使用高频轮询
+/// 【核心修改】后台任务，现在使用Gateway的watch通道
 #[instrument(target = "Pusher", skip_all)]
 async fn pusher_task(
     state: Arc<AppState>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    // 【修改】设置一个固定的、高频的轮询间隔，例如 50 毫秒
-    const HIGH_FREQ_INTERVAL_MS: u64 = 50;
-    let mut interval = interval(Duration::from_millis(HIGH_FREQ_INTERVAL_MS));
-    // 当处理不过来时，跳过积压的tick，保证总是尝试获取最新的数据
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    info!(target = "Pusher", log_type="low_freq", "Gateway数据订阅推送器已启动");
 
-    info!(target = "Pusher", log_type="low_freq", interval_ms = HIGH_FREQ_INTERVAL_MS, "高频轮询推送器已启动");
+    let mut klines_watch_rx = state.klines_watch_rx.clone();
 
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                // 定时器触发，从所有Worker拉取快照
-                let query_futures = state.worker_handles.iter().map(|h| h.request_snapshot());
-                let all_klines: Vec<KlineData> = futures::future::join_all(query_futures)
-                    .await
-                    .into_iter()
-                    .filter_map(|res| res.ok())
-                    .flatten()
+            // 监听Gateway的数据更新
+            Ok(_) = klines_watch_rx.changed() => {
+                // 获取最新的全局快照
+                let snapshot = klines_watch_rx.borrow_and_update().clone();
+
+                // 过滤出有效的K线数据
+                let all_klines: Vec<KlineData> = snapshot.klines.iter()
+                    .filter(|k| k.open_time > 0)  // 过滤掉默认/空的K线
+                    .cloned()
                     .collect();
 
                 // 如果没有收集到任何更新的K线，则直接进入下一次循环

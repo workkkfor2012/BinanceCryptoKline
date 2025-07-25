@@ -11,11 +11,16 @@ pub mod web_server;
 #[cfg(test)]
 mod tests;
 
+// 新增: Gateway 模块，用于组织新代码
+mod gateway;
+
+// 新增: 导出新的任务
+pub use gateway::{db_writer_task, gateway_task, GlobalKlines};
+
 
 
 use crate::klcommon::{
     api::{get_aligned_time, interval_to_milliseconds},
-    db::Database,
     error::{AppError, Result},
     log,
     models::Kline as DbKline,
@@ -28,9 +33,9 @@ use crate::klcommon::{
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
-use tokio::time::{interval, sleep, Duration, Instant};
+use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 // --- 1. 类型定义 ---
@@ -271,34 +276,7 @@ impl HealthReporter for IoHealthReporter {
     }
 }
 
-#[derive(Default)]
-struct PersistenceMetrics {
-    last_successful_run: Option<Instant>,
-    last_batch_size: usize,
-    last_run_duration_ms: u128,
-}
 
-struct PersistenceHealthReporter {
-    metrics: Arc<Mutex<PersistenceMetrics>>,
-    max_interval: Duration,
-}
-
-#[async_trait]
-impl HealthReporter for PersistenceHealthReporter {
-    fn name(&self) -> String { "Persistence-Task".to_string() }
-    async fn report(&self) -> HealthReport {
-        let guard = self.metrics.lock().unwrap();
-        let (status, message) = match guard.last_successful_run {
-            Some(last_run) if last_run.elapsed() > self.max_interval => (ComponentStatus::Warning, Some(format!("超过 {} 秒未成功持久化", self.max_interval.as_secs()))),
-            None => (ComponentStatus::Warning, Some("尚未执行过持久化".to_string())),
-            _ => (ComponentStatus::Ok, None),
-        };
-        HealthReport {
-            component_name: self.name(), status, message,
-            details: [("last_batch_size".to_string(), serde_json::json!(guard.last_batch_size)), ("last_run_duration_ms".to_string(), serde_json::json!(guard.last_run_duration_ms))].into(),
-        }
-    }
-}
 
 // --- 3. Worker 核心实现 ---
 
@@ -913,27 +891,88 @@ pub async fn run_io_loop(
 
     let mut managed_symbols = initial_symbols;
 
-    // 【简化】: 移除复杂的事务性确认机制，使用简单的WebSocket连接
-    let (unbounded_tx, mut unbounded_rx) = tokio::sync::mpsc::unbounded_channel::<AggTradeData>();
+    // [诊断日志开始]
+    // 1. 将无界通道临时替换为超大容量的有界通道，以便监控
+    // 诊断结束后，将下面这行改回:
+    // let (unbounded_tx, mut unbounded_rx) = tokio::sync::mpsc::unbounded_channel::<AggTradeData>();
+    const IO_BUFFER_CAPACITY: usize = 500_000; // 设置一个巨大的容量
+    let (bounded_tx, mut bounded_rx) = tokio::sync::mpsc::channel::<AggTradeData>(IO_BUFFER_CAPACITY);
+    // [诊断日志结束]
 
     let trade_tx_clone = trade_tx.clone();
     let metrics_clone = metrics.clone();
     log::context::spawn_instrumented(async move {
-        while let Some(trade) = unbounded_rx.recv().await {
-            metrics_clone.messages_received.fetch_add(1, Ordering::Relaxed);
-            metrics_clone.last_message_timestamp.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
-            if trade_tx_clone.send(trade).await.is_err() {
-                warn!(target: "I/O核心", "计算任务的trade通道已关闭，I/O数据转发任务退出");
-                break;
+        // [诊断日志开始]
+        // 2. 在消费数据的循环中，加入定时日志
+        let mut log_interval = tokio::time::interval(Duration::from_secs(5));
+        log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // [诊断日志结束]
+
+        loop {
+            tokio::select! {
+                // [诊断日志开始]
+                // 3. 定时器触发时，记录处理速率作为积压的间接指标
+                _ = log_interval.tick() => {
+                    // 这里我们只记录处理速率，作为积压的间接指标
+                    let messages_count = metrics_clone.messages_received.load(Ordering::Relaxed);
+                    info!(target: "队列监控", worker_id, messages_processed = messages_count, "I/O桥接处理速率");
+                },
+                // [诊断日志结束]
+
+                Some(trade) = bounded_rx.recv() => {
+                    metrics_clone.messages_received.fetch_add(1, Ordering::Relaxed);
+                    metrics_clone.last_message_timestamp.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+                    if trade_tx_clone.send(trade).await.is_err() {
+                        warn!(target: "I/O核心", "计算任务的trade通道已关闭，I/O数据转发任务退出");
+                        break;
+                    }
+                }
             }
         }
     });
 
-    let handler = Arc::new(AggTradeMessageHandler::with_trade_sender(
+    // [诊断日志开始]
+    // 4. 创建一个独立的、专门用于监控的异步任务
+    let monitor_tx = bounded_tx.clone();
+    tokio::spawn(async move {
+        let mut log_interval = tokio::time::interval(Duration::from_secs(5));
+        log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            log_interval.tick().await;
+
+            let queue_len = IO_BUFFER_CAPACITY - monitor_tx.capacity();
+            let percentage = (queue_len as f32 / IO_BUFFER_CAPACITY as f32) * 100.0;
+
+            info!(
+                target: "队列监控",
+                worker_id,
+                queue_name = "IO_to_Worker_Bridge",
+                len = queue_len,
+                capacity = IO_BUFFER_CAPACITY,
+                usage_percent = format!("{:.2}%", percentage),
+                "I/O桥接队列状态"
+            );
+
+            if percentage > 50.0 {
+                warn!(
+                    target: "队列监控",
+                    worker_id,
+                    queue_name = "IO_to_Worker_Bridge",
+                    len = queue_len,
+                    "I/O桥接队列使用率超过50%，可能存在严重积压！"
+                );
+            }
+        }
+    });
+    // [诊断日志结束]
+
+    // [诊断日志开始] - 使用有界通道版本的消息处理器
+    let handler = Arc::new(AggTradeMessageHandler::with_bounded_trade_sender(
         Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        unbounded_tx,
+        bounded_tx,
     ));
+    // [诊断日志结束]
 
     let connection_manager = crate::klcommon::websocket::ConnectionManager::new(
         config.websocket.use_proxy,
@@ -1069,168 +1108,5 @@ pub async fn run_io_loop(
 
 // --- 5. 后台任务 (持久化) ---
 
-/// 定义非最终K线（进行中）的持久化频率。
-/// 例如，值为5表示每5个持久化周期才将"进行中"的K线更新写入一次数据库。
-/// 这可以显著降低在高频交易期间的数据库写入压力。
-const ONGOING_KLINE_PERSIST_FREQUENCY: u64 = 5;
 
-#[instrument(target = "持久化任务", skip_all, name="persistence_task")]
-pub async fn persistence_task(
-    db: Arc<Database>,
-    worker_handles: Arc<Vec<WorkerReadHandle>>,
-    index_to_symbol: Arc<RwLock<Vec<String>>>,
-    periods: Arc<Vec<String>>,
-    config: Arc<AggregateConfig>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    watchdog: Arc<WatchdogV2>, // [修改] 接收 watchdog
-) {
-    let metrics = Arc::new(Mutex::new(PersistenceMetrics::default()));
-    let reporter = Arc::new(PersistenceHealthReporter {
-        metrics: metrics.clone(),
-        max_interval: Duration::from_millis(config.persistence_interval_ms * 3), // e.g., 3倍于周期
-    });
-    watchdog.register(reporter);
 
-    let persistence_interval = Duration::from_millis(config.persistence_interval_ms);
-    let mut interval = interval(persistence_interval);
-    info!(
-        target: "持久化任务",
-        log_type = "low_freq",
-        interval_ms = persistence_interval.as_millis(),
-        ongoing_persist_freq_cycles = ONGOING_KLINE_PERSIST_FREQUENCY,
-        "持久化任务已启动，采用差异化降频策略"
-    );
-
-    // 新增周期计数器
-    let mut cycle_counter: u64 = 0;
-
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                // 修改：传递计数器和force标志(false)
-                cycle_counter = cycle_counter.wrapping_add(1);
-                perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods, metrics.clone(), cycle_counter, false).await;
-            },
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    info!(target: "持久化任务", "收到关闭信号，执行最后一次强制全量持久化...");
-                    // 修改：传递计数器和force标志(true)以确保所有数据都被保存
-                    perform_persistence_cycle(&db, &worker_handles, &index_to_symbol, &periods, metrics.clone(), cycle_counter, true).await;
-                    info!(target: "持久化任务", "最后一次持久化完成");
-                    break;
-                }
-            }
-        }
-    }
-    warn!(target: "持久化任务", "持久化任务已退出");
-}
-
-#[instrument(target = "持久化任务", skip_all, name="perform_persistence_cycle")]
-async fn perform_persistence_cycle(
-    db: &Arc<Database>,
-    worker_handles: &Arc<Vec<WorkerReadHandle>>,
-    index_to_symbol: &Arc<RwLock<Vec<String>>>,
-    periods: &Arc<Vec<String>>,
-    metrics: Arc<Mutex<PersistenceMetrics>>,
-    // 修改：接收新参数
-    cycle_count: u64,
-    force_save_ongoing: bool,
-) {
-    let cycle_start = Instant::now();
-
-    let handles = worker_handles.iter().enumerate().map(|(id, h)| async move {
-        (id, h.request_snapshot().await)
-    });
-    let results = futures::future::join_all(handles).await;
-
-    // 修改：创建两个独立的Vec来分类K线
-    let mut final_klines_to_save = Vec::new();
-    let mut ongoing_klines_to_save = Vec::new();
-    let index_to_symbol_guard = index_to_symbol.read().await;
-
-    for (worker_id, result) in results {
-        match result {
-            Ok(snapshot) => {
-                trace!(target: "持久化任务", worker_id, kline_count = snapshot.len(), "成功从Worker获取快照");
-                for kline_data in snapshot {
-                    if let (Some(symbol), Some(interval)) = (
-                        index_to_symbol_guard.get(kline_data.global_symbol_index),
-                        periods.get(kline_data.period_index),
-                    ) {
-                        let db_kline = DbKline {
-                            open_time: kline_data.open_time,
-                            open: kline_data.open.to_string(),
-                            high: kline_data.high.to_string(),
-                            low: kline_data.low.to_string(),
-                            close: kline_data.close.to_string(),
-                            volume: kline_data.volume.to_string(),
-                            close_time: kline_data.open_time + interval_to_milliseconds(interval) - 1,
-                            quote_asset_volume: kline_data.turnover.to_string(),
-                            number_of_trades: kline_data.trade_count,
-                            taker_buy_base_asset_volume: kline_data.taker_buy_volume.to_string(),
-                            taker_buy_quote_asset_volume: kline_data.taker_buy_turnover.to_string(),
-                            ignore: "0".to_string(),
-                        };
-
-                        // 核心修改：根据 is_final 标志进行分类
-                        if kline_data.is_final {
-                            final_klines_to_save.push((symbol.clone(), interval.clone(), db_kline));
-                        } else {
-                            ongoing_klines_to_save.push((symbol.clone(), interval.clone(), db_kline));
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(target: "持久化任务", worker_id, error = ?e, "从Worker获取快照失败");
-            }
-        }
-    }
-
-    let mut total_saved_count = 0;
-
-    // --- 1. 持久化最终确定的K线 (高优先级，每次都执行) ---
-    if !final_klines_to_save.is_empty() {
-        let count = final_klines_to_save.len();
-        info!(target: "持久化任务", log_type="beacon", kline_type = "final", count, "开始持久化最终K线 (高优先级)");
-        if let Err(e) = db.upsert_klines_batch(final_klines_to_save) {
-            error!(target: "持久化任务", error = ?e, "持久化最终K线失败");
-        } else {
-            total_saved_count += count;
-        }
-    }
-
-    // --- 2. 有条件地持久化进行中的K线 (低优先级，降频执行) ---
-    let should_save_ongoing = force_save_ongoing || (cycle_count % ONGOING_KLINE_PERSIST_FREQUENCY == 0);
-
-    if !ongoing_klines_to_save.is_empty() {
-        if should_save_ongoing {
-            let count = ongoing_klines_to_save.len();
-            info!(target: "持久化任务", log_type="beacon", kline_type = "ongoing", count, cycle = cycle_count, forced = force_save_ongoing, "开始持久化进行中K线 (低优先级)");
-            if let Err(e) = db.upsert_klines_batch(ongoing_klines_to_save) {
-                error!(target: "持久化任务", error = ?e, "持久化进行中K线失败");
-            } else {
-                total_saved_count += count;
-            }
-        } else {
-            // 仅在trace级别记录跳过，避免日志刷屏
-            trace!(target: "持久化任务", kline_type="ongoing", count = ongoing_klines_to_save.len(), cycle = cycle_count, "跳过本次进行中K线的持久化");
-        }
-    }
-
-    // --- 3. 更新监控指标 ---
-    if total_saved_count > 0 {
-        // 更新指标
-        let mut guard = metrics.lock().unwrap();
-        guard.last_successful_run = Some(Instant::now());
-        guard.last_batch_size = total_saved_count;
-        guard.last_run_duration_ms = cycle_start.elapsed().as_millis();
-    } else {
-        // 即使没有数据写入，也更新运行时间戳，表示任务仍在正常调度
-        debug!(target: "持久化任务", "本次持久化周期内无数据写入数据库");
-        let mut guard = metrics.lock().unwrap();
-        guard.last_successful_run = Some(Instant::now());
-        guard.last_batch_size = 0;
-        guard.last_run_duration_ms = cycle_start.elapsed().as_millis();
-    }
-}

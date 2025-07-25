@@ -28,6 +28,11 @@ fn default_enable_full_tracing() -> bool {
     true
 }
 
+/// 默认启用日志系统
+fn default_log_enabled() -> bool {
+    true
+}
+
 /// 默认WebLog管道名称
 fn default_weblog_pipe_name() -> Option<String> {
     Some("weblog_pipe".to_string())
@@ -48,6 +53,9 @@ pub struct AggregateConfig {
     /// 持久化配置
     pub persistence: PersistenceConfig,
 
+    /// 网关配置
+    pub gateway: GatewayConfig,
+
     /// 日志配置
     pub logging: LoggingConfig,
 
@@ -60,8 +68,8 @@ pub struct AggregateConfig {
     /// 缓冲区切换间隔（毫秒）
     pub buffer_swap_interval_ms: u64,
 
-    /// 持久化间隔（毫秒）
-    pub persistence_interval_ms: u64,
+    /// 注意：persistence_interval_ms 已移除
+    /// 数据持久化频率现在由 gateway.pull_interval_ms 间接控制
 
     /// Actor心跳间隔（秒）
     pub actor_heartbeat_interval_s: Option<u64>,
@@ -149,9 +157,26 @@ pub struct PersistenceConfig {
     pub enable_compressed_logging: bool,
 }
 
+/// 网关配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    /// Gateway拉取Worker数据的间隔（毫秒）
+    pub pull_interval_ms: u64,
+
+    /// 单个Worker请求的超时时间（毫秒）
+    pub pull_timeout_ms: u64,
+
+    /// Worker连续超时的告警阈值
+    pub timeout_alert_threshold: usize,
+}
+
 /// 日志配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
+    /// 日志系统总开关
+    #[serde(default = "default_log_enabled")]
+    pub enabled: bool,
+
     /// 日志级别 (trace, debug, info, warn, error)
     pub log_level: String,
 
@@ -220,9 +245,20 @@ impl Default for PersistenceConfig {
     }
 }
 
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            pull_interval_ms: 100,  // 100ms间隔，高频拉取
+            pull_timeout_ms: 50,    // 50ms超时，远小于拉取间隔
+            timeout_alert_threshold: 5,  // 连续5次超时后告警
+        }
+    }
+}
+
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             log_level: "trace".to_string(),
             log_transport: "named_pipe".to_string(),
             pipe_name: r"\\.\pipe\kline_log_pipe".to_string(),
@@ -288,10 +324,16 @@ impl AggregateConfig {
             ));
         }
         
-        // 验证持久化间隔
-        if self.persistence_interval_ms == 0 {
+        // 验证Gateway配置
+        if self.gateway.pull_interval_ms == 0 {
             return Err(crate::klcommon::AppError::ConfigError(
-                "持久化间隔必须大于0".to_string()
+                "Gateway拉取间隔必须大于0".to_string()
+            ));
+        }
+
+        if self.gateway.pull_timeout_ms >= self.gateway.pull_interval_ms {
+            return Err(crate::klcommon::AppError::ConfigError(
+                "Gateway超时时间必须小于拉取间隔".to_string()
             ));
         }
         

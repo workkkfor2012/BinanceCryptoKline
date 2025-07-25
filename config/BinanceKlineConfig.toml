@@ -1,17 +1,23 @@
 # 币安K线系统统一配置文件
 # K线聚合系统配置 - 符合 AggregateConfig 结构体格式
 
+# ============================================================
+# 顶层通用配置
+# ============================================================
+
 # 支持的时间周期列表
 supported_intervals = ["1m", "5m", "30m", "1h", "4h", "1d", "1w"]
 
-# 最大支持的品种数量
+# 系统设计的最大品种数量。这是一个硬性上限，
+# Gateway 和 Worker 的内存分配都将基于此值。
+# 它必须足够大以容纳所有当前和未来可能上市的品种。
 max_symbols = 10000
 
 # 缓冲区切换间隔（毫秒）
 buffer_swap_interval_ms = 1000
 
-# 持久化间隔（毫秒）
-persistence_interval_ms = 5000
+# 注意：persistence_interval_ms 已移除
+# 数据持久化频率现在由 gateway.pull_interval_ms 间接控制
 
 # Actor心跳间隔（秒）
 actor_heartbeat_interval_s = 5
@@ -52,7 +58,25 @@ queue_size = 50000
 write_timeout_secs = 30
 enable_compressed_logging = true
 
+# ============================================================
+# Gateway 配置 - 中心化网关架构
+# ============================================================
+[gateway]
+# Gateway拉取Worker数据的间隔（毫秒）
+# 这个值决定了数据聚合和持久化的频率
+pull_interval_ms = 100
+
+# 单个Worker请求的超时时间（毫秒）
+# 应该远小于pull_interval_ms以确保及时响应
+pull_timeout_ms = 50
+
+# Worker连续超时的告警阈值
+# 超过此次数将触发错误日志
+timeout_alert_threshold = 5
+
 [logging]
+# 日志系统总开关
+enabled = true
 log_level = "info"
 log_transport = "named_pipe"
 pipe_name = "kline_mcp_log_pipe"

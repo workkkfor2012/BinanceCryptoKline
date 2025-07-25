@@ -274,6 +274,9 @@ pub struct AggTradeMessageHandler {
     pub message_count: Arc<std::sync::atomic::AtomicUsize>,
     pub error_count: Arc<std::sync::atomic::AtomicUsize>,
     pub trade_sender: Option<tokio::sync::mpsc::UnboundedSender<AggTradeData>>,
+    // [诊断日志开始] - 临时添加有界通道支持
+    pub bounded_trade_sender: Option<tokio::sync::mpsc::Sender<AggTradeData>>,
+    // [诊断日志结束]
 }
 
 impl AggTradeMessageHandler {
@@ -286,6 +289,9 @@ impl AggTradeMessageHandler {
             message_count,
             error_count,
             trade_sender: None,
+            // [诊断日志开始]
+            bounded_trade_sender: None,
+            // [诊断日志结束]
         }
     }
 
@@ -300,8 +306,28 @@ impl AggTradeMessageHandler {
             message_count,
             error_count,
             trade_sender: Some(trade_sender),
+            // [诊断日志开始]
+            bounded_trade_sender: None,
+            // [诊断日志结束]
         }
     }
+
+    // [诊断日志开始] - 临时添加有界通道支持
+    /// 创建带有有界交易数据发送器的消息处理器（仅用于诊断）
+    #[instrument(skip_all)]
+    pub fn with_bounded_trade_sender(
+        message_count: Arc<std::sync::atomic::AtomicUsize>,
+        error_count: Arc<std::sync::atomic::AtomicUsize>,
+        bounded_trade_sender: tokio::sync::mpsc::Sender<AggTradeData>,
+    ) -> Self {
+        Self {
+            message_count,
+            error_count,
+            trade_sender: None,
+            bounded_trade_sender: Some(bounded_trade_sender),
+        }
+    }
+    // [诊断日志结束]
 }
 
 /// 全市场精简Ticker消息处理器
@@ -362,20 +388,27 @@ impl MessageHandler for AggTradeMessageHandler {
                         connection_id, agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
                     // 将归集交易数据发送给TradeEventRouter
-                    if let Some(ref sender) = self.trade_sender {
-                        // 直接使用本模块的AggTradeData::from_binance_raw方法转换
-                        let trade_data = AggTradeData::from_binance_raw(&agg_trade);
+                    let trade_data = AggTradeData::from_binance_raw(&agg_trade);
 
-                        // 发送到交易事件路由器
-                        if let Err(e) = sender.send(trade_data) {
-                            error!(target: AGG_TRADE_TARGET, "发送归集交易数据失败: {}", e);
-                            self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        } else {
-                            debug!(target: AGG_TRADE_TARGET, "成功发送归集交易数据到路由器");
-                        }
+                    // [诊断日志开始] - 支持有界和无界通道
+                    let send_result = if let Some(ref sender) = self.trade_sender {
+                        // 无界通道
+                        sender.send(trade_data).map_err(|e| format!("无界通道发送失败: {}", e))
+                    } else if let Some(ref bounded_sender) = self.bounded_trade_sender {
+                        // 有界通道
+                        bounded_sender.try_send(trade_data).map_err(|e| format!("有界通道发送失败: {}", e))
                     } else {
                         warn!(target: AGG_TRADE_TARGET, "没有配置交易数据发送器，跳过数据路由");
+                        Ok(())
+                    };
+
+                    if let Err(e) = send_result {
+                        error!(target: AGG_TRADE_TARGET, "发送归集交易数据失败: {}", e);
+                        self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        debug!(target: AGG_TRADE_TARGET, "成功发送归集交易数据到路由器");
                     }
+                    // [诊断日志结束]
 
                     Ok(())
                 }

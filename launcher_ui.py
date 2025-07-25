@@ -45,6 +45,13 @@ class KlineSystemLauncher:
                     "category": "production"
                 }
             },
+            "内存分析工具": {
+                "scripts\\klagg_memory_analysis.ps1": {
+                    "name": "K线聚合内存分析",
+                    "description": "启动K线聚合程序进行内存分析，生成dhat-heap.json报告",
+                    "category": "analysis"
+                }
+            },
             "日志程序": {
                 "start_logmcp.ps1": {
                     "name": "Log MCP 守护进程",
@@ -82,8 +89,8 @@ class KlineSystemLauncher:
         # 加载配置
         self.load_config()
 
-        # 加载日志等级配置
-        self.load_log_levels()
+        # 加载日志配置
+        self.load_log_config()
 
         # 创建UI
         self.create_ui()
@@ -210,33 +217,42 @@ class KlineSystemLauncher:
                              font=('Arial', 8), foreground='gray')
         mode_info.pack(anchor=tk.W, pady=(5, 0))
         
-        # 日志等级设置
-        log_frame = ttk.LabelFrame(control_frame, text="日志等级设置", padding="5")
+        # 日志设置
+        log_frame = ttk.LabelFrame(control_frame, text="日志设置", padding="5")
         log_frame.pack(fill=tk.X, pady=(0, 10))
 
+        # 日志总开关
+        log_enable_frame = ttk.Frame(log_frame)
+        log_enable_frame.pack(fill=tk.X, pady=(0, 5))
+
+        self.log_enabled_var = tk.BooleanVar(value=True)
+        log_enable_check = ttk.Checkbutton(log_enable_frame, text="启用日志系统",
+                                          variable=self.log_enabled_var,
+                                          command=self.on_log_enable_change)
+        log_enable_check.pack(side=tk.LEFT)
+
+        # 日志开关说明
+        log_enable_info = ttk.Label(log_enable_frame, text="关闭后所有程序将不输出日志",
+                                   font=('Arial', 8), foreground='gray')
+        log_enable_info.pack(side=tk.RIGHT)
+
+        # 日志等级设置框架
+        self.log_levels_frame = ttk.Frame(log_frame)
+        self.log_levels_frame.pack(fill=tk.X, pady=(5, 0))
+
         # K线服务日志等级
-        kline_log_frame = ttk.Frame(log_frame)
+        kline_log_frame = ttk.Frame(self.log_levels_frame)
         kline_log_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(kline_log_frame, text="K线服务:").pack(side=tk.LEFT)
+        ttk.Label(kline_log_frame, text="日志等级:").pack(side=tk.LEFT)
         self.kline_log_var = tk.StringVar(value="info")
         kline_log_combo = ttk.Combobox(kline_log_frame, textvariable=self.kline_log_var,
                                       values=["trace", "debug", "info", "warn", "error"],
                                       width=8, state="readonly")
         kline_log_combo.pack(side=tk.RIGHT)
 
-        # WebLog服务日志等级
-        weblog_log_frame = ttk.Frame(log_frame)
-        weblog_log_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(weblog_log_frame, text="WebLog:").pack(side=tk.LEFT)
-        self.weblog_log_var = tk.StringVar(value="info")
-        weblog_log_combo = ttk.Combobox(weblog_log_frame, textvariable=self.weblog_log_var,
-                                       values=["trace", "debug", "info", "warn", "error"],
-                                       width=8, state="readonly")
-        weblog_log_combo.pack(side=tk.RIGHT)
-
-        # 应用日志等级按钮
-        ttk.Button(log_frame, text="📝 应用日志等级",
-                  command=self.apply_log_levels).pack(fill=tk.X, pady=(5, 0))
+        # 应用日志设置按钮
+        ttk.Button(self.log_levels_frame, text="📝 应用日志设置",
+                  command=self.apply_log_settings).pack(fill=tk.X, pady=(5, 0))
 
         # 全局操作按钮
         global_frame = ttk.LabelFrame(control_frame, text="全局操作", padding="5")
@@ -286,8 +302,8 @@ class KlineSystemLauncher:
 
     def create_script_tabs(self):
         """创建脚本分类标签页"""
-        # 显示生产环境脚本、日志程序和数据工具
-        allowed_categories = ["生产环境脚本", "日志程序", "数据工具"]
+        # 显示生产环境脚本、日志程序、数据工具和内存分析工具
+        allowed_categories = ["生产环境脚本", "日志程序", "数据工具", "内存分析工具"]
 
         for category_name, scripts in self.scripts.items():
             if category_name not in allowed_categories:
@@ -364,6 +380,19 @@ class KlineSystemLauncher:
             repair_btn = ttk.Button(button_frame, text="🔧 检测+修复", width=12,
                                    command=lambda: self.run_gap_detector_with_repair())
             repair_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
+        elif script_file == "scripts\\klagg_memory_analysis.ps1":
+            # 为内存分析添加自定义时长按钮
+            memory_30s_btn = ttk.Button(button_frame, text="🔍 30秒分析", width=12,
+                                       command=lambda: self.run_memory_analysis(30))
+            memory_30s_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
+
+            memory_60s_btn = ttk.Button(button_frame, text="🔍 60秒分析", width=12,
+                                       command=lambda: self.run_memory_analysis(60))
+            memory_60s_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
+
+            memory_120s_btn = ttk.Button(button_frame, text="🔍 2分钟分析", width=12,
+                                        command=lambda: self.run_memory_analysis(120))
+            memory_120s_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=2)
 
         # 状态标签
         status_label = ttk.Label(button_frame, text="就绪", foreground='green')
@@ -379,6 +408,50 @@ class KlineSystemLauncher:
         mode_text = "Release" if self.release_mode else "Debug"
         self.log(f"编译模式已切换为: {mode_text}")
         self.log("✅ 编译模式已保存到统一配置文件，脚本将自动使用新模式")
+
+    def on_log_enable_change(self):
+        """日志开关变化时的处理"""
+        log_enabled = self.log_enabled_var.get()
+
+        # 启用/禁用日志等级设置控件
+        if log_enabled:
+            # 启用所有子控件
+            for child in self.log_levels_frame.winfo_children():
+                self.enable_widget_recursive(child)
+            self.log("✅ 日志系统已启用")
+        else:
+            # 禁用所有子控件
+            for child in self.log_levels_frame.winfo_children():
+                self.disable_widget_recursive(child)
+            self.log("⚠️ 日志系统已禁用 - 所有程序将不输出日志")
+
+        # 保存配置
+        self.save_log_enable_config()
+
+    def enable_widget_recursive(self, widget):
+        """递归启用控件及其子控件"""
+        try:
+            widget.configure(state='normal')
+        except:
+            try:
+                widget.configure(state='readonly')  # 对于Combobox
+            except:
+                pass
+
+        # 递归处理子控件
+        for child in widget.winfo_children():
+            self.enable_widget_recursive(child)
+
+    def disable_widget_recursive(self, widget):
+        """递归禁用控件及其子控件"""
+        try:
+            widget.configure(state='disabled')
+        except:
+            pass
+
+        # 递归处理子控件
+        for child in widget.winfo_children():
+            self.disable_widget_recursive(child)
 
     def log(self, message):
         """添加日志消息"""
@@ -531,6 +604,72 @@ class KlineSystemLauncher:
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
 
+    def run_memory_analysis(self, duration_seconds):
+        """运行内存分析（指定时长）"""
+        script_file = "scripts\\klagg_memory_analysis.ps1"
+
+        if not os.path.exists(script_file):
+            self.log(f"❌ 脚本文件不存在: {script_file}")
+            messagebox.showerror("文件不存在", f"脚本文件不存在: {script_file}")
+            return
+
+        self.log(f"🔍 启动内存分析 ({duration_seconds}秒): {script_file}")
+
+        # 更新状态
+        status_attr = f"status_{script_file.replace('.', '_').replace('\\\\', '_')}"
+        if hasattr(self, status_attr):
+            status_label = getattr(self, status_attr)
+            status_label.config(text=f"分析中({duration_seconds}s)", foreground='orange')
+
+        def run_in_thread():
+            try:
+                # 使用PowerShell运行脚本，添加-Duration参数
+                cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_file, "-Duration", str(duration_seconds)]
+
+                process = subprocess.Popen(
+                    cmd,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+
+                # 保存进程引用
+                process_key = f"{script_file}_memory_{duration_seconds}"
+                self.running_processes[process_key] = process
+
+                # 等待进程完成
+                process.wait()
+
+                # 更新状态
+                if hasattr(self, status_attr):
+                    status_label = getattr(self, status_attr)
+                    if process.returncode == 0:
+                        status_label.config(text="分析完成", foreground='green')
+                        self.log(f"✅ 内存分析完成 ({duration_seconds}秒): {script_file}")
+                        self.log(f"📄 分析结果已保存到 dhat-heap.json")
+                        self.log(f"🌐 请访问 https://nnethercote.github.io/dhat/viewer/ 查看结果")
+                    else:
+                        status_label.config(text="分析失败", foreground='red')
+                        self.log(f"❌ 内存分析失败 ({duration_seconds}秒): {script_file}")
+                        self.log(f"返回码: {process.returncode}")
+
+                # 移除进程引用
+                if process_key in self.running_processes:
+                    del self.running_processes[process_key]
+
+            except Exception as e:
+                self.log(f"❌ 启动内存分析失败: {script_file}, 错误: {e}")
+                if hasattr(self, status_attr):
+                    status_label = getattr(self, status_attr)
+                    status_label.config(text="错误", foreground='red')
+
+                # 移除进程引用
+                process_key = f"{script_file}_memory_{duration_seconds}"
+                if process_key in self.running_processes:
+                    del self.running_processes[process_key]
+
+        # 在新线程中运行
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
+
     def edit_script(self, script_file):
         """编辑PowerShell脚本"""
         try:
@@ -638,21 +777,51 @@ class KlineSystemLauncher:
             self.log(f"❌ 打开项目目录失败: {e}")
             messagebox.showerror("打开失败", f"无法打开项目目录: {e}")
 
-    def load_log_levels(self):
-        """加载当前的日志等级配置"""
+    def load_log_config(self):
+        """加载当前的日志配置"""
         try:
-            # 读取K线服务日志等级 (从 config/aggregate_config.toml)
+            # 读取日志开关状态
+            log_enabled = self.read_log_enabled()
+            if hasattr(self, 'log_enabled_var'):
+                self.log_enabled_var.set(log_enabled)
+
+            # 读取K线服务日志等级
             kline_level = self.read_kline_log_level()
             if hasattr(self, 'kline_log_var'):
                 self.kline_log_var.set(kline_level)
 
-            # 读取WebLog服务日志等级 (从 src/weblog/config/logging_config.toml)
-            weblog_level = self.read_weblog_log_level()
-            if hasattr(self, 'weblog_log_var'):
-                self.weblog_log_var.set(weblog_level)
+            # 根据日志开关状态设置控件状态
+            if hasattr(self, 'log_levels_frame'):
+                if log_enabled:
+                    for child in self.log_levels_frame.winfo_children():
+                        self.enable_widget_recursive(child)
+                else:
+                    for child in self.log_levels_frame.winfo_children():
+                        self.disable_widget_recursive(child)
 
         except Exception as e:
-            self.log(f"⚠️ 加载日志等级配置失败: {e}")
+            self.log(f"⚠️ 加载日志配置失败: {e}")
+
+    def read_log_enabled(self):
+        """读取日志开关状态"""
+        try:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # 查找 [logging] 部分的 enabled
+                    in_logging_section = False
+                    for line in content.split('\n'):
+                        line = line.strip()
+                        if line == '[logging]':
+                            in_logging_section = True
+                        elif line.startswith('[') and line != '[logging]':
+                            in_logging_section = False
+                        elif in_logging_section and line.startswith('enabled'):
+                            value = line.split('=')[1].strip().strip('"\'')
+                            return value.lower() == 'true'
+            return True  # 默认启用
+        except Exception:
+            return True
 
     def read_kline_log_level(self):
         """读取K线服务的日志等级"""
@@ -675,45 +844,80 @@ class KlineSystemLauncher:
         except Exception:
             return "info"
 
-    def read_weblog_log_level(self):
-        """读取WebLog服务的日志等级"""
-        try:
-            if os.path.exists(self.kline_config_file):
-                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    # 查找 [logging.services] 部分的 weblog
-                    in_services_section = False
-                    for line in content.split('\n'):
-                        line = line.strip()
-                        if line == '[logging.services]':
-                            in_services_section = True
-                        elif line.startswith('[') and line != '[logging.services]':
-                            in_services_section = False
-                        elif in_services_section and line.startswith('weblog'):
-                            value = line.split('=')[1].strip().strip('"\'')
-                            return value
-            return "info"  # 默认值
-        except Exception:
-            return "info"
 
-    def apply_log_levels(self):
-        """应用日志等级设置"""
+
+    def save_log_enable_config(self):
+        """保存日志开关配置"""
         try:
+            log_enabled = self.log_enabled_var.get()
+            self.update_log_enabled(log_enabled)
+            self.log(f"✅ 日志开关已保存: {'启用' if log_enabled else '禁用'}")
+        except Exception as e:
+            self.log(f"❌ 保存日志开关失败: {e}")
+
+    def apply_log_settings(self):
+        """应用日志设置"""
+        try:
+            log_enabled = self.log_enabled_var.get()
             kline_level = self.kline_log_var.get()
-            weblog_level = self.weblog_log_var.get()
+
+            # 更新日志开关
+            self.update_log_enabled(log_enabled)
 
             # 更新K线服务配置
             self.update_kline_log_level(kline_level)
 
-            # 更新WebLog服务配置
-            self.update_weblog_log_level(weblog_level)
-
-            self.log(f"✅ 日志等级已更新: K线服务={kline_level}, WebLog={weblog_level}")
-            messagebox.showinfo("设置成功", f"日志等级已更新:\nK线服务: {kline_level}\nWebLog: {weblog_level}")
+            status_text = "启用" if log_enabled else "禁用"
+            self.log(f"✅ 日志设置已更新: 状态={status_text}, 日志等级={kline_level}")
+            messagebox.showinfo("设置成功",
+                              f"日志设置已更新:\n状态: {status_text}\n日志等级: {kline_level}")
 
         except Exception as e:
-            self.log(f"❌ 更新日志等级失败: {e}")
-            messagebox.showerror("设置失败", f"更新日志等级失败: {e}")
+            self.log(f"❌ 更新日志设置失败: {e}")
+            messagebox.showerror("设置失败", f"更新日志设置失败: {e}")
+
+    def update_log_enabled(self, enabled):
+        """更新日志开关状态"""
+        try:
+            if os.path.exists(self.kline_config_file):
+                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # 替换[logging]部分的enabled配置
+                lines = content.split('\n')
+                in_logging_section = False
+                enabled_found = False
+
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if stripped == '[logging]':
+                        in_logging_section = True
+                    elif stripped.startswith('[') and stripped != '[logging]':
+                        in_logging_section = False
+                    elif in_logging_section and stripped.startswith('enabled'):
+                        lines[i] = f'enabled = {str(enabled).lower()}'
+                        enabled_found = True
+                        break
+
+                # 如果没有找到enabled配置，在[logging]部分添加
+                if not enabled_found:
+                    for i, line in enumerate(lines):
+                        stripped = line.strip()
+                        if stripped == '[logging]':
+                            # 在[logging]行后插入enabled配置
+                            lines.insert(i + 1, f'enabled = {str(enabled).lower()}')
+                            break
+
+                # 写回文件
+                with open(self.kline_config_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(lines))
+
+                self.log(f"✅ 日志开关已更新为: {'启用' if enabled else '禁用'}")
+            else:
+                self.log(f"⚠️ 配置文件不存在: {self.kline_config_file}")
+
+        except Exception as e:
+            raise Exception(f"更新日志开关失败: {e}")
 
     def update_kline_log_level(self, level):
         """更新K线服务的日志等级"""
@@ -746,36 +950,7 @@ class KlineSystemLauncher:
         except Exception as e:
             raise Exception(f"更新K线服务日志等级失败: {e}")
 
-    def update_weblog_log_level(self, level):
-        """更新WebLog服务的日志等级"""
-        try:
-            if os.path.exists(self.kline_config_file):
-                with open(self.kline_config_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
 
-                # 替换[logging.services]部分的weblog
-                lines = content.split('\n')
-                in_services_section = False
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-                    if stripped == '[logging.services]':
-                        in_services_section = True
-                    elif stripped.startswith('[') and stripped != '[logging.services]':
-                        in_services_section = False
-                    elif in_services_section and stripped.startswith('weblog'):
-                        lines[i] = f'weblog = "{level}"'
-                        break
-
-                # 写回文件
-                with open(self.kline_config_file, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(lines))
-
-                self.log(f"✅ WebLog服务日志等级已更新为: {level}")
-            else:
-                self.log(f"⚠️ 配置文件不存在: {self.kline_config_file}")
-
-        except Exception as e:
-            raise Exception(f"更新WebLog服务日志等级失败: {e}")
 
 def main():
     """主函数"""

@@ -13,7 +13,7 @@
 /// 可视化测试模式开关
 /// - true: 启动Web服务器进行K线数据可视化验证，禁用数据库持久化
 /// - false: 正常生产模式，启用数据库持久化，禁用Web服务器
-const VISUAL_TEST_MODE: bool = true;
+const VISUAL_TEST_MODE: bool = false;
 
 /// 测试模式开关（影响数据源）
 /// - true: 使用少量测试品种（BTCUSDT等8个品种）
@@ -550,7 +550,11 @@ fn get_physical_core_count() -> usize {
     }
 }
 
+
+
 fn main() -> Result<()> {
+
+
     // 1. ==================== 日志系统必须最先初始化 ====================
     // 使用 block_on 是因为 init_ai_logging 是 async 的
     // guard 的生命周期将决定性能日志何时被刷新
@@ -578,6 +582,7 @@ fn main() -> Result<()> {
     // 3. 在 I/O 运行时上下文中执行应用启动和管理逻辑
     // 使用 instrument 将 main_span 附加到整个应用生命周期
     let main_span = span!(target: "应用生命周期", Level::INFO, "klagg_app_lifecycle");
+
     let result = io_runtime.block_on(run_app(&io_runtime).instrument(main_span));
 
     if let Err(e) = &result {
@@ -596,12 +601,16 @@ fn main() -> Result<()> {
     shutdown_target_log_sender(); // [启用] 新的关闭函数
     // shutdown_log_sender();     // [禁用] 旧的关闭函数
 
+
+
     result
 }
 
 // 使用 `instrument` 宏自动创建和进入一个 Span
 #[instrument(target = "应用生命周期", skip_all, name = "run_app")]
-async fn run_app(io_runtime: &Runtime) -> Result<()> {
+async fn run_app(
+    io_runtime: &Runtime,
+) -> Result<()> {
     info!(target: "应用生命周期",log_type = "low_freq", "K线聚合服务启动中...");
     // trace!(log_type = "low_freq", "K线聚合服务启动中...");
     // trace!("🔍 开始初始化全局资源...");
@@ -612,7 +621,7 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
         target: "应用生命周期",
         log_type = "low_freq",
         path = DEFAULT_CONFIG_PATH,
-        persistence_ms = config.persistence_interval_ms,
+        gateway_pull_interval_ms = config.gateway.pull_interval_ms,
         "配置文件加载成功"
     );
     trace!(target: "应用生命周期", config_details = ?config, "📋 详细配置信息");
@@ -921,15 +930,35 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
     drop(_enter); // 退出 apen
     let worker_handles = Arc::new(worker_read_handles);
 
-    // 6. ================= 在 I/O 运行时启动依赖 Worker 的后台任务 ================
+    // 6. ================= 在 I/O 运行时启动新的聚合与分发任务 ================
 
-    // [核心修改] 根据模式条件性地启动任务
+    let (klines_watch_tx, klines_watch_rx) =
+        watch::channel(Arc::new(klagg::GlobalKlines::default()));
+
+    // 使用配置中的队列大小
+    let (db_queue_tx, db_queue_rx) = mpsc::channel(config.persistence.queue_size);
+
+    // 启动 Gateway 任务
+    info!(target: "应用生命周期", "准备启动Gateway任务，Worker数量: {}", worker_handles.len());
+    log::context::spawn_instrumented_on(
+        klagg::gateway_task(
+            worker_handles.clone(),
+            klines_watch_tx,
+            db_queue_tx,
+            config.clone(),
+            shutdown_rx.clone(),
+            watchdog.clone(),
+        ),
+        io_runtime,
+    );
+    info!(target: "应用生命周期", "Gateway任务已提交到运行时");
+
+    // 根据模式条件性地启动最终消费者
     let persistence_handle = if visual_test_mode {
-        info!(target: "应用生命周期", "启动可视化测试Web服务器...");
-        // 【修改】调用时不再传递 config
+        info!(target: "应用生命周期", "启动可视化测试Web服务器 (新架构)...");
         log::context::spawn_instrumented_on(
             klagg::web_server::run_visual_test_server(
-                worker_handles.clone(),
+                klines_watch_rx,
                 global_index_to_symbol.clone(),
                 periods.clone(),
                 shutdown_rx.clone(),
@@ -938,16 +967,15 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
         );
         None
     } else {
-        // 在生产模式下，启动持久化任务 (这部分逻辑保持不变)
+        info!(target: "应用生命周期", "启动数据库写入任务 (新架构)...");
         Some(log::context::spawn_instrumented_on(
-            klagg::persistence_task(
+            klagg::db_writer_task(
                 db.clone(),
-                worker_handles.clone(),
+                db_queue_rx,
                 global_index_to_symbol.clone(),
                 periods.clone(),
-                config.clone(),
                 shutdown_rx.clone(),
-                watchdog.clone(), // 传递 watchdog
+                watchdog.clone(),
             ),
             io_runtime,
         ))
@@ -974,6 +1002,7 @@ async fn run_app(io_runtime: &Runtime) -> Result<()> {
     );
 
     // 7. ==================== 等待并处理关闭信号 ====================
+
     info!(target: "应用生命周期", "所有服务已启动，等待关闭信号 (Ctrl+C)...");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
