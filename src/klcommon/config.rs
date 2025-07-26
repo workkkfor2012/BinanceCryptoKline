@@ -38,6 +38,11 @@ fn default_weblog_pipe_name() -> Option<String> {
     Some("weblog_pipe".to_string())
 }
 
+/// 默认启用控制台输出
+fn default_enable_console_output() -> bool {
+    false
+}
+
 /// K线聚合系统配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregateConfig {
@@ -193,6 +198,10 @@ pub struct LoggingConfig {
     /// 是否启用完全追踪功能（包括跨线程上下文传递）
     #[serde(default = "default_enable_full_tracing")]
     pub enable_full_tracing: bool,
+
+    /// 是否启用控制台输出（用于调试）
+    #[serde(default = "default_enable_console_output")]
+    pub enable_console_output: bool,
 }
 
 // 移除 Default 实现，强制从配置文件读取所有配置
@@ -264,6 +273,7 @@ impl Default for LoggingConfig {
             pipe_name: r"\\.\pipe\kline_log_pipe".to_string(),
             weblog_pipe_name: Some("weblog_pipe".to_string()),
             enable_full_tracing: true,
+            enable_console_output: false,
         }
     }
 }

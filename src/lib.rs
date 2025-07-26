@@ -4,7 +4,7 @@ pub mod kldata;
 // pub mod klserver; // 暂时注释掉，目录为空
 pub mod models;
 // pub mod klagg_simple; // 老版本，已被 klagg_sub_threads 替代
-pub mod klagg_sub_threads;
+pub mod engine; // 重构后的 K线聚合引擎
 
 // Re-export error types
 pub use klcommon::error::AppError;

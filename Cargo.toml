@@ -17,8 +17,8 @@ name = "kline_data_service"
 path = "src/bin/kline_data_service.rs"
 
 [[bin]]
-name = "klagg_sub_threads"
-path = "src/bin/klagg_sub_threads.rs"
+name = "klagg"
+path = "src/bin/klagg.rs"
 
 
 

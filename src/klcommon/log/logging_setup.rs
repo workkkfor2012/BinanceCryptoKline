@@ -50,7 +50,7 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
     }
 
     // 获取日志配置 - 只从配置文件读取
-    let (log_enabled, log_level, log_transport, pipe_name, enable_full_tracing) = load_logging_config()
+    let (log_enabled, log_level, log_transport, pipe_name, enable_full_tracing, enable_console_output) = load_logging_config()
         .map_err(|e| {
             eprintln!("配置文件读取失败: {}", e);
             eprintln!("请确保 config/BinanceKlineConfig.toml 文件存在且格式正确");
@@ -100,16 +100,49 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
     // 显示过滤器字符串用于调试
     eprintln!("🔍 日志过滤器: {}", business_filter_str);
 
-    // [修改] 这是切换日志层的关键点
-    let registry = Registry::default()
+    // [修改] 这是切换日志层的关键点 - 根据配置决定是否添加控制台输出层
+    let mut registry = Registry::default()
         .with(TargetLogLayer::new().with_filter(EnvFilter::new(&business_filter_str))) // [启用] 简单日志层
         // .with(McpLayer.with_filter(EnvFilter::new(&business_filter_str)))          // [禁用] AI富日志层
         .with(ProblemSummaryLayer.with_filter(EnvFilter::new(&business_filter_str))) // 可按需保留
         .with(LowFreqLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)))   // 可按需保留
         .with(BeaconLogLayer::new().with_filter(EnvFilter::new(&business_filter_str)));    // 可按需保留
 
-    // 3. 条件性地准备性能分析层和其 guard
+    // 检查性能日志开关
     let enable_perf_log = std::env::var("ENABLE_PERF_LOG").is_ok();
+
+    // [条件性] 根据配置决定是否添加控制台输出层
+    if enable_console_output {
+        eprintln!("🖥️  控制台日志输出: 已启用");
+
+        // 继续处理性能分析层
+        let (perf_layer, final_guard): (Option<_>, Box<dyn LogGuard>) = if enable_perf_log {
+            let perf_filter = EnvFilter::new("perf=trace");
+            let (flame_layer, flame_guard) = FlameLayer::with_file("logs/performance.folded")
+                .map_err(|e| AppError::ConfigError(format!("Failed to create flamegraph file: {}", e)))?;
+            eprintln!("性能日志系统已激活，日志将写入 logs/performance.folded");
+            (Some(flame_layer.with_filter(perf_filter)), Box::new(flame_guard))
+        } else {
+            (None, Box::new(DummyGuard))
+        };
+
+        let final_registry = registry
+            .with(tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_thread_ids(false)
+                .with_level(true)
+                .with_filter(EnvFilter::new(&business_filter_str)));
+
+        if let Some(perf_layer) = perf_layer {
+            final_registry.with(perf_layer).init();
+        } else {
+            final_registry.init();
+        }
+
+        return Ok(final_guard);
+    } else {
+        eprintln!("🖥️  控制台日志输出: 已禁用");
+    }
 
     // [最终方案] 使用 Option<Layer> 的惯用模式来处理条件层
     let (perf_layer, final_guard): (Option<_>, Box<dyn LogGuard>) = if enable_perf_log {
@@ -158,7 +191,7 @@ pub async fn init_ai_logging() -> Result<Box<dyn LogGuard>> {
 }
 
 /// 加载日志配置
-pub fn load_logging_config() -> Result<(bool, String, String, String, bool)> {
+pub fn load_logging_config() -> Result<(bool, String, String, String, bool, bool)> {
     const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
 
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
@@ -179,6 +212,7 @@ pub fn load_logging_config() -> Result<(bool, String, String, String, bool)> {
                     config.logging.log_transport,
                     pipe_name,
                     config.logging.enable_full_tracing,
+                    config.logging.enable_console_output,
                 ))
             },
             Err(e) => Err(AppError::ConfigError(format!("Failed to parse config: {}", e))),

@@ -1,4 +1,4 @@
-# K线聚合服务启动脚本
+# K线聚合服务启动脚本 (单线程重构版架构)
 # 导入统一配置读取脚本
 . "scripts\read_unified_config.ps1"
 
@@ -9,12 +9,12 @@ if (-not (Test-Path "Cargo.toml")) {
 }
 
 $buildMode = Get-BuildMode
-Write-Host "🚀 启动K线聚合服务 ($buildMode)" -ForegroundColor Yellow
+Write-Host "🚀 启动K线聚合服务 - 单线程重构版架构 ($buildMode)" -ForegroundColor Yellow
 
 Start-Process powershell -ArgumentList "-NoExit", "-Command", @"
 . 'scripts\read_unified_config.ps1'
 Set-LoggingEnvironment
-`$cargoCmd = Get-CargoCommand -BinaryName 'kline_aggregate_service'
-Write-Host '🚀 K线聚合服务启动中...' -ForegroundColor Yellow
+`$cargoCmd = Get-CargoCommand -BinaryName 'klagg'
+Write-Host '🚀 K线聚合服务启动中 (单线程重构版)...' -ForegroundColor Yellow
 Invoke-Expression `$cargoCmd
 "@

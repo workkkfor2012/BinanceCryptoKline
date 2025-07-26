@@ -3,9 +3,7 @@
 //! 包含一个基于Axum的Web服务器，用于通过WebSocket实时推送K线数据。
 //! 这个模块是自包含的，外部只需要调用 `run_visual_test_server` 即可启动。
 
-use crate::{
-    klagg_sub_threads::{KlineData, GlobalKlines},
-};
+use crate::engine::KlineState;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -27,7 +25,7 @@ use tracing::{error, info, instrument, trace, warn};
 /// 启动可视化测试服务器。这是从外部调用此模块的唯一入口点。
 #[instrument(target = "WebServer", skip_all)]
 pub async fn run_visual_test_server(
-    mut klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
+    klines_watch_rx: watch::Receiver<crate::engine::events::StateUpdate>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     shutdown_rx: watch::Receiver<bool>,
@@ -88,7 +86,7 @@ struct ApiKline {
 /// Web服务器的共享状态
 #[derive(Clone)]
 struct AppState {
-    klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
+    klines_watch_rx: watch::Receiver<crate::engine::events::StateUpdate>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     subscriptions: Arc<DashMap<String, Vec<mpsc::Sender<String>>>>,
@@ -108,42 +106,50 @@ async fn pusher_task(
         tokio::select! {
             // 监听Gateway的数据更新
             Ok(_) = klines_watch_rx.changed() => {
-                // 获取最新的全局快照
-                let snapshot = klines_watch_rx.borrow_and_update().clone();
+                // 获取最新的状态更新
+                let state_update = klines_watch_rx.borrow_and_update().clone();
 
-                // 过滤出有效的K线数据
-                let all_klines: Vec<KlineData> = snapshot.klines.iter()
-                    .filter(|k| k.open_time > 0)  // 过滤掉默认/空的K线
-                    .cloned()
-                    .collect();
-
-                // 如果没有收集到任何更新的K线，则直接进入下一次循环
-                if all_klines.is_empty() {
+                // 如果没有脏数据，跳过
+                if state_update.dirty_indices.is_empty() {
                     continue;
                 }
-                trace!(target = "Pusher", kline_count = all_klines.len(), "拉取到更新的K线");
 
+                trace!(target = "Pusher", dirty_count = state_update.dirty_indices.len(), "收到状态更新");
+
+                // 获取符号索引映射
                 let index_guard = state.index_to_symbol.read().await;
                 let klines_by_symbol: DashMap<String, Vec<ApiKline>> = DashMap::new();
 
-                for kline in all_klines {
-                    if let (Some(symbol), Some(period)) = (
-                        index_guard.get(kline.global_symbol_index),
-                        state.periods.get(kline.period_index),
-                    ) {
-                        klines_by_symbol.entry(symbol.clone()).or_default().push(ApiKline {
-                            period: period.clone(),
-                            open_time: kline.open_time,
-                            open: kline.open,
-                            high: kline.high,
-                            low: kline.low,
-                            close: kline.close,
-                            volume: kline.volume,
-                            is_final: kline.is_final,
-                        });
+                // 处理脏数据索引
+                for &kline_offset in state_update.dirty_indices.iter() {
+                    if let Some(kline) = state_update.kline_snapshot.get(kline_offset) {
+                        // 跳过未初始化的K线
+                        if kline.open_time == 0 {
+                            continue;
+                        }
+
+                        // 计算品种索引和周期索引
+                        let num_periods = state.periods.len();
+                        let symbol_idx = kline_offset / num_periods;
+                        let period_idx = kline_offset % num_periods;
+
+                        // 获取品种名称和周期
+                        if let (Some(symbol), Some(period)) = (index_guard.get(symbol_idx), state.periods.get(period_idx)) {
+                            let api_kline = ApiKline {
+                                period: period.clone(),
+                                open_time: kline.open_time,
+                                open: kline.open,
+                                high: kline.high,
+                                low: kline.low,
+                                close: kline.close,
+                                volume: kline.volume,
+                                is_final: kline.is_final,
+                            };
+
+                            klines_by_symbol.entry(symbol.clone()).or_insert_with(Vec::new).push(api_kline);
+                        }
                     }
                 }
-                drop(index_guard);
 
                 // 将分组后的数据推送给对应的订阅者
                 for entry in klines_by_symbol.iter() {

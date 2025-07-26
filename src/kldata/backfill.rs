@@ -31,7 +31,7 @@ static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::
 
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
-const CONCURRENCY: usize = 20; // 第一次补齐并发数
+const CONCURRENCY: usize = 50; // 第一次补齐并发数
 const SECOND_ROUND_CONCURRENCY: usize = 400; // 第二次补齐并发数
 
 // [新增] 连接池相关常量
@@ -296,6 +296,8 @@ impl KlineBackfiller {
         };
 
         let all_symbols = self.get_symbols_with_exchange_info(exchange_info.as_ref()).await?;
+        // [新增] 存储品种总数，用于最终的统计日志
+        let total_symbols_count = all_symbols.len();
 
         info!(
             log_type = "low_freq",
@@ -334,7 +336,10 @@ impl KlineBackfiller {
         let first_round_start = Instant::now();
         let failed_tasks = self.execute_tasks_with_concurrency(tasks.clone(), "initial_download_loop", concurrency).await;
         let first_round_elapsed = first_round_start.elapsed();
-        
+
+        // [新增] 存储第一轮的统计信息，供第二轮使用
+        let first_round_stats = (tasks.len(), tasks.len() - failed_tasks.len(), failed_tasks.len(), first_round_elapsed);
+
         // 第一轮K线补齐完成统计
         info!(
             log_type = "low_freq",
@@ -361,8 +366,30 @@ impl KlineBackfiller {
 
             // 直接报告最终失败，不进行重试
             if !failed_tasks.is_empty() {
-                self.report_final_failures(failed_tasks);
+                self.report_final_failures(failed_tasks.clone());
             }
+
+            // [新增] 为第一轮增加最终统计日志
+            let final_failed_tasks_count = failed_tasks.len();
+            let final_message = format!(
+                "补齐完成 (第1轮): 总耗时 {:.2}s, 共处理 {} 个品种, 失败任务 {}, 重试任务 0",
+                start_time.elapsed().as_secs_f64(),
+                total_symbols_count,
+                final_failed_tasks_count
+            );
+            info!(
+                log_type = "low_freq",
+                message = %final_message,
+                round = 1,
+                total_duration_s = start_time.elapsed().as_secs_f64(),
+                final_total_klines_backfilled = BACKFILL_STATS.0.load(Ordering::Relaxed),
+                final_api_requests_sent = API_REQUEST_STATS.0.load(Ordering::Relaxed),
+                final_api_requests_success = API_REQUEST_STATS.1.load(Ordering::Relaxed),
+                final_api_requests_failed = API_REQUEST_STATS.2.load(Ordering::Relaxed),
+                total_symbols_count = total_symbols_count,
+                final_failed_tasks_count = final_failed_tasks_count,
+                total_retried_tasks_count = 0
+            );
 
             return Ok(());
         }
@@ -373,6 +400,9 @@ impl KlineBackfiller {
             message = "第二轮补齐策略：精确补齐，启用完整重试机制",
             failed_count = failed_tasks.len(),
         );
+
+        // [新增] 记录进入重试流程的任务数
+        let total_retried_tasks_count = failed_tasks.len();
 
         // 执行重试逻辑，将失败的任务转换为跟踪器
         let mut task_trackers: Vec<TaskRetryTracker> = failed_tasks
@@ -482,15 +512,41 @@ impl KlineBackfiller {
             self.report_final_failures(final_failures);
         }
 
+        // [修改] 格式化新的摘要消息，包含第一轮和第二轮的统计信息
+        let (first_total_tasks, first_success_tasks, first_failed_tasks, first_elapsed) = first_round_stats;
+        let first_round_message = format!(
+            "补齐完成 (第1轮): 总耗时 {:.2}s, 共处理 {} 个品种, 失败任务 {}, 重试任务 0",
+            first_elapsed.as_secs_f64(),
+            total_symbols_count,
+            first_failed_tasks
+        );
+        let second_round_message = format!(
+            "补齐完成 (第{}轮): 总耗时 {:.2}s, 共处理 {} 个品种, 失败任务 {}, 重试任务 {}",
+            round,
+            start_time.elapsed().as_secs_f64(),
+            total_symbols_count,
+            final_failed_tasks_count,
+            total_retried_tasks_count
+        );
+        let combined_message = format!("{} | {}", first_round_message, second_round_message);
+
         info!(
             log_type = "low_freq",
-            message = "K线数据补齐任务完成",
+            message = %combined_message,
+            round = round,
             total_duration_s = start_time.elapsed().as_secs_f64(),
             final_total_klines_backfilled = BACKFILL_STATS.0.load(Ordering::Relaxed),
             final_api_requests_sent = API_REQUEST_STATS.0.load(Ordering::Relaxed),
             final_api_requests_success = API_REQUEST_STATS.1.load(Ordering::Relaxed),
             final_api_requests_failed = API_REQUEST_STATS.2.load(Ordering::Relaxed),
+            total_symbols_count = total_symbols_count,
             final_failed_tasks_count = final_failed_tasks_count,
+            total_retried_tasks_count = total_retried_tasks_count,
+            // [新增] 第一轮的详细统计
+            first_round_total_tasks = first_total_tasks,
+            first_round_success_tasks = first_success_tasks,
+            first_round_failed_tasks = first_failed_tasks,
+            first_round_elapsed_seconds = first_elapsed.as_secs_f64(),
         );
 
 
@@ -684,11 +740,26 @@ impl KlineBackfiller {
                 TaskResult::Success(count)
             },
             Err(e) => {
-                if let AppError::HttpError(ref re) = e {
-                    if re.is_connect() || re.is_timeout() {
-                        self.remove_client_from_pool(&client).await;
-                    }
+                // ✨ [修改] 扩展客户端移除逻辑
+                // 如果是网络错误（连接/超时）或API层面的速率限制/IP封禁，则移除该客户端
+                let should_remove_client = match &e {
+                    // 网络层错误
+                    AppError::HttpError(re) => re.is_connect() || re.is_timeout(),
+                    // API层错误 (429: Too Many Requests; 418: I'm a teapot, 用于IP封禁)
+                    AppError::ApiError(msg) => msg.contains("429") || msg.contains("418"),
+                    // 其他错误类型不移除客户端
+                    _ => false,
+                };
+
+                if should_remove_client {
+                    warn!(
+                        target = "client_pool",
+                        message = "检测到客户端问题(网络或速率限制)，将从池中移除",
+                        error = %e,
+                    );
+                    self.remove_client_from_pool(&client).await;
                 }
+
                 TaskResult::Failure { task, error: e }
             }
         }
