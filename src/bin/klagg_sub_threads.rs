@@ -1,4 +1,4 @@
-//! 启动“完全分区模型”K线聚合服务。
+﻿//! 启动“完全分区模型”K线聚合服务。
 //!
 //! ## 核心执行模型
 //! - main函数手动创建一个多线程的 `io_runtime`，用于处理所有I/O密集型任务。
@@ -7,22 +7,11 @@
 //! - 计算与I/O任务通过MPSC通道解耦。
 //! - 实现基于JoinHandle的健壮关闭流程。
 
-// ==================== 运行模式配置 ====================
-// 修改这些常量来控制程序运行模式，无需设置环境变量
 
-/// 可视化测试模式开关
-/// - true: 启动Web服务器进行K线数据可视化验证，禁用数据库持久化
-/// - false: 正常生产模式，启用数据库持久化，禁用Web服务器
-const VISUAL_TEST_MODE: bool = false;
-
-/// 测试模式开关（影响数据源）
-/// - true: 使用少量测试品种（BTCUSDT等8个品种）
-/// - false: 从币安API获取所有U本位永续合约品种
-const TEST_MODE: bool = false;
 
 use anyhow::Result;
 use chrono;
-use kline_server::klagg_sub_threads::{self as klagg, InitialKlineData, WorkerCmd};
+use kline_server::klagg_sub_threads::{self as klagg, DeltaBatch, InitialKlineData, WorkerCmd};
 use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
     api::BinanceApi,
@@ -41,514 +30,25 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot, watch, Notify, RwLock};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, instrument, span, warn, trace, Instrument, Level, Span};
+use tracing::{error, info, instrument, span, warn, trace, Instrument, Level};
 // use uuid; // 移除未使用的导入
 
 // --- 常量定义 ---
 const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
-const NUM_WORKERS: usize = 4;
 const CLOCK_SAFETY_MARGIN_MS: u64 = 10;
 const MIN_SLEEP_MS: u64 = 10;
 const HEALTH_CHECK_INTERVAL_S: u64 = 10; // 新的监控间隔
 
-/// 获取物理核心ID，跳过超线程核心
-///
-/// 在超线程系统中，物理核心通常对应偶数索引的逻辑核心ID (0, 2, 4, 6...)
-/// 超线程核心对应奇数索引的逻辑核心ID (1, 3, 5, 7...)
-///
-/// 这个函数实现了一个通用的物理核心检测策略：
-/// 1. 首先尝试通过系统API获取真实的物理核心数
-/// 2. 如果无法获取，则使用启发式方法：选择偶数索引的核心
-fn get_physical_core_ids() -> Vec<core_affinity::CoreId> {
-    info!(target: "应用生命周期", "🔍 开始CPU物理核心检测流程");
 
-    let all_cores = core_affinity::get_core_ids().unwrap_or_default();
-    let total_logical_cores = all_cores.len();
 
-    info!(target: "应用生命周期",
-        all_logical_cores = ?all_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-        total_count = total_logical_cores,
-        "📊 检测到的所有逻辑核心"
-    );
 
-    if total_logical_cores == 0 {
-        error!(target: "应用生命周期", "❌ 无法获取任何CPU核心信息，系统可能存在问题");
-        return Vec::new();
-    }
 
-    // 尝试通过系统信息获取物理核心数
-    info!(target: "应用生命周期", "🔎 正在通过系统API检测物理核心数量...");
-    let physical_core_count = get_physical_core_count();
 
-    info!(target: "应用生命周期",
-        total_logical_cores,
-        detected_physical_cores = physical_core_count,
-        hyperthreading_ratio = if physical_core_count > 0 {
-            format!("{}:1", total_logical_cores / physical_core_count)
-        } else {
-            "未知".to_string()
-        },
-        "📈 CPU拓扑检测结果"
-    );
 
-    // 分析超线程情况并选择物理核心
-    if total_logical_cores > physical_core_count && physical_core_count > 0 {
-        info!(target: "应用生命周期",
-            logical_cores = total_logical_cores,
-            physical_cores = physical_core_count,
-            "✅ 检测到超线程技术，逻辑核心数 > 物理核心数"
-        );
 
-        // 选择物理核心的策略
-        info!(target: "应用生命周期", "🎯 开始物理核心选择流程...");
-        let physical_cores = select_physical_cores(&all_cores, physical_core_count);
 
-        // 验证选择的正确性
-        if physical_cores.len() == physical_core_count {
-            info!(target: "应用生命周期",
-                selected_cores = ?physical_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-                expected_count = physical_core_count,
-                actual_count = physical_cores.len(),
-                "✅ 物理核心选择成功"
-            );
-        } else {
-            error!(target: "应用生命周期",
-                expected = physical_core_count,
-                actual = physical_cores.len(),
-                selected_cores = ?physical_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-                "❌ 物理核心选择数量不匹配！可能存在CPU拓扑异常"
-            );
-        }
 
-        // 显示超线程核心映射关系
-        log_hyperthread_mapping(&all_cores, &physical_cores);
 
-        physical_cores
-    } else if physical_core_count == 0 {
-        warn!(target: "应用生命周期",
-            "⚠️ 无法通过系统API检测物理核心数，使用启发式方法"
-        );
-        let heuristic_cores = select_cores_heuristic(&all_cores);
-        info!(target: "应用生命周期",
-            selected_cores = ?heuristic_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-            method = "启发式",
-            "🔧 启发式物理核心选择完成"
-        );
-        heuristic_cores
-    } else {
-        // 没有超线程，直接使用所有核心
-        info!(target: "应用生命周期",
-            total_cores = total_logical_cores,
-            "ℹ️ 未检测到超线程技术，逻辑核心数 = 物理核心数"
-        );
-        info!(target: "应用生命周期",
-            selected_cores = ?all_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-            "✅ 使用所有核心作为物理核心"
-        );
-        all_cores
-    }
-}
-
-/// 显示超线程核心映射关系
-fn log_hyperthread_mapping(all_cores: &[core_affinity::CoreId], physical_cores: &[core_affinity::CoreId]) {
-    info!(target: "应用生命周期", "📋 超线程核心映射关系:");
-
-    let physical_set: std::collections::HashSet<_> = physical_cores.iter().map(|c| c.id).collect();
-
-    for (i, core) in all_cores.iter().enumerate() {
-        let core_type = if physical_set.contains(&core.id) {
-            "物理核心"
-        } else {
-            "超线程核心"
-        };
-
-        info!(target: "应用生命周期",
-            logical_index = i,
-            core_id = core.id,
-            core_type = core_type,
-            "   逻辑索引{} -> 核心ID{} ({})",
-            i, core.id, core_type
-        );
-    }
-}
-
-/// 启发式方法选择核心
-fn select_cores_heuristic(all_cores: &[core_affinity::CoreId]) -> Vec<core_affinity::CoreId> {
-    let total_cores = all_cores.len();
-
-    info!(target: "应用生命周期",
-        total_cores,
-        "🔧 启发式检测：分析可能的超线程配置"
-    );
-
-    // 常见的超线程比例
-    let possible_ratios = [2, 4]; // 2:1 或 4:1 超线程
-
-    for ratio in possible_ratios {
-        if total_cores % ratio == 0 && total_cores >= ratio {
-            let physical_count = total_cores / ratio;
-            info!(target: "应用生命周期",
-                ratio,
-                physical_count,
-                "🎯 假设超线程比例 {}:1, 推测物理核心数: {}",
-                ratio, physical_count
-            );
-
-            // 选择均匀分布的核心
-            let selected_cores: Vec<_> = (0..physical_count)
-                .map(|i| i * ratio)
-                .filter_map(|idx| all_cores.get(idx).copied())
-                .collect();
-
-            if selected_cores.len() == physical_count {
-                info!(target: "应用生命周期",
-                    selected_cores = ?selected_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-                    "✅ 启发式选择完成"
-                );
-                return selected_cores;
-            }
-        }
-    }
-
-    // 如果都不匹配，返回所有核心
-    warn!(target: "应用生命周期",
-        "⚠️ 无法确定超线程模式，使用所有核心"
-    );
-    all_cores.to_vec()
-}
-
-/// 选择物理核心的具体策略
-///
-/// 这个函数实现了多种策略来选择物理核心，并包含详细的日志记录
-fn select_physical_cores(all_cores: &[core_affinity::CoreId], target_count: usize) -> Vec<core_affinity::CoreId> {
-    info!(target: "应用生命周期",
-        target_count,
-        available_cores = all_cores.len(),
-        "🎯 开始物理核心选择，目标数量: {}", target_count
-    );
-
-    // 策略1: Intel常见模式 - 偶数索引对应物理核心
-    info!(target: "应用生命周期", "📝 尝试策略1: Intel常见拓扑模式 (偶数索引)");
-    let even_indexed_cores: Vec<_> = all_cores
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 2 == 0)
-        .take(target_count)
-        .map(|(_, &core)| core)
-        .collect();
-
-    info!(target: "应用生命周期",
-        strategy = "偶数索引",
-        selected = ?even_indexed_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-        count = even_indexed_cores.len(),
-        "策略1结果: 选择了{}个核心", even_indexed_cores.len()
-    );
-
-    if even_indexed_cores.len() == target_count {
-        info!(target: "应用生命周期",
-            "✅ 策略1成功: 使用Intel常见拓扑模式"
-        );
-        return even_indexed_cores;
-    }
-
-    // 策略2: 均匀分布策略 - 在所有核心中均匀选择
-    info!(target: "应用生命周期", "📝 尝试策略2: 均匀分布策略");
-    let step = all_cores.len() / target_count;
-    if step > 0 {
-        let distributed_cores: Vec<_> = (0..target_count)
-            .map(|i| i * step)
-            .filter_map(|idx| all_cores.get(idx).copied())
-            .collect();
-
-        info!(target: "应用生命周期",
-            strategy = "均匀分布",
-            step_size = step,
-            selected = ?distributed_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-            count = distributed_cores.len(),
-            "策略2结果: 步长{}, 选择了{}个核心", step, distributed_cores.len()
-        );
-
-        if distributed_cores.len() == target_count {
-            warn!(target: "应用生命周期",
-                "⚠️ 策略2成功: 使用均匀分布策略 (可能不是最优)"
-            );
-            return distributed_cores;
-        }
-    }
-
-    // 策略3: 前N个核心 (最保守的策略)
-    warn!(target: "应用生命周期",
-        "📝 使用策略3: 保守策略 - 选择前{}个核心", target_count
-    );
-    let conservative_cores: Vec<_> = all_cores.iter().take(target_count).copied().collect();
-
-    error!(target: "应用生命周期",
-        strategy = "保守策略",
-        selected = ?conservative_cores.iter().map(|c| c.id).collect::<Vec<_>>(),
-        count = conservative_cores.len(),
-        "⚠️ 使用保守策略，可能包含超线程核心，性能可能受影响"
-    );
-
-    conservative_cores
-}
-
-/// 获取系统的物理核心数量
-///
-/// 在不同操作系统上使用不同的方法来获取真实的物理核心数
-fn get_physical_core_count() -> usize {
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-
-        info!(target: "应用生命周期", "🔍 Windows环境: 开始WMI查询CPU拓扑信息");
-
-        // 方法1: 使用wmic获取详细的CSV格式数据
-        info!(target: "应用生命周期", "📊 尝试方法1: WMI详细查询 (CSV格式)");
-        match Command::new("wmic")
-            .args(&["path", "Win32_Processor", "get", "NumberOfCores,NumberOfLogicalProcessors", "/format:csv"])
-            .output()
-        {
-            Ok(output) => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                info!(target: "应用生命周期",
-                    wmi_raw_output = %output_str.trim(),
-                    "WMI原始输出"
-                );
-
-                // 解析CSV输出 (跳过标题行)
-                for (line_num, line) in output_str.lines().enumerate() {
-                    if line_num == 0 {
-                        info!(target: "应用生命周期", csv_header = %line, "CSV标题行");
-                        continue;
-                    }
-
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-
-                    let fields: Vec<&str> = line.split(',').collect();
-                    info!(target: "应用生命周期",
-                        line_num,
-                        fields = ?fields,
-                        field_count = fields.len(),
-                        "解析CSV行"
-                    );
-
-                    if fields.len() >= 3 {
-                        match (fields[1].trim().parse::<usize>(), fields[2].trim().parse::<usize>()) {
-                            (Ok(cores), Ok(logical)) => {
-                                info!(target: "应用生命周期",
-                                    physical_cores = cores,
-                                    logical_cores = logical,
-                                    method = "WMI_CSV",
-                                    "✅ WMI方法1成功: 检测到CPU拓扑信息"
-                                );
-                                return cores;
-                            }
-                            (Err(e1), Err(e2)) => {
-                                warn!(target: "应用生命周期",
-                                    cores_field = fields[1],
-                                    logical_field = fields[2],
-                                    cores_error = %e1,
-                                    logical_error = %e2,
-                                    "解析数值失败"
-                                );
-                            }
-                            (Err(e), Ok(logical)) => {
-                                warn!(target: "应用生命周期",
-                                    cores_field = fields[1],
-                                    logical_cores = logical,
-                                    error = %e,
-                                    "物理核心数解析失败"
-                                );
-                            }
-                            (Ok(cores), Err(e)) => {
-                                warn!(target: "应用生命周期",
-                                    physical_cores = cores,
-                                    logical_field = fields[2],
-                                    error = %e,
-                                    "逻辑核心数解析失败，但已获得物理核心数"
-                                );
-                                return cores;
-                            }
-                        }
-                    }
-                }
-                warn!(target: "应用生命周期", "WMI方法1: 未找到有效的CPU信息行");
-            }
-            Err(e) => {
-                warn!(target: "应用生命周期",
-                    error = %e,
-                    "❌ WMI方法1失败: 无法执行wmic命令"
-                );
-            }
-        }
-
-        // 方法2: 备用的简单格式查询
-        info!(target: "应用生命周期", "📊 尝试方法2: WMI简单查询 (LIST格式)");
-        match Command::new("wmic")
-            .args(&["cpu", "get", "NumberOfCores", "/format:list"])
-            .output()
-        {
-            Ok(output) => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                info!(target: "应用生命周期",
-                    wmi_backup_output = %output_str.trim(),
-                    "WMI备用方法原始输出"
-                );
-
-                for line in output_str.lines() {
-                    if line.starts_with("NumberOfCores=") {
-                        if let Some(cores_str) = line.split('=').nth(1) {
-                            match cores_str.trim().parse::<usize>() {
-                                Ok(cores) => {
-                                    info!(target: "应用生命周期",
-                                        physical_cores = cores,
-                                        method = "WMI_LIST",
-                                        "✅ WMI方法2成功: 检测到物理核心数"
-                                    );
-                                    return cores;
-                                }
-                                Err(e) => {
-                                    warn!(target: "应用生命周期",
-                                        raw_value = cores_str,
-                                        error = %e,
-                                        "WMI方法2: 数值解析失败"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                warn!(target: "应用生命周期", "WMI方法2: 未找到NumberOfCores字段");
-            }
-            Err(e) => {
-                warn!(target: "应用生命周期",
-                    error = %e,
-                    "❌ WMI方法2失败: 无法执行备用wmic命令"
-                );
-            }
-        }
-
-        error!(target: "应用生命周期", "❌ 所有Windows WMI方法都失败了");
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::fs;
-        use std::collections::HashSet;
-
-        info!(target: "应用生命周期", "🐧 Linux环境: 开始解析/proc/cpuinfo");
-
-        // 读取/proc/cpuinfo获取物理核心数
-        match fs::read_to_string("/proc/cpuinfo") {
-            Ok(cpuinfo) => {
-                info!(target: "应用生命周期",
-                    cpuinfo_size = cpuinfo.len(),
-                    "✅ 成功读取/proc/cpuinfo文件"
-                );
-
-                let mut physical_cores = HashSet::new();
-                let mut current_processor = None;
-                let mut current_physical_id = None;
-                let mut current_core_id = None;
-                let mut processor_count = 0;
-
-                for (line_num, line) in cpuinfo.lines().enumerate() {
-                    if line.starts_with("processor") {
-                        if let Some(proc_str) = line.split(':').nth(1) {
-                            current_processor = proc_str.trim().parse::<usize>().ok();
-                            processor_count += 1;
-                        }
-                    } else if line.starts_with("physical id") {
-                        if let Some(id) = line.split(':').nth(1) {
-                            current_physical_id = Some(id.trim().to_string());
-                        }
-                    } else if line.starts_with("core id") {
-                        if let Some(id) = line.split(':').nth(1) {
-                            current_core_id = Some(id.trim().to_string());
-                        }
-                    } else if line.trim().is_empty() {
-                        // 处理器信息结束，记录这个物理核心
-                        if let (Some(proc), Some(ref phys_id), Some(ref core_id)) =
-                            (current_processor, &current_physical_id, &current_core_id) {
-                            let core_key = format!("{}:{}", phys_id, core_id);
-                            physical_cores.insert(core_key.clone());
-
-                            if line_num < 50 { // 只记录前几个处理器的详细信息，避免日志过多
-                                info!(target: "应用生命周期",
-                                    processor = proc,
-                                    physical_id = phys_id,
-                                    core_id = core_id,
-                                    core_key = %core_key,
-                                    "处理器{}拓扑信息", proc
-                                );
-                            }
-                        }
-                        current_processor = None;
-                        current_physical_id = None;
-                        current_core_id = None;
-                    }
-                }
-
-                info!(target: "应用生命周期",
-                    total_processors = processor_count,
-                    unique_physical_cores = physical_cores.len(),
-                    physical_core_keys = ?physical_cores.iter().collect::<Vec<_>>(),
-                    "Linux /proc/cpuinfo解析结果"
-                );
-
-                if !physical_cores.is_empty() {
-                    info!(target: "应用生命周期",
-                        physical_cores = physical_cores.len(),
-                        method = "PROC_CPUINFO",
-                        "✅ Linux方法成功: 通过/proc/cpuinfo检测到物理核心数"
-                    );
-                    return physical_cores.len();
-                } else {
-                    warn!(target: "应用生命周期",
-                        "⚠️ /proc/cpuinfo中未找到physical id和core id信息"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(target: "应用生命周期",
-                    error = %e,
-                    "❌ Linux方法失败: 无法读取/proc/cpuinfo文件"
-                );
-            }
-        }
-    }
-
-    // 如果无法通过系统API获取，使用启发式方法
-    error!(target: "应用生命周期", "❌ 所有系统API方法都失败，使用启发式方法");
-
-    let total_logical_cores = core_affinity::get_core_ids().unwrap_or_default().len();
-
-    info!(target: "应用生命周期",
-        total_logical_cores,
-        "🔧 启发式方法: 基于逻辑核心数推测物理核心数"
-    );
-
-    // 假设如果逻辑核心数是偶数且大于4，可能启用了超线程
-    if total_logical_cores >= 4 && total_logical_cores % 2 == 0 {
-        let estimated_physical = total_logical_cores / 2;
-        warn!(target: "应用生命周期",
-            total_logical_cores,
-            estimated_physical_cores = estimated_physical,
-            assumption = "2:1超线程",
-            "⚠️ 启发式推测: 假设2:1超线程比例"
-        );
-        estimated_physical
-    } else {
-        warn!(target: "应用生命周期",
-            total_logical_cores,
-            assumption = "无超线程",
-            "⚠️ 启发式推测: 假设无超线程，使用所有逻辑核心"
-        );
-        total_logical_cores
-    }
-}
 
 
 
@@ -575,7 +75,7 @@ fn main() -> Result<()> {
     // 2. 手动创建主 I/O 运行时
     let io_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(4) // 可根据I/O密集程度调整
+        .worker_threads(1) // [修改] IO线程数明确设置为1
         .thread_name("io-worker")
         .build()?;
 
@@ -626,15 +126,7 @@ async fn run_app(
     );
     trace!(target: "应用生命周期", config_details = ?config, "📋 详细配置信息");
 
-    // 使用编译时常量而不是环境变量
-    let enable_test_mode = TEST_MODE;
-    let visual_test_mode = VISUAL_TEST_MODE;
-    info!(target: "应用生命周期", log_type = "low_freq", test_mode = enable_test_mode, visual_test_mode = visual_test_mode, "运行模式确定");
-    trace!(target: "应用生命周期", test_mode = enable_test_mode, visual_test_mode = visual_test_mode, "🧪 测试模式详细信息");
 
-    if visual_test_mode {
-        warn!(target: "应用生命周期", log_type="low_freq", "警告：程序运行在可视化测试模式，数据库持久化已禁用！");
-    }
 
     let api_client = Arc::new(BinanceApi); // [修改] BinanceApi现在是无状态的
 
@@ -687,7 +179,7 @@ async fn run_app(
 
     // ✨ [新增] 所有补齐轮次完成后，清理连接池
     backfiller.cleanup_after_all_backfill_rounds().await;
-    let stage3_duration = std::time::Duration::from_secs(0); // 占位符
+    let _stage3_duration = std::time::Duration::from_secs(0); // 占位符
 
     // --- 阶段三: 加载状态 ---（重新编号）
     info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 3/3] 开始从数据库加载最新K线状态...");
@@ -744,20 +236,30 @@ async fn run_app(
         io_runtime,
     );
 
+    // 启动定时时间同步任务（每分钟30秒执行）
+    let time_sync_manager_for_task = time_sync_manager.clone();
+    log::context::spawn_instrumented_on(
+        async move {
+            if let Err(e) = time_sync_manager_for_task.start().await {
+                error!(target: "应用生命周期", error = ?e, "时间同步任务异常终止");
+            }
+        },
+        io_runtime,
+    );
+
     // 4. ============ 获取并建立全局品种索引 (G_Index*) ============
     let (all_symbols_sorted, symbol_to_index_map) =
-        initialize_symbol_indexing(&api_client, &db, enable_test_mode).await?;
+        initialize_symbol_indexing(&api_client, &db).await?;
     let symbol_count = all_symbols_sorted.len();
 
     // [修改逻辑] 使用 soft_assert! 进行业务断言
     soft_assert!(
-        symbol_count > 0 || enable_test_mode,
+        symbol_count > 0,
         message = "没有可处理的交易品种",
         actual_count = symbol_count,
-        test_mode = enable_test_mode,
     );
 
-    if symbol_count == 0 && !enable_test_mode {
+    if symbol_count == 0 {
         let err_msg = "没有可处理的交易品种，服务退出";
         // 使用 error! 记录致命错误
         error!(target: "应用生命周期", reason = err_msg);
@@ -772,177 +274,74 @@ async fn run_app(
     // ==================== 初始化健康监控中枢 ====================
     let watchdog = Arc::new(WatchdogV2::new());
 
-    // 5. ================ 创建并启动绑核的计算线程和独立的I/O任务 ================
-    let creation_span = span!(Level::INFO, "workers_creation");
-    let _enter = creation_span.enter(); // 手动进入 Span，覆盖整个循环
+    // 5. ================ 创建并启动唯一的聚合器和I/O任务 ================
+    info!(target: "应用生命周期", "启动中心化聚合器模型 (1 IO + 1 计算)...");
 
-    let chunks: Vec<_> = global_index_to_symbol
-        .read()
-        .await
-        .chunks((symbol_count + NUM_WORKERS - 1) / NUM_WORKERS)
-        .map(|s| s.to_vec())
-        .collect();
+    // [修改] 直接获取所有品种
+    let all_symbols: Vec<String> = global_index_to_symbol.read().await.clone();
 
-    let mut worker_read_handles = Vec::with_capacity(NUM_WORKERS);
-    let mut computation_thread_handles = Vec::new();
+    // [修改] 直接创建唯一的 KlineAggregator 实例
+    let (mut aggregator, ws_cmd_rx, trade_rx) = klagg::KlineAggregator::new(
+        &all_symbols,
+        symbol_to_global_index.clone(),
+        periods.clone(),
+        Some(w3_cmd_rx), // 指令通道现在给唯一的聚合器
+        clock_tx.subscribe(),
+        initial_klines_arc.clone(),
+        &config, // [修改] 传入config
+    ).await?;
 
-    // 获取物理核心ID，跳过超线程核心
-    let physical_cores = get_physical_core_ids();
+    let aggregator_read_handle = aggregator.get_read_handle();
+    let aggregator_trade_sender = aggregator.get_trade_sender();
+    // [修改] 变量重命名，并保持Vec结构以兼容gateway_task的签名，这是一种务实的做法
+    let aggregator_handles = Arc::new(vec![aggregator_read_handle]);
 
-    info!(target: "应用生命周期",
-        log_type = "low_freq",
-        total_logical_cores = core_affinity::get_core_ids().unwrap_or_default().len(),
-        physical_cores = physical_cores.len(),
-        required_workers = NUM_WORKERS,
-        "CPU核心拓扑分析完成"
+    // [修改] 启动唯一的 I/O 任务 (run_io_loop的签名也将被修改)
+    log::context::spawn_instrumented_on(
+        klagg::run_io_loop(
+            all_symbols,
+            config.clone(),
+            shutdown_rx.clone(),
+            ws_cmd_rx,
+            aggregator_trade_sender,
+            watchdog.clone(),
+        ),
+        io_runtime,
     );
 
-    if physical_cores.len() < NUM_WORKERS {
-        warn!(
-            physical_cores = physical_cores.len(),
-            required = NUM_WORKERS,
-            "物理CPU核心数不足，可能影响性能，将不会进行线程绑定"
-        );
-    }
-
-    let mut current_start_index = 0;
-    let mut w3_cmd_rx_option = Some(w3_cmd_rx);
-
-    for worker_id in 0..NUM_WORKERS {
-        let assigned_symbols = chunks.get(worker_id).cloned().unwrap_or_default();
-        let cmd_rx = if worker_id == NUM_WORKERS - 1 { w3_cmd_rx_option.take() } else { None };
-
-        info!(
-            target: "应用生命周期",
-            log_type = "low_freq",
-            worker_id,
-            assigned_symbols = assigned_symbols.len(),
-            "计算Worker正在创建"
-        );
-        let (mut worker, ws_cmd_rx, trade_rx) = klagg::Worker::new(
-            worker_id,
-            current_start_index,
-            &assigned_symbols,
-            symbol_to_global_index.clone(),
-            periods.clone(),
-            cmd_rx,
-            clock_tx.subscribe(),
-            initial_klines_arc.clone(),
-        )
-        .await?;
-
-        worker_read_handles.push(worker.get_read_handle());
-
-        // [修改逻辑] 使用 spawn_instrumented_on
-        log::context::spawn_instrumented_on(
-            klagg::run_io_loop(
-                worker_id,
-                assigned_symbols.clone(),
-                config.clone(),
-                shutdown_rx.clone(),
-                ws_cmd_rx,
-                worker.get_trade_sender(),
-                watchdog.clone(), // 传递 watchdog
-            ),
-            io_runtime,
-        );
-
-        let core_to_bind = physical_cores.get(worker_id).copied();
-
-        // 详细记录Worker核心分配情况
-        if let Some(core_id) = core_to_bind {
-            info!(target: "应用生命周期",
-                worker_id,
-                assigned_core_id = core_id.id,
-                total_physical_cores = physical_cores.len(),
-                "🎯 Worker {} 将绑定到物理核心 {}", worker_id, core_id.id
-            );
-        } else {
-            error!(target: "应用生命周期",
-                worker_id,
-                available_cores = physical_cores.len(),
-                "❌ Worker {} 无可用物理核心进行绑定！", worker_id
-            );
-        }
-
-        let comp_shutdown_rx = shutdown_rx.clone();
-        let computation_watchdog = watchdog.clone(); // 为计算线程克隆
-
-        let computation_handle = std::thread::Builder::new()
-            .name(format!("computation-worker-{}", worker_id))
-            .spawn({
-                // [修改逻辑] 捕获当前 Span 以便在 OS 线程中恢复
-                let parent_span = Span::current();
-                move || {
-                    // [修改逻辑] 在新线程中恢复 tracing 上下文
-                    parent_span.in_scope(|| {
-                        if let Some(core_id) = core_to_bind {
-                            info!(target: "计算核心",
-                                worker_id,
-                                core_id = core_id.id,
-                                "🔧 Worker {} 开始尝试绑定到物理核心 {}", worker_id, core_id.id
-                            );
-
-                            if core_affinity::set_for_current(core_id) {
-                                info!(target: "计算核心",
-                                    worker_id,
-                                    core_id = core_id.id,
-                                    "✅ Worker {} 成功绑定到物理核心 {} - 独占计算资源",
-                                    worker_id, core_id.id
-                                );
-                            } else {
-                                error!(target: "计算核心",
-                                    worker_id,
-                                    core_id = core_id.id,
-                                    "❌ Worker {} 绑定到物理核心 {} 失败 - 性能可能受影响",
-                                    worker_id, core_id.id
-                                );
-                            }
-                        } else {
-                            error!(target: "计算核心",
-                                worker_id,
-                                "❌ Worker {} 没有分配到物理核心 - 将使用默认调度", worker_id
-                            );
-                        }
-
-                        let computation_runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .unwrap();
-
-                        // [修改逻辑] 将 worker 的生命周期也 instrument
-                        let worker_span = span!(target: "计算核心", Level::INFO, "computation_worker_runtime", worker_id);
-                        computation_runtime.block_on(
-                            worker.run_computation_loop(
-                                comp_shutdown_rx,
-                                trade_rx,
-                                computation_watchdog, // [修改] 传递 watchdog
-                            )
-                            .instrument(worker_span),
-                        );
-                    })
-                }
-            })?;
-
-        computation_thread_handles.push(computation_handle);
-        current_start_index += assigned_symbols.len();
-    }
-    drop(_enter); // 退出 apen
-    let worker_handles = Arc::new(worker_read_handles);
+    // [修改] 启动唯一的计算线程，不进行核心绑定
+    let comp_shutdown_rx = shutdown_rx.clone();
+    let comp_watchdog = watchdog.clone();
+    let computation_handle = std::thread::Builder::new()
+        .name("computation-aggregator".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            // [修改] 调用新的方法名
+            runtime.block_on(aggregator.run_aggregation_loop(
+                comp_shutdown_rx,
+                trade_rx,
+                comp_watchdog,
+            ));
+        })?;
 
     // 6. ================= 在 I/O 运行时启动新的聚合与分发任务 ================
 
-    let (klines_watch_tx, klines_watch_rx) =
-        watch::channel(Arc::new(klagg::GlobalKlines::default()));
+    // [修改] 初始化一个空的、默认的 DeltaBatch 实例，并用 Arc 包裹
+    let initial_delta_batch = Arc::new(DeltaBatch::default());
 
-    // 使用配置中的队列大小
-    let (db_queue_tx, db_queue_rx) = mpsc::channel(config.persistence.queue_size);
+    // [修改] watch 通道现在广播共享的增量批次
+    let (klines_watch_tx, _klines_watch_rx) =
+        watch::channel(initial_delta_batch.clone());
+
+    // [修改] mpsc 通道也使用 Arc<DeltaBatch> 以支持零克隆转发
+    let (db_queue_tx, db_queue_rx) =
+        mpsc::channel::<Arc<DeltaBatch>>(config.persistence.queue_size);
 
     // 启动 Gateway 任务
-    info!(target: "应用生命周期", "准备启动Gateway任务，Worker数量: {}", worker_handles.len());
+    info!(target: "应用生命周期", "准备启动Gateway任务，聚合器数量: {}", aggregator_handles.len());
     log::context::spawn_instrumented_on(
         klagg::gateway_task(
-            worker_handles.clone(),
+            aggregator_handles, // [修改]
             klines_watch_tx,
             db_queue_tx,
             config.clone(),
@@ -953,35 +352,21 @@ async fn run_app(
     );
     info!(target: "应用生命周期", "Gateway任务已提交到运行时");
 
-    // 根据模式条件性地启动最终消费者
-    let persistence_handle = if visual_test_mode {
-        info!(target: "应用生命周期", "启动可视化测试Web服务器 (新架构)...");
-        log::context::spawn_instrumented_on(
-            klagg::web_server::run_visual_test_server(
-                klines_watch_rx,
-                global_index_to_symbol.clone(),
-                periods.clone(),
-                shutdown_rx.clone(),
-            ),
-            io_runtime,
-        );
-        None
-    } else {
-        info!(target: "应用生命周期", "启动数据库写入任务 (新架构)...");
-        Some(log::context::spawn_instrumented_on(
-            klagg::db_writer_task(
-                db.clone(),
-                db_queue_rx,
-                global_index_to_symbol.clone(),
-                periods.clone(),
-                shutdown_rx.clone(),
-                watchdog.clone(),
-            ),
-            io_runtime,
-        ))
-    };
+    // 启动数据库写入任务
+    info!(target: "应用生命周期", "启动数据库写入任务 (新架构)...");
+    let persistence_handle = Some(log::context::spawn_instrumented_on(
+        klagg::db_writer_task(
+            db.clone(),
+            db_queue_rx,
+            global_index_to_symbol.clone(),
+            periods.clone(),
+            shutdown_rx.clone(),
+            watchdog.clone(),
+        ),
+        io_runtime,
+    ));
 
-    // [修改逻辑] 使用 spawn_instrumented_on
+    // 启动品种管理器
     log::context::spawn_instrumented_on(
         run_symbol_manager(
             config.clone(),
@@ -1015,11 +400,12 @@ async fn run_app(
 
     let _ = shutdown_tx.send(true);
 
-    for (worker_id, handle) in computation_thread_handles.into_iter().enumerate() {
-        if let Err(e) = handle.join() {
-            error!(target: "应用生命周期", worker_id, panic = ?e, "计算线程在退出时发生 panic");
-        }
+    // [修改] 简化线程等待逻辑
+    info!(target: "应用生命周期", "正在等待计算线程退出...");
+    if let Err(e) = computation_handle.join() {
+        error!(target: "应用生命周期", panic = ?e, "计算线程在退出时发生 panic");
     }
+    info!(target: "应用生命周期", "计算线程已成功退出。");
 
     // [修改] 条件性地等待持久化任务
     if let Some(handle) = persistence_handle {
@@ -1053,7 +439,27 @@ async fn run_clock_task(
             warn!(target: "全局时钟", log_type="retry",
                   retry_count = time_sync_retry_count,
                   max_retries = MAX_TIME_SYNC_RETRIES,
-                  "时间同步失效，尝试重试");
+                  "时间同步失效，正在主动重试同步...");
+
+            // 主动尝试进行一次同步，并捕获具体错误
+            match time_sync_manager.sync_time_once().await {
+                Ok((diff, delay)) => {
+                    // 如果意外成功了，就重置计数器并继续
+                    info!(target: "全局时钟", log_type="recovery",
+                          diff_ms = diff,
+                          delay_ms = delay,
+                          "在重试期间，时间同步成功恢复");
+                    time_sync_retry_count = 0;
+                    continue;
+                }
+                Err(e) => {
+                    // 打印出底层的、具体的网络错误
+                    error!(target: "全局时钟", log_type="retry_failure",
+                           retry_count = time_sync_retry_count,
+                           error = ?e, // <-- 这是关键的补充信息
+                           "时间同步重试失败");
+                }
+            }
 
             if time_sync_retry_count >= MAX_TIME_SYNC_RETRIES {
                 error!(target: "全局时钟", log_type="assertion", reason="time_sync_invalid",
@@ -1063,8 +469,8 @@ async fn run_clock_task(
                 break;
             }
 
-            // 等待一段时间后重试
-            sleep(Duration::from_millis(1000)).await;
+            // 等待一段时间后再次尝试 (可以使用逐渐增长的等待时间)
+            sleep(Duration::from_millis(1000 * time_sync_retry_count as u64)).await;
             continue;
         } else {
             // 时间同步恢复正常，重置重试计数器
@@ -1108,32 +514,25 @@ async fn run_clock_task(
 /// 初始化品种索引
 #[instrument(target = "应用生命周期", skip_all, name = "initialize_symbol_indexing")]
 async fn initialize_symbol_indexing(
-    api: &BinanceApi,
+    _api: &BinanceApi,
     db: &Database,
-    enable_test_mode: bool,
 ) -> Result<(Vec<String>, HashMap<String, usize>)> {
-    info!(target: "应用生命周期",test_mode = enable_test_mode, "开始初始化品种索引");
-    let symbols = if enable_test_mode {
-        vec!["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "BNBUSDT", "LTCUSDT"]
-            .into_iter()
-            .map(String::from)
-            .collect()
-    } else {
-        info!(target: "应用生命周期", "正在从币安API获取所有U本位永续合约品种...");
-        let temp_client = BinanceApi::create_new_client()?;
-        let (trading_symbols, delisted_symbols) = BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?;
+    info!(target: "应用生命周期", "开始初始化品种索引");
 
-        // 处理已下架的品种
-        if !delisted_symbols.is_empty() {
-            info!(
-                target: "应用生命周期",
-                "发现已下架品种: {}，这些品种将不会被包含在索引中",
-                delisted_symbols.join(", ")
-            );
-        }
+    info!(target: "应用生命周期", "正在从币安API获取所有U本位永续合约品种...");
+    let temp_client = BinanceApi::create_new_client()?;
+    let (trading_symbols, delisted_symbols) = BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?;
 
-        trading_symbols
-    };
+    // 处理已下架的品种
+    if !delisted_symbols.is_empty() {
+        info!(
+            target: "应用生命周期",
+            "发现已下架品种: {}，这些品种将不会被包含在索引中",
+            delisted_symbols.join(", ")
+        );
+    }
+
+    let symbols = trading_symbols;
     info!(target: "应用生命周期", count = symbols.len(), "品种列表获取成功");
 
     let symbol_listing_times = db.batch_get_earliest_kline_timestamps(&symbols, "1d")?;
@@ -1146,12 +545,12 @@ async fn initialize_symbol_indexing(
         })
         .collect();
 
-    soft_assert!(!sorted_symbols_with_time.is_empty() || !enable_test_mode,
+    soft_assert!(!sorted_symbols_with_time.is_empty(),
         message = "未能找到任何带有历史数据的品种",
-        enable_test_mode = enable_test_mode,
+        symbols_count = sorted_symbols_with_time.len(),
     );
 
-    if sorted_symbols_with_time.is_empty() && !enable_test_mode {
+    if sorted_symbols_with_time.is_empty() {
         return Err(AppError::DataError("No symbols with historical data found.".to_string()).into());
     }
 
@@ -1200,134 +599,8 @@ async fn run_symbol_manager(
     global_symbol_count: Arc<AtomicUsize>,
     cmd_tx: mpsc::Sender<WorkerCmd>,
 ) -> Result<()> {
-    let enable_test_mode = TEST_MODE;
+    info!(target: "品种管理器", log_type = "low_freq", "品种管理器启动 - 基于MiniTicker实时发现新品种");
 
-    if enable_test_mode {
-        info!(target: "品种管理器", log_type = "low_freq", "品种管理器启动（测试模式）- 每60秒模拟添加一个新品种");
-        run_test_symbol_manager(symbol_to_global_index, global_index_to_symbol, global_symbol_count, cmd_tx).await
-    } else {
-        info!(target: "品种管理器", log_type = "low_freq", "品种管理器启动（生产模式）- 基于MiniTicker实时发现新品种");
-        run_production_symbol_manager(config, symbol_to_global_index, global_index_to_symbol, global_symbol_count, cmd_tx).await
-    }
-}
-
-/// 测试模式的品种管理器 - 每60秒模拟添加一个新品种
-#[instrument(target = "品种管理器", skip_all, name = "run_test_symbol_manager")]
-async fn run_test_symbol_manager(
-    symbol_to_global_index: Arc<RwLock<HashMap<String, usize>>>,
-    global_index_to_symbol: Arc<RwLock<Vec<String>>>,
-    global_symbol_count: Arc<AtomicUsize>,
-    cmd_tx: mpsc::Sender<WorkerCmd>,
-) -> Result<()> {
-    // +++ 新增: 简单的启动延迟 +++
-    info!(target: "品种管理器", log_type = "low_freq", "测试模式启动，等待2秒以确保I/O核心初始化...");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // 测试用的额外品种列表（除了初始的8个品种）
-    let test_symbols = vec![
-        "AVAXUSDT", "MATICUSDT", "LINKUSDT", "UNIUSDT", "ATOMUSDT",
-        "DOTUSDT", "FILUSDT", "TRXUSDT", "ETCUSDT", "XLMUSDT",
-        "VETUSDT", "ICPUSDT", "FTMUSDT", "HBARUSDT", "NEARUSDT",
-        "ALGOUSDT", "MANAUSDT", "SANDUSDT", "AXSUSDT", "THETAUSDT"
-    ];
-
-    let mut symbol_index = 0;
-    let mut interval = tokio::time::interval(Duration::from_secs(60)); // 每60秒添加一个
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        interval.tick().await;
-
-        if symbol_index >= test_symbols.len() {
-            info!(target: "品种管理器", log_type = "low_freq", "测试模式：所有模拟品种已添加完毕，品种管理器进入等待状态");
-            // 继续运行但不再添加新品种
-            tokio::time::sleep(Duration::from_secs(3600)).await;
-            continue;
-        }
-
-        let symbol = test_symbols[symbol_index].to_string();
-        symbol_index += 1;
-
-        // 检查品种是否已存在
-        let read_guard = symbol_to_global_index.read().await;
-        if read_guard.contains_key(&symbol) {
-            drop(read_guard);
-            continue;
-        }
-        drop(read_guard);
-
-        info!(target: "品种管理器", log_type = "low_freq", symbol = %symbol, "测试模式：模拟发现新品种");
-
-        let new_global_index = global_symbol_count.fetch_add(1, Ordering::SeqCst);
-        let (ack_tx, ack_rx) = oneshot::channel::<std::result::Result<(), String>>();
-
-        // 创建一个模拟的 InitialKlineData
-        let initial_data = InitialKlineData {
-            open: 100.0,
-            high: 101.0,
-            low: 99.0,
-            close: 100.5,
-            volume: 10.0,
-            turnover: 1005.0, // 模拟成交额: close * volume = 100.5 * 10.0
-        };
-
-        let cmd = WorkerCmd::AddSymbol {
-            symbol: symbol.clone(),
-            global_index: new_global_index,
-            initial_data,
-            // [修改] 为测试模式提供一个当前时间戳作为事件时间
-            first_kline_open_time: chrono::Utc::now().timestamp_millis(),
-            ack: ack_tx,
-        };
-
-        if cmd_tx.send(cmd).await.is_err() {
-            warn!(target: "品种管理器", symbol=%symbol, "向Worker 3发送AddSymbol命令失败，通道可能已关闭");
-            global_symbol_count.fetch_sub(1, Ordering::SeqCst);
-            return Ok(());
-        }
-
-        match ack_rx.await {
-            Ok(Ok(_)) => {
-                let mut write_guard_map = symbol_to_global_index.write().await;
-                let mut write_guard_vec = global_index_to_symbol.write().await;
-
-                if !write_guard_map.contains_key(&symbol) {
-                    write_guard_map.insert(symbol.clone(), new_global_index);
-                    if new_global_index == write_guard_vec.len() {
-                        write_guard_vec.push(symbol.clone());
-                    } else {
-                        error!(
-                            log_type = "assertion",
-                            symbol = %symbol,
-                            new_global_index,
-                            vec_len = write_guard_vec.len(),
-                            "全局索引与向量长度不一致，发生严重逻辑错误！"
-                        );
-                    }
-                    info!(target: "品种管理器", log_type = "low_freq", symbol = %symbol, new_global_index, "测试模式：成功添加模拟品种到全局索引和Worker {}", symbol);
-                }
-            }
-            Ok(Err(e)) => {
-                warn!(target: "品种管理器", symbol = %symbol, reason = %e, "添加新品种失败，Worker拒绝");
-                global_symbol_count.fetch_sub(1, Ordering::SeqCst);
-            }
-            Err(_) => {
-                warn!(target: "品种管理器", symbol = %symbol, reason = "ack_channel_closed", "添加新品种失败，与Worker的确认通道已关闭");
-                global_symbol_count.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-    }
-}
-
-/// 生产模式的品种管理器 - 基于MiniTicker实时发现新品种
-#[instrument(target = "品种管理器", skip_all, name = "run_production_symbol_manager")]
-async fn run_production_symbol_manager(
-    config: Arc<AggregateConfig>,
-    symbol_to_global_index: Arc<RwLock<HashMap<String, usize>>>,
-    global_index_to_symbol: Arc<RwLock<Vec<String>>>,
-    global_symbol_count: Arc<AtomicUsize>,
-    cmd_tx: mpsc::Sender<WorkerCmd>,
-) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let handler = Arc::new(MiniTickerMessageHandler::new(tx));
     let mini_ticker_config = MiniTickerConfig {
@@ -1363,8 +636,7 @@ async fn run_production_symbol_manager(
         if !new_symbols.is_empty() {
             info!(target: "品种管理器", count = new_symbols.len(), "发现新品种，开始处理");
             for ticker in new_symbols {
-                let new_global_index = global_symbol_count.fetch_add(1, Ordering::SeqCst);
-                let (ack_tx, ack_rx) = oneshot::channel::<std::result::Result<(), String>>();
+                let (ack_tx, ack_rx) = oneshot::channel::<std::result::Result<usize, String>>();
 
                 // 从 ticker 数据中解析完整的 OHLCV 数据
                 let initial_data = InitialKlineData {
@@ -1382,7 +654,6 @@ async fn run_production_symbol_manager(
 
                 let cmd = WorkerCmd::AddSymbol {
                     symbol: ticker.symbol.clone(),
-                    global_index: new_global_index,
                     initial_data,
                     // [修改] 传递从 miniTicker 事件中获取的精确时间戳
                     first_kline_open_time: event_time,
@@ -1391,19 +662,21 @@ async fn run_production_symbol_manager(
 
                 if cmd_tx.send(cmd).await.is_err() {
                     warn!(target: "品种管理器", symbol=%ticker.symbol, "向Worker 3发送AddSymbol命令失败，通道可能已关闭");
-                    global_symbol_count.fetch_sub(1, Ordering::SeqCst);
                     return Ok(());
                 }
 
                 match ack_rx.await {
-                    Ok(Ok(_)) => {
+                    Ok(Ok(new_global_index)) => {
                         let mut write_guard_map = symbol_to_global_index.write().await;
                         let mut write_guard_vec = global_index_to_symbol.write().await;
 
                         if !write_guard_map.contains_key(&ticker.symbol) {
-                            write_guard_map.insert(ticker.symbol.clone(), new_global_index);
+                            // 核心同步逻辑：确保索引与向量长度一致
                             if new_global_index == write_guard_vec.len() {
+                                write_guard_map.insert(ticker.symbol.clone(), new_global_index);
                                 write_guard_vec.push(ticker.symbol.clone());
+                                global_symbol_count.store(write_guard_vec.len(), Ordering::SeqCst);
+                                info!(target: "品种管理器", symbol = %ticker.symbol, new_global_index, "成功添加新品种到全局索引和Worker");
                             } else {
                                 error!(
                                     log_type = "assertion",
@@ -1413,16 +686,13 @@ async fn run_production_symbol_manager(
                                     "全局索引与向量长度不一致，发生严重逻辑错误！"
                                 );
                             }
-                            info!(target: "品种管理器", symbol = %ticker.symbol, new_global_index, "成功添加新品种到全局索引和Worker");
                         }
                     }
                     Ok(Err(e)) => {
                         warn!(target: "品种管理器", symbol = %ticker.symbol, reason = %e, "添加新品种失败，Worker拒绝");
-                        global_symbol_count.fetch_sub(1, Ordering::SeqCst);
                     }
                     Err(_) => {
                         warn!(target: "品种管理器", symbol = %ticker.symbol, reason = "ack_channel_closed", "添加新品种失败，与Worker的确认通道已关闭");
-                        global_symbol_count.fetch_sub(1, Ordering::SeqCst);
                     }
                 }
             }

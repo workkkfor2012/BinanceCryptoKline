@@ -47,7 +47,7 @@ pub struct ProxyConfig {
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
-            use_proxy: false, // 临时禁用代理进行测试
+            use_proxy: true, // 启用代理
             host: PROXY_HOST.to_string(),
             port: PROXY_PORT,
             proxy_type: DEFAULT_PROXY_TYPE,

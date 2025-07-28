@@ -1,10 +1,10 @@
-//! 高性能K线聚合服务 (完全分区模型) - Worker实现
+//! 高性能K线聚合服务 (中心化聚合器模型) - KlineAggregator实现
 //!
 //! ## 设计核心
-//! 1.  **Worker**: 聚合逻辑的核心，运行在专属的、绑核的计算线程上。
-//! 2.  **run_io_loop**: Worker的I/O部分，运行在共享的I/O线程池中。
+//! 1.  **KlineAggregator**: 聚合逻辑的核心，运行在单一的计算线程上。
+//! 2.  **run_io_loop**: I/O部分，运行在单一的I/O线程中。
 //! 3.  **通道通信**: 计算与I/O之间通过MPSC通道解耦，实现无锁通信。
-//! 4.  **本地缓存**: Worker内部使用`symbol->local_index`的本地缓存，实现热路径O(1)查找。
+//! 4.  **全量热路径缓存**: 内部使用`symbol->global_index`的全量缓存，实现热路径O(1)查找。
 
 pub mod web_server;
 
@@ -15,111 +15,32 @@ mod tests;
 mod gateway;
 
 // 新增: 导出新的任务
-pub use gateway::{db_writer_task, gateway_task, GlobalKlines};
+pub use gateway::{db_writer_task, gateway_task};
 
 
 
 use crate::klcommon::{
     api::{get_aligned_time, interval_to_milliseconds},
     error::{AppError, Result},
-    log,
     models::Kline as DbKline,
     websocket::{
-        AggTradeData, AggTradeMessageHandler, MessageHandler,
+        self, AggTradeData, WebSocketClient,
     },
     ComponentStatus, HealthReport, HealthReporter, WatchdogV2,
     AggregateConfig,
 };
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 // --- 1. 类型定义 ---
 
-/// 一个通用的、用于管理双缓冲快照和脏数据跟踪的结构体。
-///
-/// 此结构体为高性能场景设计，它与一个外部的"脏位图" (`Vec<bool>`) 协同工作，
-/// 以实现 O(1) 的更新记录，避免了在热路径上进行任何搜索或排序。
-#[derive(Debug)]
-pub struct Snapshotter<T>
-where
-    T: Clone + Default,
-{
-    /// 双缓冲，元组的第一个元素是缓冲区A，第二个是缓冲区B。
-    buffers: (Vec<T>, Vec<T>),
-    /// `active_buffer_index` 指向当前用于写入的缓冲区 (0 或 1)。
-    active_buffer_index: usize,
-    /// 脏表，仅记录了本周期内被更新过的槽位的【唯一】索引。
-    updated_indices: Vec<usize>,
-}
 
-impl<T> Snapshotter<T>
-where
-    T: Clone + Default,
-{
-    /// 创建一个新的 `Snapshotter` 实例。
-    pub fn new(capacity: usize, initial_dirty_capacity: usize) -> Self {
-        Self {
-            buffers: (vec![T::default(); capacity], vec![T::default(); capacity]),
-            active_buffer_index: 0,
-            updated_indices: Vec::with_capacity(initial_dirty_capacity),
-        }
-    }
-
-    /// 记录一次数据更新。
-    pub fn record_update(&mut self, index: usize, data: T, is_dirty_flag: &mut bool) {
-        let write_buffer = if self.active_buffer_index == 0 {
-            &mut self.buffers.0
-        } else {
-            &mut self.buffers.1
-        };
-
-        if !*is_dirty_flag {
-            self.updated_indices.push(index);
-            *is_dirty_flag = true;
-        }
-
-        // 我们相信调用者能保证索引有效。
-        write_buffer[index] = data;
-    }
-
-    /// 提取快照，并为下个周期做准备。
-    /// 这是一个原子操作，保证了读取的快照是完整和一致的。
-    pub fn take_snapshot(&mut self, slots_is_updated_flags: &mut [bool]) -> Vec<T> {
-        // 1. 交换缓冲区。当前 active_buffer 变为 read_buffer。
-        let read_buffer_index = self.active_buffer_index;
-        self.active_buffer_index = 1 - self.active_buffer_index;
-
-        // 2. 从刚刚冻结的、稳定的 read_buffer 中提取数据。
-        let read_buffer = if read_buffer_index == 0 {
-            &self.buffers.0
-        } else {
-            &self.buffers.1
-        };
-
-        let updated_data: Vec<T> = self
-            .updated_indices
-            .iter()
-            .map(|&index| read_buffer[index].clone())
-            .collect();
-
-        // 3. 重置外部的脏位图标志。
-        for &index in &self.updated_indices {
-            if let Some(flag) = slots_is_updated_flags.get_mut(index) {
-                *flag = false;
-            }
-        }
-
-        // 4. 清空内部脏表，为新的写周期做准备。
-        self.updated_indices.clear();
-
-        updated_data
-    }
-}
 
 /// 用于封装 AddSymbol 指令携带的初始K线数据
 #[derive(Debug, Clone, Copy)]
@@ -132,7 +53,7 @@ pub struct InitialKlineData {
     pub turnover: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Copy)]
 pub struct KlineState {
     pub open_time: i64,
     pub open: f64,
@@ -148,7 +69,7 @@ pub struct KlineState {
     pub is_initialized: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KlineData {
     pub global_symbol_index: usize,
     pub period_index: usize,
@@ -166,60 +87,94 @@ pub struct KlineData {
     // is_updated 字段被移除，现在 KlineData 是纯粹的数据载体
 }
 
+/// 增量数据批次，作为系统内部数据交换的基本单元。
+/// 整个结构体将被 Arc 包裹以实现零克隆共享。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DeltaBatch {
+    /// 统一命名为 klines，与 KlineData 保持一致
+    pub klines: Vec<KlineData>,
+    /// 批次创建的Unix毫秒时间戳
+    pub timestamp_ms: i64,
+    /// 用于端到端追踪和日志关联的唯一批次ID，设为必选字段。
+    pub batch_id: u64,
+    /// 新增批次大小字段，便于监控和调试，避免消费者重复调用 .len()。
+    pub size: usize,
+}
+
 #[derive(Debug)]
 pub enum WorkerCmd {
+    /// 添加新品种，ack返回新索引
     AddSymbol {
         symbol: String,
-        global_index: usize,
         initial_data: InitialKlineData,
         /// 用于精确定义"创世K线"开盘时间的事件时间戳
         first_kline_open_time: i64,
-        ack: oneshot::Sender<std::result::Result<(), String>>,
+        ack: oneshot::Sender<std::result::Result<usize, String>>,
+    },
+    /// 移除品种，ack返回(被删除的旧索引, 变更集)
+    RemoveSymbol {
+        symbol: String,
+        ack: oneshot::Sender<std::result::Result<(usize, Vec<(String, usize)>), String>>,
     },
 }
 
 #[derive(Debug)]
 pub enum WsCmd {
     Subscribe(Vec<String>),
+    Unsubscribe(Vec<String>),
 }
 
 #[derive(Clone)]
-pub struct WorkerReadHandle {
-    snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
+pub struct AggregatorReadHandle {
+    full_snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
+    deltas_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
 }
 
-impl std::fmt::Debug for WorkerReadHandle {
+impl std::fmt::Debug for AggregatorReadHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkerReadHandle")
-            .field("snapshot_req_tx", &"<mpsc::Sender>")
+        f.debug_struct("AggregatorReadHandle")
+            .field("full_snapshot_req_tx", &"<mpsc::Sender>")
+            .field("deltas_req_tx", &"<mpsc::Sender>")
             .finish()
     }
 }
 
-impl WorkerReadHandle {
-    pub async fn request_snapshot(&self) -> Result<Vec<KlineData>> {
+impl AggregatorReadHandle {
+    pub async fn request_full_snapshot(&self) -> Result<Vec<KlineData>> {
         let (response_tx, response_rx) = oneshot::channel();
-        self.snapshot_req_tx
+        self.full_snapshot_req_tx
             .send(response_tx)
             .await
-            .map_err(|e| AppError::ChannelClosed(format!("Failed to send snapshot request: {}", e)))?;
+            .map_err(|e| AppError::ChannelClosed(format!("Failed to send full snapshot request: {}", e)))?;
         response_rx
             .await
-            .map_err(|e| AppError::ChannelClosed(format!("Failed to receive snapshot response: {}", e)))
+            .map_err(|e| AppError::ChannelClosed(format!("Failed to receive full snapshot response: {}", e)))
     }
+
+    pub async fn request_deltas(&self) -> Result<Vec<KlineData>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.deltas_req_tx
+            .send(response_tx)
+            .await
+            .map_err(|e| AppError::ChannelClosed(format!("Failed to send deltas request: {}", e)))?;
+        response_rx
+            .await
+            .map_err(|e| AppError::ChannelClosed(format!("Failed to receive deltas response: {}", e)))
+    }
+
+
 }
 
 // --- 2. 健康报告相关结构体 (保持不变) ---
 
 struct ComputationHealthReporter {
-    worker_id: usize,
     last_activity: Arc<AtomicI64>,
     timeout: Duration,
 }
 
 #[async_trait]
 impl HealthReporter for ComputationHealthReporter {
-    fn name(&self) -> String { format!("Computation-Worker-{}", self.worker_id) }
+    fn name(&self) -> String { "Computation-Aggregator".to_string() }
     async fn report(&self) -> HealthReport {
         let last_activity_ms = self.last_activity.load(Ordering::Relaxed);
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -248,14 +203,13 @@ struct IoLoopMetrics {
 }
 
 struct IoHealthReporter {
-    worker_id: usize,
     metrics: Arc<IoLoopMetrics>,
     no_message_warning_threshold: Duration,
 }
 
 #[async_trait]
 impl HealthReporter for IoHealthReporter {
-    fn name(&self) -> String { format!("IO-Worker-{}", self.worker_id) }
+    fn name(&self) -> String { "IO-Loop".to_string() }
     async fn report(&self) -> HealthReport {
         let last_msg_ts = self.metrics.last_message_timestamp.load(Ordering::Relaxed);
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -280,29 +234,33 @@ impl HealthReporter for IoHealthReporter {
 
 // --- 3. Worker 核心实现 ---
 
-// 【重构】: 使用 Snapshotter 替代原有的快照机制
-pub struct Worker {
-    worker_id: usize,
+// 【重构】: 使用脏标记机制替代缓冲区机制
+pub struct KlineAggregator {
     periods: Arc<Vec<String>>,
     kline_expirations: Vec<i64>,
-    partition_start_index: usize,
     kline_states: Vec<KlineState>,
 
     // --- [核心修改] ---
-    /// 与 Snapshotter 协同工作，跟踪每个K线槽位是否在本轮快照中被更新过。
-    kline_is_updated: Vec<bool>,
-    /// 封装了双缓冲和脏表逻辑的快照器。
-    snapshotter: Snapshotter<KlineData>,
+    /// 快速检查K线是否脏的标记位图。
+    dirty_flags: Vec<bool>,
+    /// 存储所有脏K线索引的向量，用于快速遍历。
+    dirty_indices: Vec<usize>,
     // --- [旧字段被移除] ---
-    // snapshot_buffers: (Vec<KlineData>, Vec<KlineData>),
-    // active_buffer_index: usize,
-    // updated_indices: Vec<usize>,
+    // deltas_buffer: Vec<KlineData>,
+    // deltas_buffer_capacity: usize,
+    // kline_is_updated: Vec<bool>,
+    // snapshotter: Snapshotter<KlineData>,
 
+    /// [修改] local_symbol_cache 语义变更为全量热路径缓存 (symbol -> global_index)
     local_symbol_cache: HashMap<String, usize>,
+    /// [新增] 内部反向缓存 (global_index -> symbol)
+    global_index_to_symbol_cache: Vec<String>,
     managed_symbols_count: usize,
     cmd_rx: Option<mpsc::Receiver<WorkerCmd>>,
-    snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
-    snapshot_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
+    full_snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
+    full_snapshot_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
+    deltas_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
+    deltas_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
     ws_cmd_tx: mpsc::Sender<WsCmd>,
     trade_tx: mpsc::Sender<AggTradeData>,
     last_clock_tick: i64,
@@ -311,24 +269,23 @@ pub struct Worker {
     genesis_period_index: usize,
 }
 
-impl Worker {
+impl KlineAggregator {
     #[allow(clippy::too_many_arguments)]
-    #[instrument(target = "计算核心", level = "info", skip_all, fields(worker_id, initial_symbols = assigned_symbols.len()))]
+    #[instrument(target = "计算核心", level = "info", skip_all, fields(initial_symbols = assigned_symbols.len()))]
     pub async fn new(
-        worker_id: usize,
-        partition_start_index: usize,
         assigned_symbols: &[String],
         symbol_to_global_index: Arc<RwLock<HashMap<String, usize>>>,
         periods: Arc<Vec<String>>,
         cmd_rx: Option<mpsc::Receiver<WorkerCmd>>,
         clock_rx: watch::Receiver<i64>,
         initial_klines: Arc<HashMap<(String, String), DbKline>>,
+        config: &AggregateConfig,
     ) -> Result<(Self, mpsc::Receiver<WsCmd>, mpsc::Receiver<AggTradeData>)> {
-        let (snapshot_req_tx, snapshot_req_rx) = mpsc::channel(8);
+        let (full_snapshot_req_tx, full_snapshot_req_rx) = mpsc::channel(8);
+        let (deltas_req_tx, deltas_req_rx) = mpsc::channel(8);
         let (ws_cmd_tx, ws_cmd_rx) = mpsc::channel(8);
         let (trade_tx, trade_rx) = mpsc::channel(10240);
         let num_periods = periods.len();
-        let is_special_worker = cmd_rx.is_some();
 
         // [新增] 动态查找最小周期的索引，不再硬编码
         let genesis_period_index = periods
@@ -342,7 +299,6 @@ impl Worker {
         if let Some(genesis_period) = periods.get(genesis_period_index) {
             info!(
                 target: "计算核心",
-                worker_id,
                 genesis_period = %genesis_period,
                 genesis_period_index,
                 "动态确定新品种的创世周期"
@@ -351,42 +307,42 @@ impl Worker {
              // 这种情况理论上不应发生，但作为防御性日志
             warn!(
                 target: "计算核心",
-                worker_id,
                 genesis_period_index,
                 periods_len = periods.len(),
                 "计算出的创世周期索引无效！"
             );
         }
 
-        let initial_capacity_symbols = if is_special_worker {
-            10000 - partition_start_index
-        } else {
-            assigned_symbols.len()
-        };
-
-        let total_slots = initial_capacity_symbols * num_periods;
+        // [修改] 使用配置中的 max_symbols，更加灵活健壮
+        let capacity_symbols = config.max_symbols;
+        let total_slots = capacity_symbols * num_periods;
 
         let mut kline_states = vec![KlineState::default(); total_slots];
         let mut kline_expirations = vec![i64::MAX; total_slots];
 
-        // 【核心修改】: 初始化 Snapshotter 和 kline_is_updated
-        let initial_dirty_capacity = assigned_symbols.len().max(256);
-        let snapshotter = Snapshotter::new(total_slots, initial_dirty_capacity);
-        let kline_is_updated = vec![false; total_slots];
+        // --- [核心修改] 初始化稀疏集 ---
+        let mut dirty_flags = vec![false; total_slots];
+        // 预分配容量，减少后续push时的重分配可能
+        let mut dirty_indices = Vec::with_capacity(assigned_symbols.len() * num_periods);
 
         let mut local_symbol_cache = HashMap::with_capacity(assigned_symbols.len());
+        // [新增] 初始化反向缓存
+        let mut global_index_to_symbol_cache = vec![String::new(); capacity_symbols];
 
         let guard = symbol_to_global_index.read().await;
         for symbol in assigned_symbols {
             if let Some(&global_index) = guard.get(symbol) {
-                let local_index = global_index - partition_start_index;
-                local_symbol_cache.insert(symbol.clone(), local_index);
+                // [修改] 直接填充全量缓存 (symbol -> global_index)
+                local_symbol_cache.insert(symbol.clone(), global_index);
+                // [新增] 填充反向缓存
+                if global_index < global_index_to_symbol_cache.len() {
+                    global_index_to_symbol_cache[global_index] = symbol.clone();
+                }
 
                 let parse_or_warn = |value: &str, field_name: &str| -> f64 {
                     value.parse().unwrap_or_else(|e| {
                         warn!(
                             target: "计算核心",
-                            worker_id,
                             symbol,
                             field_name,
                             error = ?e,
@@ -397,7 +353,8 @@ impl Worker {
                 };
 
                 for (period_idx, period) in periods.iter().enumerate() {
-                    let kline_offset = local_index * num_periods + period_idx;
+                    // [修改] 初始化 kline_states 等数组时，直接使用 global_index
+                    let kline_offset = global_index * num_periods + period_idx;
 
                     // --- [核心修改] 使用 match 强制处理初始化失败的情况 ---
                     match initial_klines.get(&(symbol.clone(), period.clone())) {
@@ -421,20 +378,33 @@ impl Worker {
                             if kline_offset < kline_states.len() {
                                 trace!(
                                     target: "计算核心",
-                                    worker_id,
                                     symbol,
                                     period,
                                     open_time = kline_state.open_time,
-                                    "成功应用初始K线数据到Worker状态"
+                                    "成功应用初始K线数据到KlineAggregator状态"
                                 );
                                 kline_states[kline_offset] = kline_state;
                                 let interval_ms = interval_to_milliseconds(period);
                                 kline_expirations[kline_offset] = db_kline.open_time + interval_ms;
+
+                                // --- [核心修改] 初始化时标记为脏 ---
+                                if !dirty_flags[kline_offset] { // 理论上初始化时总为false，但保留检查是个好习惯
+                                    dirty_flags[kline_offset] = true;
+                                    dirty_indices.push(kline_offset);
+                                    trace!(
+                                        target: "计算核心",
+                                        symbol,
+                                        period,
+                                        global_index,
+                                        kline_offset,
+                                        "初始化时设置脏标记"
+                                    );
+                                }
                             } else {
                                 // 这是一个不太可能发生的内部逻辑错误，但同样需要硬失败
                                 let err_msg = format!(
-                                    "Worker-{} 初始化时计算的K线偏移量越界！Symbol: {}, Period: {}, LocalIndex: {}, Offset: {}, Capacity: {}",
-                                    worker_id, symbol, period, local_index, kline_offset, kline_states.len()
+                                    "KlineAggregator 初始化时计算的K线偏移量越界！Symbol: {}, Period: {}, GlobalIndex: {}, Offset: {}, Capacity: {}",
+                                    symbol, period, global_index, kline_offset, kline_states.len()
                                 );
                                 error!(target: "计算核心", log_type="assertion", "{}", err_msg);
                                 return Err(AppError::InitializationError(err_msg).into());
@@ -443,8 +413,8 @@ impl Worker {
                         None => {
                             // --- 失败路径：未找到初始数据，立即报错并退出 ---
                             let err_msg = format!(
-                                "Worker-{} 初始化失败：未能从数据源获取品种 '{}' 周期 '{}' 的初始K线数据。请检查数据库或数据补齐逻辑。",
-                                worker_id, symbol, period
+                                "KlineAggregator 初始化失败：未能从数据源获取品种 '{}' 周期 '{}' 的初始K线数据。请检查数据库或数据补齐逻辑。",
+                                symbol, period
                             );
                             error!(target: "计算核心", log_type="FATAL", "{}", err_msg);
                             return Err(AppError::InitializationError(err_msg).into());
@@ -454,34 +424,42 @@ impl Worker {
             }
         }
 
-        // 【重构】: 使用新的 Snapshotter 架构
-        let worker = Self {
-            worker_id,
+        let initial_dirty_count = dirty_indices.len();
+
+        let aggregator = Self {
             periods,
             kline_expirations,
-            partition_start_index,
             kline_states,
-            kline_is_updated, // [新增]
-            snapshotter,      // [新增]
+            dirty_flags,      // [核心修改]
+            dirty_indices,    // [核心修改]
             local_symbol_cache,
+            global_index_to_symbol_cache, // [新增]
             managed_symbols_count: assigned_symbols.len(),
             cmd_rx,
-            snapshot_req_tx,
-            snapshot_req_rx,
+            full_snapshot_req_tx,
+            full_snapshot_req_rx,
+            deltas_req_tx,
+            deltas_req_rx,
             ws_cmd_tx,
             trade_tx,
             last_clock_tick: 0,
             clock_rx,
             genesis_period_index, // [保留]
         };
-
-        info!(target: "计算核心", log_type="low_freq", "Worker 实例已创建并完成初始状态填充和索引构建");
-        Ok((worker, ws_cmd_rx, trade_rx))
+        info!(
+            target: "计算核心",
+            log_type="low_freq",
+            initial_dirty_count,
+            total_slots,
+            "KlineAggregator 实例已创建并完成初始状态填充和索引构建"
+        );
+        Ok((aggregator, ws_cmd_rx, trade_rx))
     }
 
-    pub fn get_read_handle(&self) -> WorkerReadHandle {
-        WorkerReadHandle {
-            snapshot_req_tx: self.snapshot_req_tx.clone(),
+    pub fn get_read_handle(&self) -> AggregatorReadHandle {
+        AggregatorReadHandle {
+            full_snapshot_req_tx: self.full_snapshot_req_tx.clone(),
+            deltas_req_tx: self.deltas_req_tx.clone(),
         }
     }
 
@@ -489,8 +467,8 @@ impl Worker {
         self.trade_tx.clone()
     }
 
-    #[instrument(target = "计算核心", skip_all, name = "run_computation_loop", fields(worker_id = self.worker_id))]
-    pub async fn run_computation_loop(
+    #[instrument(target = "计算核心", skip_all, name = "run_aggregation_loop", fields())]
+    pub async fn run_aggregation_loop(
         &mut self,
         mut shutdown_rx: watch::Receiver<bool>,
         mut trade_rx: mpsc::Receiver<AggTradeData>,
@@ -498,23 +476,41 @@ impl Worker {
     ) {
         let health_probe = Arc::new(AtomicI64::new(0));
         let reporter = Arc::new(ComputationHealthReporter {
-            worker_id: self.worker_id,
             last_activity: health_probe.clone(),
             timeout: Duration::from_secs(60),
         });
         watchdog.register(reporter);
-        info!(target: "计算核心", log_type="low_freq", "计算循环开始");
+        info!(target: "计算核心", log_type="low_freq", "聚合循环开始");
         health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
-        let is_special_worker = self.cmd_rx.is_some();
+        let has_cmd_channel = self.cmd_rx.is_some();
+
+        // 添加10秒统计计时器
+        let mut stats_interval = tokio::time::interval(Duration::from_secs(10));
+        stats_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut trades_count = 0u64;
+        let mut klines_updated_count = 0u64;
+
         loop {
             tokio::select! {
                 biased;
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() { break; }
                 },
+                _ = stats_interval.tick() => {
+                    info!(
+                        target: "计算核心",
+                        log_type = "low_freq",
+                        "周期性统计: trades_per_10s={}, klines_updated_per_10s={}",
+                        trades_count, klines_updated_count
+                    );
+                    trades_count = 0;
+                    klines_updated_count = 0;
+                },
                 Some(trade) = trade_rx.recv() => {
                     trace!(target: "计算核心", symbol = %trade.symbol, price = trade.price, "收到交易数据");
                     self.process_trade(trade);
+                    trades_count += 1;
+                    klines_updated_count += 1; // 简化统计，每个交易都可能更新K线
                     health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
                 },
                 Ok(_) = self.clock_rx.changed() => {
@@ -526,28 +522,33 @@ impl Worker {
                     }
                     health_probe.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
                 },
-                Some(response_tx) = self.snapshot_req_rx.recv() => {
-                    debug!(target: "计算核心", "收到快照请求");
-                    self.process_snapshot_request(response_tx);
+                Some(response_tx) = self.full_snapshot_req_rx.recv() => {
+                    debug!(target: "计算核心", "收到全量快照请求");
+                    self.process_full_snapshot_request(response_tx);
                 },
-                Some(cmd) = async { if let Some(rx) = self.cmd_rx.as_mut() { rx.recv().await } else { std::future::pending().await } }, if is_special_worker => {
-                    debug!(target: "计算核心", ?cmd, "收到Worker指令");
+                Some(response_tx) = self.deltas_req_rx.recv() => {
+                    debug!(target: "计算核心", "收到增量数据请求");
+                    self.process_deltas_request(response_tx);
+                },
+                Some(cmd) = async { if let Some(rx) = self.cmd_rx.as_mut() { rx.recv().await } else { std::future::pending().await } }, if has_cmd_channel => {
+                    debug!(target: "计算核心", ?cmd, "收到聚合器指令");
                     self.process_command(cmd).await;
                 },
             }
         }
-        warn!(target: "计算核心", "计算循环退出");
+        warn!(target: "计算核心", "聚合循环退出");
     }
 
     #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(symbol = %trade.symbol, price = trade.price))]
     fn process_trade(&mut self, trade: AggTradeData) {
-        let local_index = match self.local_symbol_cache.get(&trade.symbol) {
+        // [修改] 直接使用全量缓存进行O(1)查找，不再需要分区偏移
+        let global_index = match self.local_symbol_cache.get(&trade.symbol) {
             Some(&idx) => idx,
-            None => { return; }
+            None => return, // 品种未找到，直接返回
         };
 
         let num_periods = self.periods.len();
-        let base_offset = local_index * num_periods;
+        let base_offset = global_index * num_periods;
 
         for period_idx in 0..num_periods {
             let interval = &self.periods[period_idx];
@@ -610,33 +611,47 @@ impl Worker {
                 self.rollover_kline(kline_offset, trade_period_start, Some(&trade));
             } else {
                 // --- 路径3 (忽略): 陈旧或未初始化的交易 ---
-                trace!(target: "计算核心", symbol = %trade.symbol, "忽略不匹配的交易");
+                trace!(target: "计算核心", symbol = %trade.symbol, trade_period_start, kline_open_time, "忽略不匹配的交易");
             }
         }
     }
 
     #[instrument(target = "计算核心", level = "debug", skip(self), fields(current_time))]
     fn process_clock_tick(&mut self, current_time: i64) {
+        // current_time 是由全局时钟发送的、略微延迟的整分钟时间戳
+        // 我们需要计算出它对应的理论"开盘/收盘"时间点
+        let aligned_minute_time = (current_time / 60_000) * 60_000;
+
         let num_periods = self.periods.len();
-        let total_managed_kline_slots = self.managed_symbols_count * num_periods;
+        // 只检查已激活的品种数量，避免对未使用的槽位进行无效计算
+        let num_managed_symbols = self.managed_symbols_count;
 
-        // 遍历所有管理的K线槽位
-        for kline_offset in 0..total_managed_kline_slots {
-            // 检查当前时间是否超过了K线的预期到期时间
-            if current_time >= self.kline_expirations[kline_offset] {
-                let kline = &self.kline_states[kline_offset];
+        // 1. 遍历所有支持的周期，找出在当前分钟需要检查的周期
+        for period_idx in 0..num_periods {
+            let interval = self.periods[period_idx].clone(); // 克隆字符串避免借用冲突
+            let interval_ms = interval_to_milliseconds(&interval);
 
-                // 如果K线未初始化，则跳过
-                if !kline.is_initialized { continue; }
+            // 2. 如果当前分钟是该周期的整数倍，则该周期需要检查
+            if interval_ms > 0 && aligned_minute_time % interval_ms == 0 {
+                trace!(target = "计算核心", "时钟检查周期: {}", interval);
 
-                // 计算理论上的下一个周期的开盘时间
-                let interval = &self.periods[kline_offset % num_periods];
-                let interval_ms = interval_to_milliseconds(interval);
-                let next_open_time = kline.open_time + interval_ms;
+                // 3. 遍历所有品种属于该周期的K线槽位
+                for symbol_idx in 0..num_managed_symbols {
+                    let kline_offset = symbol_idx * num_periods + period_idx;
 
-                // 调用统一的切换函数，不传入交易数据(None)
-                // rollover_kline内部的幂等性检查会处理与事件驱动的并发问题
-                self.rollover_kline(kline_offset, next_open_time, None);
+                    // 4. 检查这根K线是否真的到期了
+                    // 这个检查是必要的，因为交易驱动可能已经提前滚动了K线
+                    if self.kline_expirations[kline_offset] <= current_time {
+                        let kline = &self.kline_states[kline_offset];
+                        if !kline.is_initialized { continue; }
+
+                        // 计算理论上的下一个周期的开盘时间
+                        let next_open_time = get_aligned_time(current_time, &interval);
+
+                        // 调用统一的切换函数，它能处理空洞填充等复杂情况
+                        self.rollover_kline(kline_offset, next_open_time, None);
+                    }
+                }
             }
         }
     }
@@ -695,33 +710,33 @@ impl Worker {
         old_kline.close = final_close;
         old_kline.is_final = is_final;
 
-        let local_idx = kline_offset / self.periods.len();
-        let period_idx = kline_offset % self.periods.len();
-        let global_symbol_index = local_idx + self.partition_start_index;
+        if kline_offset < self.dirty_flags.len() {
+            // --- [核心修改] 只有当标记不是脏的时候，才去设置它并记录索引 ---
+            if !self.dirty_flags[kline_offset] {
+                self.dirty_flags[kline_offset] = true;
+                self.dirty_indices.push(kline_offset);
 
-        // 1. 创建要快照的数据
-        let kline_data = KlineData {
-            global_symbol_index,
-            period_index: period_idx,
-            open_time: old_kline.open_time,
-            open: old_kline.open,
-            high: old_kline.high,
-            low: old_kline.low,
-            close: old_kline.close,
-            volume: old_kline.volume,
-            turnover: old_kline.turnover,
-            trade_count: old_kline.trade_count,
-            taker_buy_volume: old_kline.taker_buy_volume,
-            taker_buy_turnover: old_kline.taker_buy_turnover,
-            is_final,
-        };
-
-        // 2. 将更新操作委托给 snapshotter
-        self.snapshotter.record_update(
-            kline_offset,
-            kline_data,
-            &mut self.kline_is_updated[kline_offset],
-        );
+                // 这条日志现在只会在状态从 "干净" -> "脏" 的瞬间打印一次
+                let global_symbol_index = kline_offset / self.periods.len();
+                let period_index = kline_offset % self.periods.len();
+                trace!(
+                    target: "计算核心",
+                    global_symbol_index,
+                    period_index,
+                    kline_offset,
+                    is_final,
+                    "设置脏标记"
+                );
+            }
+        } else {
+            error!(
+                target: "计算核心",
+                log_type = "assertion",
+                kline_offset,
+                dirty_flags_len = self.dirty_flags.len(),
+                "finalize_and_snapshot_kline: 偏移量越界！"
+            );
+        }
     }
 
     /// 辅助函数：播种一根新的K线
@@ -754,47 +769,44 @@ impl Worker {
     #[instrument(target = "计算核心", level = "debug", skip(self, cmd), fields(command_type = std::any::type_name::<WorkerCmd>()))]
     async fn process_command(&mut self, cmd: WorkerCmd) {
         match cmd {
-            WorkerCmd::AddSymbol { symbol, global_index, initial_data, first_kline_open_time, ack } => {
-                let local_index = global_index - self.partition_start_index;
-                let max_local_index = self.kline_states.len() / self.periods.len();
+            WorkerCmd::AddSymbol { symbol, initial_data, first_kline_open_time, ack } => {
+                // 在数组末尾添加新品种
+                let new_global_index = self.managed_symbols_count;
+                let max_global_index = self.kline_states.len() / self.periods.len();
 
-                if local_index >= max_local_index {
+                if new_global_index >= max_global_index {
                     error!(
                         log_type = "assertion",
-                        symbol, global_index, local_index, max_local_index,
-                        "计算出的本地索引超出预分配容量！"
+                        symbol, new_global_index, max_global_index,
+                        "全局索引超出预分配容量！"
                     );
-                    let _ = ack.send(Err("Local index exceeds pre-allocated boundary".to_string()));
+                    let _ = ack.send(Err("Global index exceeds pre-allocated boundary".to_string()));
                     return;
                 }
 
-                info!(target: "计算核心", %symbol, global_index, local_index, ?initial_data, event_time = first_kline_open_time, "动态添加新品种(最终方案)");
-                self.local_symbol_cache.insert(symbol.clone(), local_index);
-                self.managed_symbols_count = (local_index + 1).max(self.managed_symbols_count);
+                info!(target: "计算核心", %symbol, new_global_index, ?initial_data, event_time = first_kline_open_time, "动态添加新品种(中心化模式)");
 
-                // 使用从 SymbolManager 传递过来的精确事件时间戳
+                // 更新缓存
+                self.local_symbol_cache.insert(symbol.clone(), new_global_index);
+                self.global_index_to_symbol_cache[new_global_index] = symbol.clone();
+                self.managed_symbols_count += 1;
+
+                // 初始化K线数据
                 if first_kline_open_time > 0 {
                     let num_periods = self.periods.len();
-                    let base_offset = local_index * num_periods;
-
-                    // --- 最终方案：基于事件时间的隔离处理 ---
+                    let base_offset = new_global_index * num_periods;
 
                     // 1. 对"创世周期"进行特殊处理
-                    // [修改] 使用动态计算出的创世周期索引
                     let genesis_period_idx = self.genesis_period_index;
-
-                    // 克隆以避免借用冲突，因为 self 在后续循环中仍被可变借用
                     let genesis_interval = match self.periods.get(genesis_period_idx) {
                         Some(p) => p.clone(),
                         None => {
-                            // 这种情况几乎不可能发生，因为索引是在 new 中从同一个 periods 计算的
                             error!(target: "计算核心", log_type="assertion", %symbol, "创世周期索引无效，无法添加新品种！");
                             let _ = ack.send(Err("Invalid genesis period index.".to_string()));
                             return;
                         }
                     };
                     let genesis_kline_offset = base_offset + genesis_period_idx;
-
                     let genesis_open_time = get_aligned_time(first_kline_open_time, &genesis_interval);
 
                     if genesis_kline_offset < self.kline_states.len() {
@@ -805,28 +817,26 @@ impl Worker {
                             low: initial_data.low,
                             close: initial_data.close,
                             volume: initial_data.volume,
-                            turnover: initial_data.turnover, // 使用真实成交额
-                            trade_count: 1, // 作为一个"非空"的明确标记
-                            taker_buy_volume: 0.0,  // Ticker数据无此信息
-                            taker_buy_turnover: 0.0, // Ticker数据无此信息
+                            turnover: initial_data.turnover,
+                            trade_count: 1,
+                            taker_buy_volume: 0.0,
+                            taker_buy_turnover: 0.0,
                             is_final: false,
                             is_initialized: true,
                         };
                         let interval_ms = interval_to_milliseconds(&genesis_interval);
                         self.kline_expirations[genesis_kline_offset] = genesis_open_time + interval_ms;
-                        // 立即快照，使其可被持久化
                         self.finalize_and_snapshot_kline(genesis_kline_offset, initial_data.close, false);
                         trace!(target: "计算核心", %symbol, %genesis_interval, open_time = genesis_open_time, "为新品种创建了[创世]K线");
                     }
 
-                    // 2. 对所有其他长周期，使用健壮的"播种"逻辑 (从1开始)
+                    // 2. 对所有其他长周期，使用健壮的"播种"逻辑
                     for period_idx in 1..num_periods {
                         let other_interval = self.periods[period_idx].clone();
                         let other_kline_offset = base_offset + period_idx;
                         let aligned_open_time = get_aligned_time(first_kline_open_time, &other_interval);
 
                         if other_kline_offset < self.kline_states.len() {
-                            // 调用标准 seed_kline，使用最可信的 close 价播种，并将 trade_count 置为0
                             self.seed_kline(other_kline_offset, aligned_open_time, initial_data.close, None);
                             trace!(target: "计算核心", %symbol, %other_interval, open_time = aligned_open_time, "为新品种[播种]了标准长周期K线");
                         }
@@ -835,32 +845,183 @@ impl Worker {
                     warn!(target: "计算核心", %symbol, "收到的 first_kline_open_time 无效，无法为新品种创建种子K线");
                 }
 
+                // 发送订阅命令
                 if self.ws_cmd_tx.send(WsCmd::Subscribe(vec![symbol.clone()])).await.is_err() {
                     warn!(target: "计算核心", %symbol, "向I/O任务发送订阅命令失败");
                     let _ = ack.send(Err("Failed to send subscribe command to I/O task".to_string()));
                     return;
                 }
 
-                let _ = ack.send(Ok(()));
+                let _ = ack.send(Ok(new_global_index));
+            }
+
+            WorkerCmd::RemoveSymbol { symbol, ack } => {
+                let removed_index = match self.local_symbol_cache.remove(&symbol) {
+                    Some(idx) => idx,
+                    None => {
+                        let _ = ack.send(Err(format!("Symbol '{}' not found.", symbol)));
+                        return;
+                    }
+                };
+
+                info!(target: "计算核心", %symbol, removed_index, "开始移除品种并前移数据...");
+                let num_periods = self.periods.len();
+                let last_active_index = self.managed_symbols_count - 1;
+
+                // 1. 数据前移
+                if removed_index < last_active_index {
+                    let move_start_index = (removed_index + 1) * num_periods;
+                    let dest_index = removed_index * num_periods;
+                    let move_count = (last_active_index - removed_index) * num_periods;
+
+                    self.kline_states.copy_within(move_start_index..move_start_index + move_count, dest_index);
+                    self.kline_expirations.copy_within(move_start_index..move_start_index + move_count, dest_index);
+                    self.dirty_flags.copy_within(move_start_index..move_start_index + move_count, dest_index);
+                }
+
+                self.managed_symbols_count -= 1;
+
+                // 2. 更新缓存和构建变更集
+                self.global_index_to_symbol_cache.remove(removed_index);
+                let mut index_changes = Vec::new();
+                for i in removed_index..self.managed_symbols_count {
+                    let sym_to_update = &self.global_index_to_symbol_cache[i];
+                    if let Some(entry) = self.local_symbol_cache.get_mut(sym_to_update) {
+                        *entry = i;
+                        index_changes.push((sym_to_update.clone(), i));
+                    }
+                }
+
+                // 3. 修正脏索引
+                self.dirty_indices.retain_mut(|dirty_idx| {
+                    let symbol_idx = *dirty_idx / num_periods;
+                    if symbol_idx < removed_index {
+                        true
+                    } else if symbol_idx == removed_index {
+                        false
+                    } else {
+                        *dirty_idx -= num_periods;
+                        true
+                    }
+                });
+
+                // 4. 发送取消订阅命令
+                if self.ws_cmd_tx.send(WsCmd::Unsubscribe(vec![symbol.clone()])).await.is_err() {
+                    warn!(target: "计算核心", %symbol, "向I/O任务发送取消订阅命令失败");
+                }
+
+                let _ = ack.send(Ok((removed_index, index_changes)));
             }
         }
     }
     
     #[instrument(target = "计算核心", level = "debug", skip(self, response_tx))]
-    fn process_snapshot_request(&mut self, response_tx: oneshot::Sender<Vec<KlineData>>) {
-        // 1. 从 snapshotter 获取快照。此调用是原子的。
-        let updated_data = self.snapshotter.take_snapshot(&mut self.kline_is_updated);
+    fn process_full_snapshot_request(&mut self, response_tx: oneshot::Sender<Vec<KlineData>>) {
+        let snapshot_start = std::time::Instant::now();
 
-        let valid_data: Vec<KlineData> = updated_data
-            .into_iter()
-            .filter(|k| k.open_time > 0)
+        // 预估容量以避免多次内存重分配
+        let estimated_size = self.kline_states.iter()
+            .filter(|state| state.is_initialized && state.open_time > 0)
+            .count();
+
+        let mut full_snapshot = Vec::with_capacity(estimated_size);
+
+        full_snapshot.extend(
+            self.kline_states.iter()
+                .enumerate()
+                .filter(|(_, state)| state.is_initialized && state.open_time > 0)
+                .map(|(offset, state)| {
+                    let global_symbol_index = offset / self.periods.len();
+                    let period_index = offset % self.periods.len();
+
+                    KlineData {
+                        global_symbol_index,
+                        period_index,
+                        open_time: state.open_time,
+                        open: state.open,
+                        high: state.high,
+                        low: state.low,
+                        close: state.close,
+                        volume: state.volume,
+                        turnover: state.turnover,
+                        trade_count: state.trade_count,
+                        taker_buy_volume: state.taker_buy_volume,
+                        taker_buy_turnover: state.taker_buy_turnover,
+                        is_final: state.is_final,
+                    }
+                })
+        );
+
+        info!(target: "计算核心",
+              snapshot_size = full_snapshot.len(),
+              generation_time_ms = snapshot_start.elapsed().as_millis(),
+              "生成全量快照完成 (同步模式)");
+
+        if response_tx.send(full_snapshot).is_err() {
+            warn!(target: "计算核心", "全量快照发送失败，请求方可能已关闭。");
+        }
+    }
+
+    #[instrument(target = "计算核心", level = "debug", skip(self, response_tx))]
+    fn process_deltas_request(&mut self, response_tx: oneshot::Sender<Vec<KlineData>>) {
+        trace!(target: "计算核心", "收到增量数据请求，开始扫描脏标记...");
+
+        // --- [核心修改] ---
+        // 1. 如果没有脏数据，快速返回
+        if self.dirty_indices.is_empty() {
+            if response_tx.send(Vec::new()).is_err() {
+                 warn!(target: "计算核心", "增量数据请求方已关闭（无脏数据）");
+            }
+            return;
+        }
+
+        // 2. 原子地拿走脏索引列表的所有权，为下一次拉取周期准备一个空的列表。
+        let indices_to_process = std::mem::take(&mut self.dirty_indices);
+
+        // 3. 基于这个（通常很小的）索引列表，高效地打包数据。
+        let final_states_snapshot: Vec<KlineData> = indices_to_process
+            .iter()
+            .map(|&i| { // i 是一个脏索引
+                let state = &self.kline_states[i];
+                let global_symbol_index = i / self.periods.len();
+                let period_index = i % self.periods.len();
+                KlineData {
+                    global_symbol_index,
+                    period_index,
+                    open_time: state.open_time,
+                    open: state.open,
+                    high: state.high,
+                    low: state.low,
+                    close: state.close,
+                    volume: state.volume,
+                    turnover: state.turnover,
+                    trade_count: state.trade_count,
+                    taker_buy_volume: state.taker_buy_volume,
+                    taker_buy_turnover: state.taker_buy_turnover,
+                    is_final: state.is_final,
+                }
+            })
             .collect();
 
-        debug!(target = "计算核心", candidate_kline_count = valid_data.len(), "快照数据已收集，准备发送");
+        trace!(target: "计算核心", dirty_kline_found = final_states_snapshot.len(), "增量数据打包完成，准备发送");
 
-        // 2. 发送数据
-        if response_tx.send(valid_data).is_err() {
-            warn!(target = "计算核心", "快照发送失败，接收端可能已关闭。由于快照已被提取，本轮数据将丢失。");
+        if response_tx.send(final_states_snapshot).is_err() {
+            error!(
+                target: "计算核心",
+                log_type = "DATA_LOSS",
+                lost_data_count = indices_to_process.len(),
+                "增量数据发送失败，本轮更新已在计算核心丢失！请立即检查网关或下游消费者状态！"
+            );
+            // 即使发送失败，我们也不把索引还回去了。现在需要清理标记位图。
+        }
+
+        // 4. (关键) 高效清理标记位图，为下一轮做准备
+        // 这个循环的开销是 O(N_dirty)，远小于 O(N_total)
+        // [微调采纳] 直接消费Vec(move)，而不是通过引用迭代(&)，语义更清晰。
+        for index in indices_to_process {
+            if index < self.dirty_flags.len() { // 安全检查
+                self.dirty_flags[index] = false;
+            }
         }
     }
 
@@ -869,9 +1030,8 @@ impl Worker {
 
 // --- 4. I/O 任务实现 (简化版) ---
 
-#[instrument(target = "I/O核心", skip_all, name="run_io_loop", fields(worker_id))]
+#[instrument(target = "I/O核心", skip_all, name="run_io_loop")]
 pub async fn run_io_loop(
-    worker_id: usize,
     initial_symbols: Vec<String>,
     config: Arc<AggregateConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -881,228 +1041,75 @@ pub async fn run_io_loop(
 ) {
     let metrics = Arc::new(IoLoopMetrics::default());
     let reporter = Arc::new(IoHealthReporter {
-        worker_id,
         metrics: metrics.clone(),
         no_message_warning_threshold: Duration::from_secs(60),
     });
     watchdog.register(reporter);
 
-    info!(target: "I/O核心", log_type = "low_freq", "I/O 循环启动");
+    info!(target: "I/O核心", log_type = "low_freq", "I/O 循环启动 (最终版)");
 
-    let mut managed_symbols = initial_symbols;
-
-    // [诊断日志开始]
-    // 1. 将无界通道临时替换为超大容量的有界通道，以便监控
-    // 诊断结束后，将下面这行改回:
-    // let (unbounded_tx, mut unbounded_rx) = tokio::sync::mpsc::unbounded_channel::<AggTradeData>();
-    const IO_BUFFER_CAPACITY: usize = 500_000; // 设置一个巨大的容量
-    let (bounded_tx, mut bounded_rx) = tokio::sync::mpsc::channel::<AggTradeData>(IO_BUFFER_CAPACITY);
-    // [诊断日志结束]
-
-    let trade_tx_clone = trade_tx.clone();
-    let metrics_clone = metrics.clone();
-    log::context::spawn_instrumented(async move {
-        // [诊断日志开始]
-        // 2. 在消费数据的循环中，加入定时日志
-        let mut log_interval = tokio::time::interval(Duration::from_secs(5));
-        log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // [诊断日志结束]
-
-        loop {
-            tokio::select! {
-                // [诊断日志开始]
-                // 3. 定时器触发时，记录处理速率作为积压的间接指标
-                _ = log_interval.tick() => {
-                    // 这里我们只记录处理速率，作为积压的间接指标
-                    let messages_count = metrics_clone.messages_received.load(Ordering::Relaxed);
-                    info!(target: "队列监控", worker_id, messages_processed = messages_count, "I/O桥接处理速率");
-                },
-                // [诊断日志结束]
-
-                Some(trade) = bounded_rx.recv() => {
-                    metrics_clone.messages_received.fetch_add(1, Ordering::Relaxed);
-                    metrics_clone.last_message_timestamp.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
-                    if trade_tx_clone.send(trade).await.is_err() {
-                        warn!(target: "I/O核心", "计算任务的trade通道已关闭，I/O数据转发任务退出");
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // [诊断日志开始]
-    // 4. 创建一个独立的、专门用于监控的异步任务
-    let monitor_tx = bounded_tx.clone();
-    tokio::spawn(async move {
-        let mut log_interval = tokio::time::interval(Duration::from_secs(5));
-        log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            log_interval.tick().await;
-
-            let queue_len = IO_BUFFER_CAPACITY - monitor_tx.capacity();
-            let percentage = (queue_len as f32 / IO_BUFFER_CAPACITY as f32) * 100.0;
-
-            info!(
-                target: "队列监控",
-                worker_id,
-                queue_name = "IO_to_Worker_Bridge",
-                len = queue_len,
-                capacity = IO_BUFFER_CAPACITY,
-                usage_percent = format!("{:.2}%", percentage),
-                "I/O桥接队列状态"
-            );
-
-            if percentage > 50.0 {
-                warn!(
-                    target: "队列监控",
-                    worker_id,
-                    queue_name = "IO_to_Worker_Bridge",
-                    len = queue_len,
-                    "I/O桥接队列使用率超过50%，可能存在严重积压！"
-                );
-            }
-        }
-    });
-    // [诊断日志结束]
-
-    // [诊断日志开始] - 使用有界通道版本的消息处理器
-    let handler = Arc::new(AggTradeMessageHandler::with_bounded_trade_sender(
-        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        bounded_tx,
-    ));
-    // [诊断日志结束]
-
-    let connection_manager = crate::klcommon::websocket::ConnectionManager::new(
-        config.websocket.use_proxy,
-        config.websocket.proxy_host.clone(),
-        config.websocket.proxy_port,
+    // 1. 创建并配置 MessageHandler
+    let handler = Arc::new(
+        websocket::AggTradeMessageHandler::with_bounded_sender(
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            trade_tx,
+        ),
     );
 
-    // 【简化】: 简单的重连循环
-    'reconnect_loop: loop {
-        if *shutdown_rx.borrow() {
-            warn!(target: "I/O核心", "I/O 循环因关闭信号而退出");
-            break 'reconnect_loop;
+    // 2. 创建并配置 AggTradeClient
+    let agg_trade_config = websocket::AggTradeConfig {
+        use_proxy: config.websocket.use_proxy,
+        proxy_addr: config.websocket.proxy_host.clone(),
+        proxy_port: config.websocket.proxy_port,
+        symbols: initial_symbols,
+    };
+    let mut client = websocket::AggTradeClient::new_with_handler(agg_trade_config, handler);
+
+    // 3. 获取命令发送端
+    let command_tx = client.get_command_sender().expect("客户端应已创建命令发送器");
+
+    // 4. 在后台启动客户端，它会自我管理连接、重连和消息处理
+    tokio::spawn(async move {
+        if let Err(e) = client.start().await {
+            error!(target: "I/O核心", error = ?e, "AggTradeClient 意外退出");
         }
+    });
 
-        if managed_symbols.is_empty() && !*shutdown_rx.borrow() {
-            info!(target: "I/O核心", "当前无订阅品种，等待订阅指令...");
-            tokio::select! {
-                biased;
-                _ = shutdown_rx.changed() => continue 'reconnect_loop,
-                Some(cmd) = ws_cmd_rx.recv() => {
-                    let WsCmd::Subscribe(new_symbols) = cmd;
-                    managed_symbols.extend(new_symbols);
-                    continue 'reconnect_loop;
-                },
-            };
-        }
+    // 5. I/O 任务的主循环现在只负责转发命令
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() { break; }
+            },
+            Some(cmd) = ws_cmd_rx.recv() => {
+                match cmd {
+                    WsCmd::Subscribe(new_symbols) => {
+                        if new_symbols.is_empty() { continue; }
 
-        let streams_to_subscribe = managed_symbols.clone();
-        if streams_to_subscribe.is_empty() {
-            sleep(Duration::from_secs(1)).await;
-            continue 'reconnect_loop;
-        }
-
-        info!(target: "I/O核心", symbol_count = streams_to_subscribe.len(), "准备启动 AggTrade WebSocket 客户端");
-        metrics.reconnects.fetch_add(1, Ordering::Relaxed);
-
-        let agg_trade_streams: Vec<String> = streams_to_subscribe.iter()
-            .map(|s| format!("{}@aggTrade", s.to_lowercase()))
-            .collect();
-
-        let mut ws = match connection_manager.connect().await {
-            Ok(ws) => ws,
-            Err(e) => {
-                error!(target: "I/O核心", error = ?e, "WebSocket 连接失败，将在延迟后重试");
-                sleep(Duration::from_secs(5)).await;
-                continue 'reconnect_loop;
-            }
-        };
-
-        // 【简化】: 直接发送订阅消息，不使用事务性确认
-        if !agg_trade_streams.is_empty() {
-            let subscribe_msg = serde_json::json!({
-                "method": "SUBSCRIBE",
-                "params": agg_trade_streams
-            }).to_string();
-
-            let frame = fastwebsockets::Frame::text(subscribe_msg.into_bytes().into());
-            if let Err(e) = ws.write_frame(frame).await {
-                error!(target: "I/O核心", error = ?e, "发送初始订阅命令失败，准备重连...");
-                sleep(Duration::from_secs(5)).await;
-                continue 'reconnect_loop;
-            }
-            info!(target: "I/O核心", stream_count = agg_trade_streams.len(), "初始订阅命令已发送");
-        }
-
-        info!(target: "I/O核心", "WebSocket 连接成功建立，开始监听消息...");
-
-        // 【简化】: 简单的消息循环
-        'message_loop: loop {
-            tokio::select! {
-                biased;
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        warn!(target: "I/O核心", "I/O 循环因关闭信号而退出");
-                        break 'reconnect_loop;
-                    }
-                },
-                result = ws.read_frame() => {
-                    match result {
-                        Ok(frame) => {
-                            match frame.opcode {
-                                fastwebsockets::OpCode::Text => {
-                                    let text = String::from_utf8_lossy(&frame.payload).to_string();
-                                    if let Err(e) = handler.handle_message(worker_id, text).await {
-                                        warn!(target: "I/O核心", error = ?e, "消息处理失败");
-                                    }
-                                },
-                                fastwebsockets::OpCode::Close => {
-                                    info!(target: "I/O核心", "服务器关闭了连接，准备重连...");
-                                    break 'message_loop;
-                                }
-                                fastwebsockets::OpCode::Ping => {
-                                    debug!(target: "I/O核心", "收到 Ping, 自动回复 Pong");
-                                    let _ = ws.write_frame(fastwebsockets::Frame::pong(frame.payload)).await;
-                                }
-                                _ => {}
-                            }
-                        }
-                        Err(e) => {
-                            warn!(target: "I/O核心", error = ?e, "读取 WebSocket 帧失败，连接可能已断开，准备重连...");
-                            break 'message_loop;
+                        // 将应用层的 WsCmd 转换为通用层的 WsCommand
+                        let command = websocket::WsCommand::Subscribe(new_symbols);
+                        if command_tx.send(command).await.is_err() {
+                            error!(target: "I/O核心", "向 AggTradeClient 发送订阅指令失败，通道已关闭");
+                            break;
                         }
                     }
-                },
-                Some(cmd) = ws_cmd_rx.recv() => {
-                    let WsCmd::Subscribe(new_symbols) = cmd;
-                    if new_symbols.is_empty() {
-                        continue;
-                    }
+                    WsCmd::Unsubscribe(remove_symbols) => {
+                        if remove_symbols.is_empty() { continue; }
 
-                    let new_streams: Vec<_> = new_symbols.iter().map(|s| format!("{}@aggTrade", s.to_lowercase())).collect();
-                    let subscribe_msg = serde_json::json!({
-                        "method": "SUBSCRIBE",
-                        "params": new_streams
-                    }).to_string();
-
-                    info!(target: "I/O核心", count = new_symbols.len(), symbols = ?new_symbols, "发送动态订阅指令");
-                    let frame = fastwebsockets::Frame::text(subscribe_msg.into_bytes().into());
-
-                    if let Err(e) = ws.write_frame(frame).await {
-                        error!(target: "I/O核心", error = ?e, "发送动态订阅命令失败，准备重连...");
-                        break 'message_loop;
-                    } else {
-                        managed_symbols.extend(new_symbols);
+                        // 将应用层的 WsCmd 转换为通用层的 WsCommand
+                        let command = websocket::WsCommand::Unsubscribe(remove_symbols);
+                        if command_tx.send(command).await.is_err() {
+                            error!(target: "I/O核心", "向 AggTradeClient 发送取消订阅指令失败，通道已关闭");
+                            break;
+                        }
                     }
                 }
             }
         }
-        sleep(Duration::from_secs(5)).await;
     }
+    warn!(target: "I/O核心", "I/O 循环任务已退出");
 }
 
 

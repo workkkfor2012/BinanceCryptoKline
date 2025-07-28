@@ -170,7 +170,7 @@ impl LatestKlineUpdater {
         let success_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         for task in tasks {
-            let api_clone = self.api.clone();
+            let _api_clone = self.api.clone();
             let semaphore_clone = semaphore.clone();
             let db_clone = self.db.clone();
             let success_count_clone = success_count.clone();

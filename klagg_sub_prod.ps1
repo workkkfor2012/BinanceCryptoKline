@@ -43,14 +43,26 @@ foreach ($logFile in $logFiles) {
 # 设置环境变量
 Set-LoggingEnvironment
 $env:LOG_TRANSPORT = "named_pipe"
-# $env:KLINE_TEST_MODE = "true"  # 注释掉测试模式，使用真实数据
-$env:ENABLE_PERF_LOG = "1"     # 启用性能日志分析
+$env:KLINE_TEST_MODE = "false"         # 关闭测试模式，使用所有品种
+$env:KLINE_VISUAL_TEST_MODE = "false"  # 关闭可视化模式，启用数据库持久化
+$env:ENABLE_PERF_LOG = "1"             # 启用性能日志分析
 
+Write-Host "🔧 生产模式配置完成:" -ForegroundColor Cyan
+Write-Host "  ✅ KLINE_TEST_MODE = false (订阅所有活跃品种)" -ForegroundColor Green
+Write-Host "  ✅ KLINE_VISUAL_TEST_MODE = false (启用数据库持久化)" -ForegroundColor Green
 Write-Host "🔥 性能日志分析已启用，将生成 logs\performance.folded" -ForegroundColor Magenta
 Write-Host "🚀 生产模式已启用，将订阅所有活跃的USDT永续合约品种" -ForegroundColor Green
 
 $buildMode = Get-BuildMode
-Write-Host "🚀 启动K线聚合服务 - 分区聚合版架构 ($buildMode) [生产模式]" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "📋 构建配置信息:" -ForegroundColor Cyan
+if ($buildMode -eq "release") {
+    Write-Host "  🏗️ 构建模式: $buildMode (优化编译，生产环境)" -ForegroundColor Green
+} else {
+    Write-Host "  🏗️ 构建模式: $buildMode (调试编译，开发环境)" -ForegroundColor Yellow
+}
+Write-Host ""
+Write-Host "🚀 启动K线聚合服务 - 分区聚合版架构 [$buildMode 模式] [生产配置]" -ForegroundColor Yellow
 
 try {
     $cargoCmd = Get-CargoCommand -BinaryName 'klagg_sub_threads'

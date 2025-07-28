@@ -1,7 +1,6 @@
-// 文件: src/klcommon/websocket.rs
 // WebSocket模块 - 提供通用的WebSocket连接管理功能 (使用 fastwebsockets 实现)
 use crate::klcommon::{AppError, Result, PROXY_HOST, PROXY_PORT};
-use tracing::{info, error, debug, warn, instrument, Instrument};
+use tracing::{info, error, debug, warn, trace, instrument, Instrument};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -272,7 +271,7 @@ pub trait MessageHandler {
 #[derive(Debug, Clone)]
 pub enum WsCommand {
     Subscribe(Vec<String>),
-    Unsubscribe(Vec<String>),
+    // 未来可以扩展 Unsubscribe 等
 }
 
 /// 用于封装不同类型通道发送端的枚举，提供了统一的发送接口。
@@ -385,12 +384,14 @@ impl MessageHandler for AggTradeMessageHandler {
             // 增加消息计数
             self.message_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-
+            // [新增日志] L1 - handle_message 开始处理
+            trace!(target: AGG_TRADE_TARGET, connection_id, "L1 - handle_message 开始处理");
 
             // 解析归集交易消息
             match self.parse_agg_trade_message(&message).await {
                 Ok(Some(agg_trade)) => {
-
+                    // [新增日志] L2 - 路径A: parse成功, 是aggTrade
+                    trace!(target: AGG_TRADE_TARGET, connection_id, "L2 - 路径A: parse成功, 是aggTrade");
 
                     info!(target: AGG_TRADE_TARGET, "连接 {} 收到归集交易: {} {} @ {}",
                         connection_id, agg_trade.symbol, agg_trade.quantity, agg_trade.price);
@@ -411,52 +412,98 @@ impl MessageHandler for AggTradeMessageHandler {
                     Ok(())
                 }
                 Ok(None) => {
-
+                    // [新增日志] L2 - 路径B: parse成功, 但不是aggTrade
+                    trace!(target: AGG_TRADE_TARGET, connection_id, "L2 - 路径B: parse成功, 但不是aggTrade");
 
                     // 非归集交易消息，可能是订阅确认等
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
                         // 统一处理所有包含 "id" 的响应消息，无论成功或失败
-                        if let Some(id) = json.get("id") {
+                        if json.get("id").is_some() {
+                            // [新增日志] L3 - 路径B.1: 是一个带ID的响应消息
+                            trace!(target: AGG_TRADE_TARGET, connection_id, "L3 - 路径B.1: 是一个带ID的响应消息");
                             if let Some(error) = json.get("error") {
                                 // 明确地捕获并记录错误响应
                                 tracing::error!(
                                     target: AGG_TRADE_TARGET,
                                     log_type = "subscription_error",
                                     connection_id = connection_id,
-                                    id = %id,
                                     error_details = %error,
                                     raw_message = %message,
                                     "❌ WebSocket订阅失败或发生错误！"
                                 );
-                            } else if json.get("result").is_some() {
-                                // 处理订阅成功响应：{"result": null, "id": 1}
-                                let result = json.get("result");
-                                if result.map(|r| r.is_null()).unwrap_or(false) {
-                                    info!(
-                                        target: WEBSOCKET_CONNECTION_TARGET,
-                                        log_type = "subscription_success",
-                                        connection_id = connection_id,
-                                        id = %id,
-                                        "✅ WebSocket订阅成功确认"
-                                    );
-                                } else {
-                                    // 其他类型的result响应（如LIST_SUBSCRIPTIONS等）
-                                    info!(
-                                        target: AGG_TRADE_TARGET,
-                                        log_type = "subscription_response",
-                                        connection_id = connection_id,
-                                        id = %id,
-                                        result = %result.unwrap_or(&serde_json::Value::Null),
-                                        "📋 WebSocket响应消息"
-                                    );
-                                }
+                            } else if let Some(result) = json.get("result") {
+                                // 捕获成功的响应
+                                tracing::info!(
+                                    target: AGG_TRADE_TARGET,
+                                    log_type = "low_freq",
+                                    connection_id = connection_id,
+                                    message_type = "订阅响应",
+                                    result = %result,
+                                    raw_message = %message,
+                                    "✅ WebSocket收到订阅响应"
+                                );
+
+                                // [新增] 额外的简化日志，确保订阅确认可见
+                                info!(target: AGG_TRADE_TARGET, "🎯 连接 {} 订阅确认: result={}", connection_id, result);
+                            } else {
+                                // 其他包含 "id" 但格式未知的响应
+                                tracing::warn!(
+                                    target: AGG_TRADE_TARGET,
+                                    log_type = "low_freq",
+                                    connection_id = connection_id,
+                                    message_type = "未知ID响应",
+                                    raw_message = %message,
+                                    "收到一个未知的带ID的响应消息"
+                                );
                             }
+                        } else if let Some(event_type) = json.get("e").and_then(|e| e.as_str()) {
+                            // [新增日志] L3 - 路径B.2: 是其他类型的事件
+                            trace!(target: AGG_TRADE_TARGET, connection_id, "L3 - 路径B.2: 是其他类型的事件");
+
+                            // 保留对其他类型事件的日志记录
+                            tracing::info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                event_type = %event_type,
+                                "连接收到非订阅响应的事件消息"
+                            );
+                        } else {
+                            // [新增日志] L3 - 路径B.3: 是未知格式的JSON
+                            trace!(target: AGG_TRADE_TARGET, connection_id, "L3 - 路径B.3: 是未知格式的JSON");
+
+                            // 其他未知JSON消息
+                            tracing::info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                message_type = "未知JSON消息",
+                                raw_message = %message,
+                                "连接收到未知格式的JSON消息"
+                            );
                         }
+                    } else {
+                        // [新增日志] L3 - 路径B.4: 非JSON消息
+                        trace!(target: AGG_TRADE_TARGET, connection_id, "L3 - 路径B.4: 非JSON消息");
+
+                        tracing::info!(
+                            target: AGG_TRADE_TARGET,
+                            log_type = "low_freq",
+                            connection_id = connection_id,
+                            message_type = "非JSON消息",
+                            raw_message = if message.len() > 200 {
+                                format!("{}...(长度:{})", &message[..200], message.len())
+                            } else {
+                                message.clone()
+                            },
+                            "连接收到非JSON消息"
+                        );
                     };
                     Ok(())
                 }
                 Err(e) => {
-
+                    // [新增日志] L2 - 路径C: parse失败
+                    trace!(target: AGG_TRADE_TARGET, connection_id, "L2 - 路径C: parse失败");
 
                     self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     error!(target: AGG_TRADE_TARGET, "连接 {} 解析归集交易消息失败: {}, 原始消息: {}",
@@ -477,7 +524,8 @@ impl AggTradeMessageHandler {
     /// 解析归集交易消息
     #[instrument(skip_all, err)]
     async fn parse_agg_trade_message(&self, message: &str) -> Result<Option<BinanceRawAggTrade>> {
-
+        // [新增日志] parse - 开始解析JSON对象
+        trace!(target: AGG_TRADE_TARGET, "parse - 开始解析JSON对象");
 
         // 解析JSON
         let json: serde_json::Value = serde_json::from_str(message)
@@ -485,14 +533,32 @@ impl AggTradeMessageHandler {
 
         // 首先检查是否是包装在stream中的消息格式
         let data_json = if let Some(data) = json.get("data") {
+            // [新增日志] parse - 检测到stream包裹层, 提取data部分
+            trace!(target: AGG_TRADE_TARGET, "parse - 检测到stream包裹层, 提取data部分");
             data
         } else {
+            // [新增日志] parse - 未检测到stream包裹层, 直接使用原始JSON
+            trace!(target: AGG_TRADE_TARGET, "parse - 未检测到stream包裹层, 直接使用原始JSON");
             &json
         };
 
+        // [新增] 详细的JSON结构分析
+        trace!(target: AGG_TRADE_TARGET, "parse - JSON结构分析: 顶级字段 = {:?}",
+            json.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
+        trace!(target: AGG_TRADE_TARGET, "parse - data_json结构分析: 字段 = {:?}",
+            data_json.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
+
         // 检查是否是归集交易消息
         if let Some(event_type) = data_json.get("e").and_then(|e| e.as_str()) {
+            // [新增] 详细的事件类型日志
+            trace!(target: AGG_TRADE_TARGET, "parse - 发现事件类型字段: '{}'", event_type);
+
             if event_type == "aggTrade" {
+                // [新增日志] parse - 事件类型匹配aggTrade, 开始反序列化
+                trace!(target: AGG_TRADE_TARGET, "parse - 事件类型匹配aggTrade, 开始反序列化");
+
+                // [新增] 简化版本，确保在info级别可见
+                info!(target: AGG_TRADE_TARGET, "🎯 发现aggTrade事件，开始解析交易数据");
 
                 // 解析归集交易数据
                 let agg_trade = BinanceRawAggTrade {
@@ -508,11 +574,32 @@ impl AggTradeMessageHandler {
                     is_buyer_maker: data_json.get("m").and_then(|m| m.as_bool()).unwrap_or(false),
                 };
 
+                debug!(target: AGG_TRADE_TARGET, "归集交易解析成功: {} {} @ {}",
+                    agg_trade.symbol, agg_trade.quantity, agg_trade.price);
 
+                // 发出验证事件
+                tracing::info!(
+                    target: AGG_TRADE_TARGET,
+                    event_name = "trade_data_parsed",
+                    symbol = %agg_trade.symbol,
+                    price = agg_trade.price.parse::<f64>().unwrap_or(0.0),
+                    quantity = agg_trade.quantity.parse::<f64>().unwrap_or(0.0),
+                    timestamp_ms = agg_trade.trade_time as i64,
+                    "交易数据解析完成"
+                );
 
                 return Ok(Some(agg_trade));
+            } else {
+                // [新增日志] parse - 事件类型不匹配aggTrade
+                trace!(target: AGG_TRADE_TARGET, "parse - 事件类型不匹配aggTrade: {}", event_type);
             }
+        } else {
+            // [新增日志] parse - 消息中没有找到事件类型'e'字段
+            trace!(target: AGG_TRADE_TARGET, "parse - 消息中没有找到事件类型'e'字段");
         }
+
+        // [新增日志] parse - 最终判定不是aggTrade消息
+        trace!(target: AGG_TRADE_TARGET, "parse - 最终判定不是aggTrade消息");
         Ok(None)
     }
 }
@@ -588,8 +675,6 @@ pub struct ConnectionManager {
     proxy_addr: String,
     /// 代理端口
     proxy_port: u16,
-    /// 可选的流列表，用于 /stream 端点
-    streams: Option<Vec<String>>,
 }
 
 impl ConnectionManager {
@@ -600,17 +685,6 @@ impl ConnectionManager {
             use_proxy,
             proxy_addr,
             proxy_port,
-            streams: None,
-        }
-    }
-
-    /// 创建带有流列表的连接管理器，用于 /stream 端点
-    pub fn new_with_streams(use_proxy: bool, proxy_addr: String, proxy_port: u16, streams: Vec<String>) -> Self {
-        Self {
-            use_proxy,
-            proxy_addr,
-            proxy_port,
-            streams: Some(streams),
         }
     }
 
@@ -690,19 +764,12 @@ impl ConnectionManager {
         let port = 443;
         let addr = format!("{}:{}", host, port);
 
-        // 根据是否有streams参数决定使用哪种端点
-        let (path, full_url) = if let Some(ref streams) = self.streams {
-            // 使用 /stream 端点，直接在URL中指定streams
-            let streams_param = streams.join("/");
-            let path = format!("/stream?streams={}", streams_param);
-            let full_url = format!("wss://{}:{}{}", host, port, path);
-            (path, full_url)
-        } else {
-            // 使用 /ws 端点，支持动态订阅
-            let path = "/ws".to_string();
-            let full_url = format!("wss://{}:{}{}", host, port, path);
-            (path, full_url)
-        };
+        // [修改逻辑] 统一使用 /ws 端点，以支持动态订阅和统一的连接行为。
+        // 不再根据流的数量来决定是使用 /stream还是 /ws。
+        let path = "/ws".to_string();
+
+        // [修改逻辑] 完整URL的日志现在反映了统一的端点
+        let full_url = format!("wss://{}:{}{}", host, port, path);
         info!(
             target: WEBSOCKET_CONNECTION_TARGET,
             log_type = "low_freq",
@@ -883,6 +950,18 @@ impl ConnectionManager {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
 //=============================================================================
 // 归集交易客户端
 //=============================================================================
@@ -896,8 +975,6 @@ pub struct AggTradeClient {
     external_handler: Option<Arc<AggTradeMessageHandler>>,
     /// 用于从外部接收命令的发送端
     command_tx: Option<mpsc::Sender<WsCommand>>,
-    /// 【新增】用于接收命令的接收端，会被start()方法取走
-    command_rx: Option<mpsc::Receiver<WsCommand>>,
 }
 
 impl AggTradeClient {
@@ -910,7 +987,6 @@ impl AggTradeClient {
             connections: Arc::new(TokioMutex::new(HashMap::new())),
             external_handler: None,
             command_tx: None,
-            command_rx: None,
         }
     }
 
@@ -920,15 +996,13 @@ impl AggTradeClient {
         config: AggTradeConfig,
         handler: Arc<AggTradeMessageHandler>
     ) -> Self {
-        // 【修改】同时保存 sender 和 receiver
-        let (command_tx, command_rx) = mpsc::channel(16);
+        let (command_tx, _command_rx) = mpsc::channel(16); // rx 会在 start() 时被 take
         Self {
             config,
             connection_id_counter: AtomicUsize::new(1),
             connections: Arc::new(TokioMutex::new(HashMap::new())),
             external_handler: Some(handler),
             command_tx: Some(command_tx),
-            command_rx: Some(command_rx), // 【新增】保存 receiver
         }
     }
 
@@ -955,8 +1029,11 @@ impl WebSocketClient for AggTradeClient {
                 create_dir_all(log_dir)?;
             }
 
-            // 【核心修改】从 self 中取出接收端
-            let mut command_rx = if let Some(rx) = self.command_rx.take() {
+            // take 出 command_rx 以便传递给连接任务
+            let mut command_rx = if let Some(_tx) = &self.command_tx {
+                let (new_tx, rx) = mpsc::channel(16);
+                // 替换原有的 tx，保留新的 rx
+                self.command_tx = Some(new_tx);
                 rx
             } else {
                 // 如果没有命令通道，创建一个永远不会收到消息的通道
@@ -964,18 +1041,17 @@ impl WebSocketClient for AggTradeClient {
                 rx
             };
 
-            // 获取初始流
-            let initial_streams = self.config.get_streams();
-            info!(target: AGG_TRADE_TARGET, "初始订阅 {} 个流: {:?}", initial_streams.len(), initial_streams);
-
-            // 创建连接管理器，使用 /stream 端点
+            // 创建连接管理器
             let (use_proxy, proxy_addr, proxy_port) = self.config.get_proxy_settings();
-            let connection_manager = ConnectionManager::new_with_streams(
+            let connection_manager = ConnectionManager::new(
                 use_proxy,
                 proxy_addr,
                 proxy_port,
-                initial_streams.clone(),
             );
+
+            // 获取初始流
+            let initial_streams = self.config.get_streams();
+            info!(target: AGG_TRADE_TARGET, "初始订阅 {} 个流: {:?}", initial_streams.len(), initial_streams);
 
             // 获取消息处理器
             let handler = if let Some(external_handler) = &self.external_handler {
@@ -1003,46 +1079,58 @@ impl WebSocketClient for AggTradeClient {
             }
 
             // 启动单个连接任务，支持动态订阅
-            let connection_task = tokio::spawn(
-                (async move {
-                    let mut current_streams = initial_streams;
+            let connection_task = tokio::spawn(async move {
+                let mut current_streams = initial_streams;
 
-                    loop {
-                        // 更新状态为连接中
-                        {
-                            let mut connections = connections_clone.lock().await;
-                            if let Some(conn) = connections.get_mut(&connection_id) {
-                                conn.status = "连接中".to_string();
-                            }
+                'reconnect_loop: loop {
+                    // 更新状态为连接中
+                    {
+                        let mut connections = connections_clone.lock().await;
+                        if let Some(conn) = connections.get_mut(&connection_id) {
+                            conn.status = "连接中".to_string();
                         }
+                    }
 
-                        // 建立连接
-                        match connection_manager.connect().await {
-                            Ok(mut ws) => {
-                                // 更新状态为已连接
-                                {
-                                    let mut connections = connections_clone.lock().await;
-                                    if let Some(conn) = connections.get_mut(&connection_id) {
-                                        conn.status = "已连接".to_string();
-                                        conn.streams = current_streams.clone();
-                                    }
+                    // 建立连接
+                    match connection_manager.connect().await {
+                        Ok(mut ws) => {
+                            // 更新状态为已连接
+                            {
+                                let mut connections = connections_clone.lock().await;
+                                if let Some(conn) = connections.get_mut(&connection_id) {
+                                    conn.status = "已连接".to_string();
+                                    conn.streams = current_streams.clone();
                                 }
+                            }
 
-                                info!(target: AGG_TRADE_TARGET, "连接 {} 已建立", connection_id);
+                            info!(target: AGG_TRADE_TARGET, "连接 {} 已建立", connection_id);
 
-                                // [新增] 打印完整的连接信息 - 使用 /stream 端点
-                                let streams_param = current_streams.join("/");
+                            // [新增] 打印完整的连接信息
+                            info!(
+                                target: AGG_TRADE_TARGET,
+                                log_type = "low_freq",
+                                connection_id = connection_id,
+                                "🔗 AggTradeClient 完整连接信息 - URL: wss://fstream.binance.com:443/ws"
+                            );
+
+                            // 发送初始订阅
+                            if !current_streams.is_empty() {
+                                let sub_msg = create_subscribe_message(&current_streams);
+
+                                // [新增] 打印完整的订阅消息内容
                                 info!(
                                     target: AGG_TRADE_TARGET,
                                     log_type = "low_freq",
                                     connection_id = connection_id,
                                     stream_count = current_streams.len(),
-                                    "🔗 AggTradeClient 完整连接信息 - URL: wss://fstream.binance.com:443/stream?streams={}",
-                                    streams_param
+                                    streams = ?current_streams,
+                                    subscription_message = %sub_msg,
+                                    "📤 AggTradeClient 发送初始订阅消息"
                                 );
 
-                                // 使用 /stream 端点，流已在URL中指定，但仍支持动态订阅
-                                info!(target: AGG_TRADE_TARGET, "📋 使用 /stream 端点，品种已在URL中指定: {} 个品种", current_streams.len());
+                                // [新增] 额外的简化日志，确保订阅内容可见
+                                info!(target: AGG_TRADE_TARGET, "📋 订阅详情: {} 个品种", current_streams.len());
+                                info!(target: AGG_TRADE_TARGET, "📋 订阅消息: {}", sub_msg);
                                 if current_streams.len() <= 10 {
                                     info!(target: AGG_TRADE_TARGET, "📋 品种列表: {:?}", current_streams);
                                 } else {
@@ -1050,185 +1138,201 @@ impl WebSocketClient for AggTradeClient {
                                     info!(target: AGG_TRADE_TARGET, "📋 后10个品种: {:?}", &current_streams[current_streams.len()-10..]);
                                 }
 
-                                // 注意：/stream 端点返回combined格式 {"stream":"<streamName>","data":<rawPayload>}
-                                info!(target: AGG_TRADE_TARGET, "📋 /stream 端点将返回combined格式的消息");
+                                let frame = Frame::text(sub_msg.into_bytes().into());
+                                if let Err(e) = ws.write_frame(frame).await {
+                                    error!(target: AGG_TRADE_TARGET, "发送初始订阅失败: {}", e);
+                                    sleep(Duration::from_secs(5)).await;
+                                    continue 'reconnect_loop;
+                                }
+                                info!(target: AGG_TRADE_TARGET, "已发送初始订阅: {} 个流", current_streams.len());
+                            }
 
-                                // [新增] 添加定期状态检查
-                                let mut status_interval = tokio::time::interval(Duration::from_secs(30));
-                                let mut last_message_time = std::time::Instant::now();
+                            // [新增] 添加定期状态检查
+                            let mut status_interval = tokio::time::interval(Duration::from_secs(30));
+                            let mut last_message_time = std::time::Instant::now();
 
-                                // 核心消息循环，支持动态订阅
-                                'message_loop: loop {
-
-
-                                    tokio::select! {
-                                        // [新增-我的优化] 优先处理网络I/O，而不是随机轮询
-                                        biased;
-
-                                        // 定期状态检查
-                                        _ = status_interval.tick() => {
-                                            let elapsed = last_message_time.elapsed();
-                                            // 如果超过2分钟没有收到消息，可能有问题
-                                            if elapsed > Duration::from_secs(120) {
-                                                warn!(target: WEBSOCKET_CONNECTION_TARGET,
-                                                    "⚠️ 连接 {} 超过2分钟未收到消息，可能连接异常", connection_id);
+                            // 核心消息循环，支持动态订阅
+                            'message_loop: loop {
+                                tokio::select! {
+                                    // [新增] 分支0：定期状态检查
+                                    _ = status_interval.tick() => {
+                                        let elapsed = last_message_time.elapsed();
+                                        let conn_count = {
+                                            let connections = connections_clone.lock().await;
+                                            if let Some(conn) = connections.get(&connection_id) {
+                                                conn.message_count
+                                            } else {
+                                                0
                                             }
-                                        },
+                                        };
+                                        info!(
+                                            target: WEBSOCKET_CONNECTION_TARGET,
+                                            "💓 连接 {} 状态检查 - 消息总数: {}, 距离上次消息: {:?}",
+                                            connection_id, conn_count, elapsed
+                                        );
 
-                                        // 处理WebSocket消息
-                                        result = ws.read_frame() => {
-                                            match result {
-                                                Ok(frame) => {
-                                                    match frame.opcode {
-                                                        OpCode::Text => {
-                                                            let text = String::from_utf8_lossy(&frame.payload).to_string();
+                                        // 如果超过2分钟没有收到消息，可能有问题
+                                        if elapsed > Duration::from_secs(120) {
+                                            warn!(target: WEBSOCKET_CONNECTION_TARGET,
+                                                "⚠️ 连接 {} 超过2分钟未收到消息，可能连接异常", connection_id);
+                                        }
+                                    },
+                                    // 分支1：处理WebSocket消息
+                                    result = ws.read_frame() => {
+                                        // [新增日志] 帧读取结果诊断
+                                        trace!(target: WEBSOCKET_CONNECTION_TARGET, connection_id, "🔍 WebSocket read_frame 调用完成");
 
-                                                            last_message_time = std::time::Instant::now();
-                                                            {
-                                                                let mut connections = connections_clone.lock().await;
-                                                                if let Some(conn) = connections.get_mut(&connection_id) {
-                                                                    conn.message_count += 1;
+                                        match result {
+                                            Ok(frame) => {
+                                                // [新增日志] 帧类型诊断
+                                                trace!(target: WEBSOCKET_CONNECTION_TARGET, connection_id, opcode = ?frame.opcode, payload_len = frame.payload.len(), "📦 收到WebSocket帧");
+
+                                                match frame.opcode {
+                                                    OpCode::Text => {
+                                                        let text = String::from_utf8_lossy(&frame.payload).to_string();
+
+                                                        // [新增日志] L0 - 捕获最原始的WebSocket文本帧
+                                                        trace!(
+                                                            target: WEBSOCKET_CONNECTION_TARGET,
+                                                            connection_id,
+                                                            raw_message = %text,
+                                                            "L0 - 收到原始WebSocket文本帧"
+                                                        );
+
+                                                        // [新增日志] 简化版本，确保在info级别可见
+                                                        info!(target: WEBSOCKET_CONNECTION_TARGET, "📨 连接 {} 收到消息 (长度: {}): {}",
+                                                            connection_id,
+                                                            text.len(),
+                                                            if text.len() > 200 { format!("{}...", &text[..200]) } else { text.clone() }
+                                                        );
+
+                                                        // [新增] 更新最后消息时间
+                                                        last_message_time = std::time::Instant::now();
+
+                                                        // 更新消息计数
+                                                        {
+                                                            let mut connections = connections_clone.lock().await;
+                                                            if let Some(conn) = connections.get_mut(&connection_id) {
+                                                                conn.message_count += 1;
+                                                                // [新增日志] 消息计数更新
+                                                                if conn.message_count % 10 == 1 || conn.message_count <= 5 {
+                                                                    info!(target: WEBSOCKET_CONNECTION_TARGET, "📊 连接 {} 消息计数: {}", connection_id, conn.message_count);
                                                                 }
                                                             }
-                                                            if let Err(e) = handler.handle_message(connection_id, text).await {
-                                                                warn!(target: AGG_TRADE_TARGET, "Message handler failed: {}", e);
-                                                            }
-                                                        },
-                                                        OpCode::Close => {
+                                                        }
+
+                                                        // [新增日志] 消息处理前
+                                                        trace!(target: AGG_TRADE_TARGET, connection_id, "🔄 准备调用 handle_message");
+
+                                                        // 处理消息
+                                                        if let Err(e) = handler.handle_message(connection_id, text).await {
+                                                            warn!(target: AGG_TRADE_TARGET, "消息处理失败: {}", e);
+                                                        } else {
+                                                            // [新增日志] 消息处理成功
+                                                            trace!(target: AGG_TRADE_TARGET, connection_id, "✅ handle_message 处理完成");
+                                                        }
+                                                    },
+                                                    OpCode::Close => {
+                                                        info!(target: AGG_TRADE_TARGET, "🔌 服务器关闭连接，准备重连...");
+                                                        break 'message_loop;
+                                                    }
+                                                    OpCode::Ping => {
+                                                        info!(target: AGG_TRADE_TARGET, "🏓 收到Ping，发送Pong");
+                                                        if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Pong, None, frame.payload)).await {
+                                                            error!(target: AGG_TRADE_TARGET, "发送Pong失败: {}", e);
                                                             break 'message_loop;
-                                                        },
-                                                        OpCode::Ping => {
-                                                            if let Err(e) = ws.write_frame(Frame::new(true, OpCode::Pong, None, frame.payload)).await {
-                                                                error!(target: AGG_TRADE_TARGET, "发送Pong失败: {}", e);
-                                                                break 'message_loop;
-                                                            }
-                                                        },
-                                                        OpCode::Pong => {
-                                                        },
-                                                        _ => {
                                                         }
+                                                    },
+                                                    OpCode::Pong => {
+                                                        info!(target: AGG_TRADE_TARGET, "🏓 收到Pong");
+                                                    },
+                                                    OpCode::Binary => {
+                                                        info!(target: AGG_TRADE_TARGET, "📦 收到二进制帧 (长度: {})", frame.payload.len());
+                                                    },
+                                                    _ => {
+                                                        info!(target: AGG_TRADE_TARGET, "📦 收到其他类型帧: {:?} (长度: {})", frame.opcode, frame.payload.len());
                                                     }
-                                                },
-                                                Err(e) => {
-                                                    error!(target: AGG_TRADE_TARGET, "WebSocket read error: {}", e);
-                                                    break 'message_loop;
-                                                }
+                                                } // 结束 match frame.opcode
+                                            }, // Ok(frame) 分支在这里正确结束
+                                            Err(e) => { // Err(e) 分支现在是 Ok(frame) 的兄弟分支
+                                                error!(target: AGG_TRADE_TARGET, "❌ WebSocket读取错误: {}", e);
+                                                error!(target: WEBSOCKET_CONNECTION_TARGET, "❌ 连接 {} WebSocket读取失败，准备重连", connection_id);
+                                                break 'message_loop;
                                             }
-                                        },
+                                        } // 结束 match result
+                                    }, // 结束分支1：处理WebSocket消息
+                                    // 分支2：处理外部命令
+                                    Some(command) = command_rx.recv() => {
+                                        match command {
+                                            WsCommand::Subscribe(new_symbols) => {
+                                                info!(target: AGG_TRADE_TARGET, "连接 {} 收到动态订阅: {:?}", connection_id, new_symbols);
+                                                let new_streams: Vec<String> = new_symbols.iter()
+                                                    .map(|s| format!("{}@aggTrade", s.to_lowercase()))
+                                                    .collect();
 
-                                        // 分支2：处理外部命令
-                                        Some(command) = command_rx.recv() => {
-                                            match command {
-                                                WsCommand::Subscribe(new_symbols) => {
-                                                    info!(target: AGG_TRADE_TARGET, "连接 {} 收到动态订阅: {:?}", connection_id, new_symbols);
-                                                    let new_streams: Vec<String> = new_symbols.iter()
-                                                        .map(|s| format!("{}@aggTrade", s.to_lowercase()))
-                                                        .collect();
+                                                let sub_msg = serde_json::json!({
+                                                    "method": "SUBSCRIBE",
+                                                    "params": &new_streams,
+                                                    "id": chrono::Utc::now().timestamp_millis()
+                                                }).to_string();
 
-                                                    let sub_msg = serde_json::json!({
-                                                        "method": "SUBSCRIBE",
-                                                        "params": &new_streams,
-                                                        "id": chrono::Utc::now().timestamp_millis()
-                                                    }).to_string();
+                                                // [新增] 打印完整的动态订阅信息
+                                                info!(
+                                                    target: AGG_TRADE_TARGET,
+                                                    log_type = "low_freq",
+                                                    connection_id = connection_id,
+                                                    original_symbols = ?new_symbols,
+                                                    formatted_streams = ?new_streams,
+                                                    subscription_message = %sub_msg,
+                                                    "📤 AggTradeClient 发送动态订阅消息"
+                                                );
 
-                                                    info!(
-                                                        target: AGG_TRADE_TARGET,
-                                                        log_type = "low_freq",
-                                                        connection_id = connection_id,
-                                                        original_symbols = ?new_symbols,
-                                                        formatted_streams = ?new_streams,
-                                                        subscription_message = %sub_msg,
-                                                        "📤 AggTradeClient 发送动态订阅消息"
-                                                    );
+                                                // [新增] 额外的简化日志，确保动态订阅内容可见
+                                                info!(target: AGG_TRADE_TARGET, "🔄 动态订阅: {} 个新品种", new_symbols.len());
+                                                info!(target: AGG_TRADE_TARGET, "🔄 动态订阅消息: {}", sub_msg);
+                                                info!(target: AGG_TRADE_TARGET, "🔄 新品种: {:?}", new_symbols);
 
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 动态订阅: {} 个新品种", new_symbols.len());
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 动态订阅消息: {}", sub_msg);
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 新品种: {:?}", new_symbols);
-
-                                                    if let Err(e) = ws.write_frame(Frame::text(sub_msg.into_bytes().into())).await {
-                                                        error!(target: AGG_TRADE_TARGET, "发送动态订阅失败: {}", e);
-                                                        break 'message_loop; // 发送失败，退出重连
-                                                    }
-
-                                                    current_streams.extend(new_streams.clone()); // 更新当前连接管理的流
-
-                                                    {
-                                                        let mut connections = connections_clone.lock().await;
-                                                        if let Some(conn) = connections.get_mut(&connection_id) {
-                                                            conn.streams = current_streams.clone();
-                                                        }
-                                                    }
-                                                    info!(target: AGG_TRADE_TARGET, "动态订阅成功，当前管理 {} 个流", current_streams.len());
+                                                if let Err(e) = ws.write_frame(Frame::text(sub_msg.into_bytes().into())).await {
+                                                    error!(target: AGG_TRADE_TARGET, "发送动态订阅失败: {}", e);
+                                                    break 'message_loop; // 发送失败，退出重连
                                                 }
 
-                                                WsCommand::Unsubscribe(remove_symbols) => {
-                                                    info!(target: AGG_TRADE_TARGET, "连接 {} 收到动态取消订阅: {:?}", connection_id, remove_symbols);
-                                                    let remove_streams: Vec<String> = remove_symbols.iter()
-                                                        .map(|s| format!("{}@aggTrade", s.to_lowercase()))
-                                                        .collect();
+                                                current_streams.extend(new_streams); // 更新当前连接管理的流
 
-                                                    let unsub_msg = serde_json::json!({
-                                                        "method": "UNSUBSCRIBE",
-                                                        "params": &remove_streams,
-                                                        "id": chrono::Utc::now().timestamp_millis()
-                                                    }).to_string();
-
-                                                    info!(
-                                                        target: AGG_TRADE_TARGET,
-                                                        log_type = "low_freq",
-                                                        connection_id = connection_id,
-                                                        original_symbols = ?remove_symbols,
-                                                        formatted_streams = ?remove_streams,
-                                                        unsubscription_message = %unsub_msg,
-                                                        "📤 AggTradeClient 发送动态取消订阅消息"
-                                                    );
-
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 动态取消订阅: {} 个品种", remove_symbols.len());
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 动态取消订阅消息: {}", unsub_msg);
-                                                    info!(target: AGG_TRADE_TARGET, "🔄 移除品种: {:?}", remove_symbols);
-
-                                                    if let Err(e) = ws.write_frame(Frame::text(unsub_msg.into_bytes().into())).await {
-                                                        error!(target: AGG_TRADE_TARGET, "发送动态取消订阅失败: {}", e);
-                                                        break 'message_loop; // 发送失败，退出重连
+                                                // 更新连接状态中的流列表
+                                                {
+                                                    let mut connections = connections_clone.lock().await;
+                                                    if let Some(conn) = connections.get_mut(&connection_id) {
+                                                        conn.streams = current_streams.clone();
                                                     }
-
-                                                    // 从当前流列表中移除指定的流
-                                                    for stream in &remove_streams {
-                                                        current_streams.retain(|s| s != stream);
-                                                    }
-
-                                                    {
-                                                        let mut connections = connections_clone.lock().await;
-                                                        if let Some(conn) = connections.get_mut(&connection_id) {
-                                                            conn.streams = current_streams.clone();
-                                                        }
-                                                    }
-                                                    info!(target: AGG_TRADE_TARGET, "动态取消订阅成功，当前管理 {} 个流", current_streams.len());
                                                 }
+
+                                                info!(target: AGG_TRADE_TARGET, "动态订阅成功，当前管理 {} 个流", current_streams.len());
                                             }
                                         }
                                     }
                                 }
-                            }, // 结束 Ok(mut ws) => { ... } 分支
-                            Err(e) => {
-                                // 更新状态
-                                {
-                                    let mut connections = connections_clone.lock().await;
-                                    if let Some(conn) = connections.get_mut(&connection_id) {
-                                        conn.status = format!("连接失败: {}", e);
-                                    }
+                            } // 结束 tokio::select!
+                        } // 结束 'message_loop: loop
+                        }, // 结束 Ok(mut ws) => { ... } 分支
+                        Err(e) => {
+                            // 更新状态
+                            {
+                                let mut connections = connections_clone.lock().await;
+                                if let Some(conn) = connections.get_mut(&connection_id) {
+                                    conn.status = format!("连接失败: {}", e);
                                 }
-
-                                error!(target: AGG_TRADE_TARGET, "连接 {} 失败: {}", connection_id, e);
                             }
-                        }
 
-                        // 重连延迟
-                        sleep(Duration::from_secs(5)).await;
-                    } // 结束 'reconnect_loop: loop
-                })
-                .instrument(tracing::info_span!("websocket_connection", connection_id = connection_id))
-            );
+                            error!(target: AGG_TRADE_TARGET, "连接 {} 失败: {}", connection_id, e);
+                        }
+                    }
+
+                    // 重连延迟
+                    sleep(Duration::from_secs(5)).await;
+                } // 结束 'reconnect_loop: loop
+            } // 结束 async move 块
+            .instrument(tracing::info_span!("websocket_connection", connection_id = connection_id))); // 结束 tokio::spawn
 
             // 等待连接任务完成
             if let Err(e) = connection_task.await {

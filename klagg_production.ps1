@@ -1,4 +1,4 @@
-# K线聚合服务可视化测试启动脚本
+# K线聚合服务生产模式启动脚本
 # 导入统一配置读取脚本
 . "scripts\read_unified_config.ps1"
 
@@ -45,29 +45,28 @@ Set-LoggingEnvironment
 $env:LOG_TRANSPORT = "named_pipe"
 $env:ENABLE_PERF_LOG = "1"             # 启用性能日志分析
 
-Write-Host "🔧 可视化测试模式配置完成:" -ForegroundColor Cyan
-Write-Host "  ✅ 使用专用的可视化测试入口 (klagg_visual_test)" -ForegroundColor Green
-Write-Host "  ✅ 硬编码测试模式，无需环境变量控制" -ForegroundColor Green
-Write-Host "  ✅ 启用Web服务器进行数据可视化" -ForegroundColor Green
-Write-Host "  ✅ 禁用数据库持久化" -ForegroundColor Green
+Write-Host "🔧 生产模式配置完成:" -ForegroundColor Cyan
+Write-Host "  ✅ 使用生产入口 (klagg_sub_threads)" -ForegroundColor Green
+Write-Host "  ✅ 从币安API获取所有U本位永续合约品种" -ForegroundColor Green
+Write-Host "  ✅ 启用数据库持久化" -ForegroundColor Green
+Write-Host "  ✅ 基于MiniTicker实时发现新品种" -ForegroundColor Green
+Write-Host "  ✅ 禁用Web服务器" -ForegroundColor Green
 
 Write-Host "🔥 性能日志分析已启用，将生成 logs\performance.folded" -ForegroundColor Magenta
-Write-Host "🧪 可视化测试模式已启用，将订阅8个主流品种:" -ForegroundColor Cyan
-Write-Host "   BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, BNBUSDT, LTCUSDT" -ForegroundColor White
-Write-Host "🌐 Web服务器将在启动后提供数据可视化界面" -ForegroundColor Magenta
+Write-Host "🏭 生产模式已启用，将处理所有币安U本位永续合约品种" -ForegroundColor Cyan
 
 $buildMode = Get-BuildMode
-Write-Host "🚀 启动K线聚合服务 - 可视化测试模式 ($buildMode)" -ForegroundColor Yellow
+Write-Host "🚀 启动K线聚合服务 - 生产模式 ($buildMode)" -ForegroundColor Yellow
 
 try {
-    $cargoCmd = Get-CargoCommand -BinaryName 'klagg_visual_test'
+    $cargoCmd = Get-CargoCommand -BinaryName 'klagg_sub_threads'
     Invoke-Expression $cargoCmd
 }
 catch {
-    Write-Host "可视化测试服务启动失败: $_" -ForegroundColor Red
+    Write-Host "生产服务启动失败: $_" -ForegroundColor Red
 }
 finally {
     Write-Host ""
-    Write-Host "K线聚合可视化测试服务已停止" -ForegroundColor Yellow
+    Write-Host "K线聚合生产服务已停止" -ForegroundColor Yellow
     Read-Host "按任意键退出"
 }

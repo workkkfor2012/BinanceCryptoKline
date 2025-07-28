@@ -51,6 +51,8 @@ heartbeat_interval_secs = 30
 initial_capacity = 70000
 enable_preallocation = true
 alignment_size = 64
+# 增量数据缓冲区固定容量 - 用于替换Snapshotter的单缓冲区大小
+deltas_buffer_capacity = 5000
 
 [persistence]
 batch_size = 1000
@@ -63,12 +65,12 @@ enable_compressed_logging = true
 # ============================================================
 [gateway]
 # Gateway拉取Worker数据的间隔（毫秒）
-# 这个值决定了数据聚合和持久化的频率
-pull_interval_ms = 100
+# 高频模式：为前端WebSocket提供实时数据，每500ms拉取一次
+pull_interval_ms = 500
 
 # 单个Worker请求的超时时间（毫秒）
 # 应该远小于pull_interval_ms以确保及时响应
-pull_timeout_ms = 50
+pull_timeout_ms = 200
 
 # Worker连续超时的告警阈值
 # 超过此次数将触发错误日志
@@ -90,3 +92,10 @@ enable_full_tracing = true
 weblog_pipe_name = "weblog_pipe"
 # MCP查询HTTP端口
 mcp_port = 9001
+
+# ============================================================
+# 构建配置 (仅供PowerShell脚本使用)
+# ============================================================
+[build]
+# 编译模式: "debug" 或 "release"
+mode = "release"

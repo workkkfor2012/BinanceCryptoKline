@@ -31,7 +31,7 @@ static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::
 
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
-const CONCURRENCY: usize = 20; // 第一次补齐并发数
+const CONCURRENCY: usize = 50; // 第一次补齐并发数
 const SECOND_ROUND_CONCURRENCY: usize = 400; // 第二次补齐并发数
 
 // [新增] 连接池相关常量
@@ -684,8 +684,18 @@ impl KlineBackfiller {
                 TaskResult::Success(count)
             },
             Err(e) => {
+                // ✨ [修改] 扩展错误检查，当发生连接、超时、429或418错误时，剔除当前客户端
                 if let AppError::HttpError(ref re) = e {
-                    if re.is_connect() || re.is_timeout() {
+                    let is_fatal_error = re.is_connect() || re.is_timeout();
+
+                    let is_ban_error = if let Some(status) = re.status() {
+                        // 429 Too Many Requests 或 418 I'm a teapot (通常表示IP被封禁)
+                        status.as_u16() == 429 || status.as_u16() == 418
+                    } else {
+                        false
+                    };
+
+                    if is_fatal_error || is_ban_error {
                         self.remove_client_from_pool(&client).await;
                     }
                 }

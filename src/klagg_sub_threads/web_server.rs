@@ -4,7 +4,7 @@
 //! 这个模块是自包含的，外部只需要调用 `run_visual_test_server` 即可启动。
 
 use crate::{
-    klagg_sub_threads::{KlineData, GlobalKlines},
+    klagg_sub_threads::{DeltaBatch, KlineData},
 };
 use axum::{
     extract::{
@@ -27,7 +27,7 @@ use tracing::{error, info, instrument, trace, warn};
 /// 启动可视化测试服务器。这是从外部调用此模块的唯一入口点。
 #[instrument(target = "WebServer", skip_all)]
 pub async fn run_visual_test_server(
-    mut klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
+    klines_watch_rx: watch::Receiver<Arc<DeltaBatch>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     shutdown_rx: watch::Receiver<bool>,
@@ -88,7 +88,7 @@ struct ApiKline {
 /// Web服务器的共享状态
 #[derive(Clone)]
 struct AppState {
-    klines_watch_rx: watch::Receiver<Arc<GlobalKlines>>,
+    klines_watch_rx: watch::Receiver<Arc<DeltaBatch>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     subscriptions: Arc<DashMap<String, Vec<mpsc::Sender<String>>>>,
@@ -106,13 +106,13 @@ async fn pusher_task(
 
     loop {
         tokio::select! {
-            // 监听Gateway的数据更新
+            // 监听Gateway的增量数据更新
             Ok(_) = klines_watch_rx.changed() => {
-                // 获取最新的全局快照
-                let snapshot = klines_watch_rx.borrow_and_update().clone();
+                // 获取最新的增量批次
+                let delta_batch = klines_watch_rx.borrow_and_update().clone();
 
                 // 过滤出有效的K线数据
-                let all_klines: Vec<KlineData> = snapshot.klines.iter()
+                let all_klines: Vec<KlineData> = delta_batch.klines.iter()
                     .filter(|k| k.open_time > 0)  // 过滤掉默认/空的K线
                     .cloned()
                     .collect();
@@ -121,7 +121,7 @@ async fn pusher_task(
                 if all_klines.is_empty() {
                     continue;
                 }
-                trace!(target = "Pusher", kline_count = all_klines.len(), "拉取到更新的K线");
+                trace!(target = "Pusher", batch_id = delta_batch.batch_id, kline_count = all_klines.len(), "拉取到增量K线数据");
 
                 let index_guard = state.index_to_symbol.read().await;
                 let klines_by_symbol: DashMap<String, Vec<ApiKline>> = DashMap::new();

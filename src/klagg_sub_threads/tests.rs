@@ -7,7 +7,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::klagg_sub_threads::{Worker, WorkerCmd, InitialKlineData};
+    use crate::klagg_sub_threads::{KlineAggregator, WorkerCmd, InitialKlineData};
     use crate::klcommon::{
         api::interval_to_milliseconds,
         models::Kline as DbKline,
@@ -33,6 +33,8 @@ mod tests {
             ignore: "0".to_string(),
         }
     }
+
+
 
     /// 基础测试：验证扁平化重构的基本功能
     #[tokio::test]

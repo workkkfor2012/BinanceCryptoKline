@@ -133,12 +133,15 @@ pub struct WebSocketConfig {
 pub struct BufferConfig {
     /// 初始缓冲区大小
     pub initial_capacity: usize,
-    
+
     /// 是否启用内存预分配
     pub enable_preallocation: bool,
-    
+
     /// 内存对齐大小
     pub alignment_size: usize,
+
+    /// 增量数据缓冲区固定容量
+    pub deltas_buffer_capacity: usize,
 }
 
 /// 持久化配置
@@ -230,6 +233,7 @@ impl Default for BufferConfig {
             initial_capacity: DEFAULT_MAX_SYMBOLS * DEFAULT_INTERVALS.len(),
             enable_preallocation: true,
             alignment_size: CACHE_LINE_SIZE,
+            deltas_buffer_capacity: 5000, // 默认5000条增量数据的容量
         }
     }
 }

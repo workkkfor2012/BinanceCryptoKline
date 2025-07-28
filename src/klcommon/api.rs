@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
-use tracing::{warn, error, info, trace}; // 导入 warn, error, info 和 trace 宏
+use tracing::{error, info, trace}; // 导入 error, info 和 trace 宏
 use kline_macros::perf_profile;
 use chrono::TimeZone; // 添加TimeZone导入
 
@@ -255,22 +255,10 @@ impl BinanceApi {
         // 发送请求，直接处理结果
         let response = request.send().await.map_err(AppError::from)?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_else(|_| "无法读取响应体".to_string());
-
-            warn!(
-                http_status = %status,
-                response_text = %text,
-                message = "API请求返回非成功状态码"
-            );
-
-            let api_error = AppError::ApiError(format!(
-                "下载 {} 的连续合约K线失败: {} - {}",
-                task.symbol, status, text
-            ));
-            return Err(api_error);
-        }
+        // ✨ [修改] 将非 2xx 的HTTP状态码直接转换为错误，这会生成一个 AppError::HttpError，
+        // 方便上游根据具体状态码（如 429, 418）进行精细化处理。
+        // 这个改动替换了之前手动的状态检查和日志记录，以实现更健壮的错误传递。
+        let response = response.error_for_status().map_err(AppError::from)?;
 
         let response_text = response.text().await?;
         let raw_klines: Vec<Vec<Value>> = serde_json::from_str(&response_text)

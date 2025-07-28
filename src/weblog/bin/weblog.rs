@@ -204,6 +204,9 @@ async fn process_named_pipe_logs(
 async fn create_named_pipe_server(pipe_name: &str) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, std::io::Error> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
+    // 定义一个更大的缓冲区大小，例如 1MB
+    const PIPE_BUFFER_SIZE: u32 = 1024 * 1024 * 1024;
+
     // 尝试不同的管道名称格式
     let pipe_formats = vec![
         pipe_name.to_string(),
@@ -216,9 +219,11 @@ async fn create_named_pipe_server(pipe_name: &str) -> Result<tokio::net::windows
 
         match ServerOptions::new()
             .first_pipe_instance(true)
+            .in_buffer_size(PIPE_BUFFER_SIZE)  // 设置输入缓冲区大小为 1MB
+            .out_buffer_size(PIPE_BUFFER_SIZE) // 设置输出缓冲区大小为 1MB
             .create(format_name) {
             Ok(server) => {
-                info!("✅ 成功创建命名管道: {}", format_name);
+                info!("✅ 成功创建命名管道: {} (缓冲区: {} KB)", format_name, PIPE_BUFFER_SIZE / 1024);
                 return Ok(server);
             }
             Err(e) => {

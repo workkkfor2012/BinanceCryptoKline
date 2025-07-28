@@ -5,181 +5,120 @@
 //! 2. db_writer_task: 从Gateway消费数据并持久化
 //! 3. GlobalKlines: 全局K线状态快照数据结构
 
-use super::{KlineData, WorkerReadHandle};
+use super::{DeltaBatch, AggregatorReadHandle};
 use crate::klcommon::{
     db::Database,
     models::Kline as DbKline,
     AggregateConfig, WatchdogV2,
 };
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch, RwLock};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, trace};
 
-/// Gateway 和消费者之间传递的全局K线状态快照
-#[derive(Clone, Default, Debug)]
-pub struct GlobalKlines {
-    /// 使用 Vec<KlineData> 而不是 Vec<KlineState>
-    /// 因为 KlineData 已经包含了所有需要的信息，并且是纯数据结构，
-    /// 而 KlineState 包含一些 worker 内部状态，不适合向外暴露。
-    pub klines: Vec<KlineData>,
-    /// 可选: 增加一个时间戳，表示快照生成的时间
-    pub snapshot_time_ms: i64,
-}
+static BATCH_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+
 
 /// Gateway任务 - 中心化聚合与分发
 #[instrument(target = "网关任务", skip_all, name = "gateway_task")]
 pub async fn gateway_task(
-    worker_handles: Arc<Vec<WorkerReadHandle>>,
-    klines_watch_tx: watch::Sender<Arc<GlobalKlines>>,
-    db_queue_tx: mpsc::Sender<Arc<GlobalKlines>>,
+    // [修改] 参数类型更新，但保持 Vec 结构以简化调用方代码
+    worker_handles: Arc<Vec<AggregatorReadHandle>>,
+    klines_watch_tx: watch::Sender<Arc<DeltaBatch>>, // [修改]
+    db_queue_tx: mpsc::Sender<Arc<DeltaBatch>>,     // [修改]
     config: Arc<AggregateConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
     _watchdog: Arc<WatchdogV2>,
 ) {
-    let num_workers = worker_handles.len();
-    let pull_interval = Duration::from_millis(config.gateway.pull_interval_ms);
+    // [修改] 从 Vec 中获取唯一的 handle
+    let handle = worker_handles.get(0).expect("应该有且只有一个聚合器句柄").clone();
     let pull_timeout = Duration::from_millis(config.gateway.pull_timeout_ms);
-    let timeout_threshold = config.gateway.timeout_alert_threshold;
-    let mut interval = tokio::time::interval(pull_interval);
 
-    // --- 【核心修改】: 使用单缓冲重用模式，只在启动时分配一次内存 ---
-    let total_kline_slots = config.max_symbols * config.supported_intervals.len();
-    let mut buffer_a = vec![KlineData::default(); total_kline_slots];
+    // [核心修改] 从定时对齐模式改为高频轮询模式
+    let pull_interval_ms = config.gateway.pull_interval_ms;
+    let mut interval = tokio::time::interval(Duration::from_millis(pull_interval_ms));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    // 用于优雅降级的缓存
-    let mut last_good_snapshots: Vec<Vec<KlineData>> = vec![vec![]; num_workers];
-    let mut timeout_counters = vec![0usize; num_workers];
+    info!(
+        target: "网关任务",
+        pull_interval_ms,
+        "网关任务已启动 (高频轮询模式)，将每 {} 毫秒拉取一次增量数据", pull_interval_ms
+    );
 
-    // [诊断日志开始]
-    let db_queue_capacity = db_queue_tx.capacity();
-    let mut log_interval = tokio::time::interval(Duration::from_secs(5));
-    log_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // [诊断日志结束]
-
-    info!(target: "网关任务", "网关任务已启动 (单缓冲重用模式)，Worker数量: {}, 总K线槽位: {}, DB队列容量: {}", num_workers, total_kline_slots, db_queue_capacity);
+    // 添加10秒统计计时器
+    let mut stats_interval = tokio::time::interval(Duration::from_secs(10));
+    stats_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut batches_pulled_count = 0u64;
+    let mut klines_processed_count = 0u64;
 
     loop {
         tokio::select! {
-            // [诊断日志开始]
-            _ = log_interval.tick() => {
-                let db_queue_len = db_queue_capacity - db_queue_tx.capacity();
-                let percentage = (db_queue_len as f32 / db_queue_capacity as f32) * 100.0;
-
-                // 使用 info 级别以便观察队列状态
+            biased; // 优先检查关闭信号
+            _ = shutdown_rx.changed() => if *shutdown_rx.borrow() { break; },
+            _ = stats_interval.tick() => {
                 info!(
-                    target: "队列监控",
-                    queue_name = "Gateway_to_DBWriter",
-                    len = db_queue_len,
-                    capacity = db_queue_capacity,
-                    usage_percent = format!("{:.2}%", percentage),
-                    "数据库写入队列状态"
+                    target: "网关任务",
+                    log_type = "low_freq",
+                    "周期性统计: batches_pulled_per_10s={}, klines_processed_per_10s={}",
+                    batches_pulled_count, klines_processed_count
                 );
-
-                if percentage > 80.0 {
-                    warn!(
-                        target: "队列监控",
-                        queue_name = "Gateway_to_DBWriter",
-                        len = db_queue_len,
-                        "数据库写入队列使用率超过80%!"
-                    );
-                }
+                batches_pulled_count = 0;
+                klines_processed_count = 0;
             },
-            // [诊断日志结束]
-
             _ = interval.tick() => {
-                let cycle_start = Instant::now();
-
-                // [诊断日志开始] - 添加网关周期开始日志
-                info!(target: "网关任务", "开始Gateway聚合周期");
-                // [诊断日志结束]
-
-                // 1. 并发拉取数据
-                let futures = worker_handles.iter().map(|h| {
-                    tokio::time::timeout(pull_timeout, h.request_snapshot())
-                });
-                let results = futures::future::join_all(futures).await;
-
-                // [诊断日志开始] - 添加Worker响应统计
-                let success_count = results.iter().filter(|r| matches!(r, Ok(Ok(_)))).count();
-                let error_count = results.iter().filter(|r| matches!(r, Ok(Err(_)))).count();
-                let timeout_count = results.iter().filter(|r| matches!(r, Err(_))).count();
-                info!(target: "网关任务",
-                    success_count, error_count, timeout_count,
-                    "Worker响应统计"
-                );
-                // [诊断日志结束]
-
-                // --- 【核心修改】: 聚合数据到 buffer_a ---
-                for (i, res) in results.into_iter().enumerate() {
-                    match res {
-                        Ok(Ok(snapshot)) => {
-                            // 成功
-                            for delta in &snapshot {
-                                let kline_offset = delta.global_symbol_index * config.supported_intervals.len() + delta.period_index;
-                                if kline_offset < buffer_a.len() {
-                                    // 写入到 buffer_a
-                                    buffer_a[kline_offset] = delta.clone();
-                                }
+                 // 时间到，执行拉取逻辑
+                 match tokio::time::timeout(pull_timeout, handle.request_deltas()).await {
+                    Ok(Ok(deltas)) => {
+                        // [新增日志] 无论数据是否为空，都记录本次拉取的结果
+                        trace!(target: "网关任务", kline_count = deltas.len(), "从聚合器拉取到增量数据");
+                        if !deltas.is_empty() {
+                            let deltas_len = deltas.len();
+                            // [最终决策] 增加批次ID溢出归零的完备性处理
+                            let batch_id = BATCH_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                            if batch_id == u64::MAX {
+                                warn!(target: "网关任务", "批次ID计数器已溢出并重置为0");
+                                BATCH_ID_COUNTER.store(0, Ordering::Relaxed);
                             }
-                            last_good_snapshots[i] = snapshot;
-                            timeout_counters[i] = 0;
-                        }
-                        Ok(Err(e)) => {
-                            // Worker内部错误
-                            warn!(target: "网关任务", worker_id = i, error = ?e, "从Worker获取快照失败");
-                            // 使用上次缓存数据进行降级：将last_good_snapshots[i]写入buffer_a
-                            for delta in &last_good_snapshots[i] {
-                                let kline_offset = delta.global_symbol_index * config.supported_intervals.len() + delta.period_index;
-                                if kline_offset < buffer_a.len() {
-                                    buffer_a[kline_offset] = delta.clone();
-                                }
+
+                            let delta_batch_arc = Arc::new(DeltaBatch {
+                                klines: deltas,
+                                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                                batch_id,
+                                size: deltas_len,
+                            });
+
+                            // 更新统计计数
+                            batches_pulled_count += 1;
+                            klines_processed_count += deltas_len as u64;
+
+                            // 高频发送给 Web 服务器
+                            if klines_watch_tx.send(delta_batch_arc.clone()).is_err() {
+                                warn!(target: "网关任务", "实时(watch)通道已关闭");
                             }
-                        }
-                        Err(_) => {
-                            // 超时
-                            warn!(target: "网关任务", worker_id = i, "从Worker获取快照超时");
-                            timeout_counters[i] += 1;
-                            if timeout_counters[i] >= timeout_threshold {
-                                error!(target: "网关任务", worker_id = i, count = timeout_counters[i], "Worker已连续多次超时!");
-                            }
-                            // 使用上次缓存数据进行降级：将last_good_snapshots[i]写入buffer_a
-                            for delta in &last_good_snapshots[i] {
-                                let kline_offset = delta.global_symbol_index * config.supported_intervals.len() + delta.period_index;
-                                if kline_offset < buffer_a.len() {
-                                    buffer_a[kline_offset] = delta.clone();
+
+                            // 高频发送给 DB 写入任务（DB任务自己会节流）
+                            if let Err(e) = db_queue_tx.try_send(delta_batch_arc) {
+                                match e {
+                                    mpsc::error::TrySendError::Full(batch) => {
+                                        warn!(target: "网关任务", batch_id = batch.batch_id, batch_size = batch.size, "持久化队列已满，此批次数据被丢弃！");
+                                        // TODO: 在此增加监控指标，例如: METRICS.db_batches_dropped.inc();
+                                    },
+                                    mpsc::error::TrySendError::Closed(_) => {
+                                        error!(target: "网关任务", "持久化通道已关闭，系统出现严重故障");
+                                        break; // 退出循环
+                                    }
                                 }
                             }
                         }
                     }
-                }
-
-                // --- 【核心修改】: 移除swap逻辑，直接克隆buffer_a来发送 ---
-                let snapshot_to_send = Arc::new(GlobalKlines {
-                    klines: buffer_a.clone(), // 克隆数据以供发送，避免了重新分配Vec
-                    snapshot_time_ms: chrono::Utc::now().timestamp_millis(),
-                });
-
-                // 3a. 发送到实时通道
-                if klines_watch_tx.send(snapshot_to_send.clone()).is_err() {
-                    warn!(target: "网关任务", "实时(watch)通道已关闭，网关可能无法正常服务");
-                }
-
-                // 3b. 发送到持久化通道
-                if let Err(e) = db_queue_tx.try_send(snapshot_to_send) {
-                     warn!(target: "网关任务", error = ?e, "持久化(mpsc)通道发送失败(可能已满或关闭)");
-                }
-
-                // --- 【核心修改】: 清空缓冲区以备下次使用，而不是重新分配 ---
-                // 这确保了我们始终在重用同一块内存
-                buffer_a.iter_mut().for_each(|kline| *kline = KlineData::default());
-
-                let cycle_duration = cycle_start.elapsed();
-                debug!(target: "网关任务", duration_ms = cycle_duration.as_millis(), "Gateway聚合周期完成");
-            },
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    break;
+                    Ok(Err(e)) => {
+                        warn!(target: "网关任务", error = ?e, "从聚合器获取增量数据失败");
+                    }
+                    Err(_) => { // 这是 tokio::time::timeout 返回的超时错误
+                        warn!(target: "网关任务", "从聚合器获取增量数据超时");
+                    }
                 }
             }
         }
@@ -191,46 +130,82 @@ pub async fn gateway_task(
 #[instrument(target = "持久化任务", skip_all, name="db_writer_task")]
 pub async fn db_writer_task(
     db: Arc<Database>,
-    mut db_queue_rx: mpsc::Receiver<Arc<GlobalKlines>>,
+    mut db_queue_rx: mpsc::Receiver<Arc<DeltaBatch>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
     periods: Arc<Vec<String>>,
     mut shutdown_rx: watch::Receiver<bool>,
     _watchdog: Arc<WatchdogV2>,
 ) {
-    info!(target: "持久化任务", "数据库写入任务已启动 (新架构)");
+    info!(target: "持久化任务", "数据库写入任务已启动 (带节流缓冲模式)");
+
+    // [核心修改] 内部缓冲区，用于"储蓄"高频到来的数据
+    let mut accumulated_klines: Vec<super::KlineData> = Vec::with_capacity(4096);
+
+    // [核心修改] 将定时对齐逻辑迁移到这里
+    const TARGET_SECOND_OF_MINUTE: u32 = 30;
+    const MINUTE_IN_MILLIS: i64 = 60_000;
+    const TARGET_MILLIS_OF_MINUTE: i64 = (TARGET_SECOND_OF_MINUTE as i64) * 1000;
 
     loop {
+        // 1. 计算到下一个持久化时间点需要休眠多久
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let millis_into_minute = now_ms % MINUTE_IN_MILLIS;
+        let sleep_millis = if millis_into_minute < TARGET_MILLIS_OF_MINUTE {
+            TARGET_MILLIS_OF_MINUTE - millis_into_minute
+        } else {
+            MINUTE_IN_MILLIS - millis_into_minute + TARGET_MILLIS_OF_MINUTE
+        };
+        let sleep_duration = Duration::from_millis(sleep_millis.max(1) as u64); // 至少休眠1ms
+
         tokio::select! {
             biased;
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     // 优雅关闭：处理队列中所有剩余消息
-                    while let Ok(snapshot) = db_queue_rx.try_recv() {
-                         persist_snapshot(db.clone(), snapshot, &index_to_symbol, &periods).await;
+                    while let Ok(batch) = db_queue_rx.try_recv() {
+                         accumulated_klines.extend(batch.klines.iter().cloned());
+                    }
+                    // 执行最后一次写入
+                    if !accumulated_klines.is_empty() {
+                        info!(target: "持久化任务", kline_count = accumulated_klines.len(), "执行最终的持久化操作");
+                        persist_kline_data(db.clone(), &accumulated_klines, &index_to_symbol, &periods).await;
                     }
                     break;
                 }
             },
-            Some(snapshot) = db_queue_rx.recv() => {
-                 persist_snapshot(db.clone(), snapshot, &index_to_symbol, &periods).await;
+            // 持续从高频通道接收数据并存入缓冲区
+            Some(batch) = db_queue_rx.recv() => {
+                 accumulated_klines.extend(batch.klines.iter().cloned());
+            },
+            // 定时器触发，执行批量写入
+            _ = tokio::time::sleep(sleep_duration) => {
+                if !accumulated_klines.is_empty() {
+                    // 使用 std::mem::take 原子地取出缓冲区所有权并替换为空Vec，避免阻塞
+                    let klines_to_persist = std::mem::take(&mut accumulated_klines);
+                    info!(target: "持久化任务", kline_count = klines_to_persist.len(), "定时触发，开始批量持久化");
+                    persist_kline_data(db.clone(), &klines_to_persist, &index_to_symbol, &periods).await;
+                }
             }
         }
     }
     warn!(target: "持久化任务", "数据库写入任务已退出");
 }
 
-/// 辅助函数，封装持久化逻辑
-async fn persist_snapshot(
+/// [核心修改] 辅助函数，封装持久化逻辑，现在接收 &[KlineData]
+async fn persist_kline_data(
     db: Arc<Database>,
-    snapshot: Arc<GlobalKlines>,
+    klines: &[super::KlineData], // 修改输入类型
     index_to_symbol: &Arc<RwLock<Vec<String>>>,
     periods: &Arc<Vec<String>>,
 ) {
+    if klines.is_empty() {
+        return;
+    }
+
     let index_guard = index_to_symbol.read().await;
-    
-    // 写入合并逻辑：只保存有意义的（非默认）K线
-    let klines_to_save: Vec<(String, String, DbKline)> = snapshot.klines.iter()
-        .filter(|k| k.open_time > 0)  // 过滤掉默认/空的K线
+
+    let klines_to_save: Vec<(String, String, DbKline)> = klines.iter()
+        .filter(|k| k.open_time > 0)
         .filter_map(|kline_data| {
             // 将 KlineData 转换为 (symbol, interval, DbKline)
             if kline_data.global_symbol_index < index_guard.len()
@@ -256,16 +231,19 @@ async fn persist_snapshot(
 
                 Some((symbol, period, db_kline))
             } else {
+                error!(target: "持久化任务",
+                       global_symbol_index = kline_data.global_symbol_index,
+                       "发现无效的 global_symbol_index，该条数据被丢弃");
                 None
             }
-        }).collect();
+        })
+        .collect();
 
     if !klines_to_save.is_empty() {
-        let count = klines_to_save.len();
         if let Err(e) = db.upsert_klines_batch(klines_to_save) {
             error!(target: "持久化任务", error = ?e, "持久化K线到数据库失败");
-        } else {
-            debug!(target: "持久化任务", count, "成功持久化K线数据");
         }
     }
 }
+
+

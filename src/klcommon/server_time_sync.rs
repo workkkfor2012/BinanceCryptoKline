@@ -161,7 +161,7 @@ impl ServerTimeSyncManager {
     /// 启动独立的时间同步任务（每分钟的第30秒运行）
     #[instrument(target = "服务器校时", skip_all, err)]
     async fn start_time_sync_task(&self) -> Result<tokio::task::JoinHandle<()>> {
-        let api = self.api.clone();
+        let _api = self.api.clone();
         let time_diff = self.time_diff.clone();
         let network_delay = self.network_delay.clone();
         let last_sync_time = self.last_sync_time.clone();

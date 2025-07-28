@@ -467,7 +467,7 @@ fn create_adapted_message_handler(
     });
 
     // 返回配置了转换通道的 MessageHandler
-    AggTradeMessageHandler::with_trade_sender(
+    AggTradeMessageHandler::with_unbounded_sender(
         Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicUsize::new(0)),
         klcommon_sender,

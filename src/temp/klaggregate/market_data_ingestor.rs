@@ -98,7 +98,7 @@ impl MarketDataIngestor {
         }.instrument(tracing::info_span!("trade_event_processor")));
 
         // 创建带有正确消息处理器的WebSocket客户端
-        let message_handler = Arc::new(AggTradeMessageHandler::with_trade_sender(
+        let message_handler = Arc::new(AggTradeMessageHandler::with_unbounded_sender(
             self.message_count.clone(),
             self.error_count.clone(),
             trade_sender,

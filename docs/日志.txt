@@ -1,0 +1,2418 @@
+{
+  "timestamp": "2025-07-28T13:45:50.206Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 使用 /stream 端点，品种已在URL中指定: 2 个品种",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.206Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 品种列表: [\"btcusdt@aggTrade\", \"ethusdt@aggTrade\"]",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.207Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 /stream 端点将返回combined格式的消息",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.456 @ 3854.72",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.72,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.72
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "period_index": 0,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 7,
+      "period_index": 0
+    },
+    "kline_offset": 7,
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "is_final": false,
+    "kline_offset": 8,
+    "period_index": 1,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 8,
+      "period_index": 1
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 1
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 9,
+      "period_index": 2
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 9,
+    "is_final": false,
+    "period_index": 2
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 10,
+    "period_index": 3,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 10,
+      "period_index": 3
+    },
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 1
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 11,
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade",
+    "period_index": 4,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 11,
+      "period_index": 4
+    },
+    "global_symbol_index": 1
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.254Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "kline_offset": 12,
+    "period_index": 5,
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 12,
+      "period_index": 5
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.255Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 13,
+    "period_index": 6,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 13,
+      "period_index": 6
+    },
+    "is_final": false
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.276Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.263 @ 3854.71",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.276Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.71,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.71
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.70",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.7,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.7,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.69",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 3854.69,
+    "fields": {
+      "price": 3854.69,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.67",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.67,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.67
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.66",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.277Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.66,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.66,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.284Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.65",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.285Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.65,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.65
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.287Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.013 @ 3854.63",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.63,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.63,
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.62",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.62,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.62
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.61",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.61,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.61,
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.60",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 3854.6,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.6,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.042 @ 3854.58",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.288Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "price": 3854.58,
+    "fields": {
+      "price": 3854.58,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.289Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.55",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.289Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.55,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.55
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.302Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.043 @ 118662.80",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.52",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "symbol": "BTCUSDT",
+    "price": 118662.8,
+    "fields": {
+      "price": 118662.8,
+      "symbol": "BTCUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "span_path": "run_aggregation_loop > process_trade",
+    "is_final": false,
+    "kline_offset": 0,
+    "period_index": 0,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 0,
+      "period_index": 0
+    },
+    "global_symbol_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 1,
+    "is_final": false,
+    "kline_offset": 1,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 1,
+      "period_index": 1
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 2,
+    "period_index": 2,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 2,
+      "period_index": 2
+    },
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 3,
+    "global_symbol_index": 0,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 3,
+      "period_index": 3
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "is_final": false,
+    "period_index": 3
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 4,
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 4,
+      "period_index": 4
+    },
+    "is_final": false,
+    "global_symbol_index": 0,
+    "period_index": 4
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.303Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 5,
+    "is_final": false,
+    "period_index": 5,
+    "global_symbol_index": 0,
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 5,
+      "period_index": 5
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.304Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 0,
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 6,
+      "period_index": 6
+    },
+    "period_index": 6,
+    "is_final": false,
+    "kline_offset": 6
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.304Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.52,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.52,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.365Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.091 @ 3854.52",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.365Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.52,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.52,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.367Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.001 @ 3854.51",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.367Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "price": 3854.51,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.51,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.368Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.48",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.48,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.48
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.46",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.46,
+    "fields": {
+      "price": 3854.46,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.44",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.44,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.44,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.43",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.369Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.43,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.43,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.422Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.016 @ 3854.42",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.422Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.42,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.42
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.422Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.007 @ 3854.41",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.423Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.41,
+    "fields": {
+      "price": 3854.41,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.423Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.412 @ 3854.40",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.423Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.4,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.4
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.423Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.101 @ 3854.40",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.423Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.4,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.4,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.470Z",
+  "level": "INFO",
+  "target": "服务器校时",
+  "message": "币安服务器时间: 1753710350013, 网络延迟: 232毫秒",
+  "fields": {
+    "fields": {},
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > sync_time_once"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.470Z",
+  "level": "INFO",
+  "target": "服务器校时",
+  "message": "本地时间与服务器时间差值: -457毫秒",
+  "fields": {
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > sync_time_once",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.470Z",
+  "level": "INFO",
+  "target": "服务器校时",
+  "message": "初始时间同步完成，时间差值: -457毫秒，网络延迟: 232毫秒",
+  "fields": {
+    "fields": {},
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.470Z",
+  "level": "INFO",
+  "target": "服务器校时",
+  "message": "启动独立的时间同步任务，将在每分钟的第30秒运行",
+  "fields": {
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > start_time_sync_task",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.471Z",
+  "level": "DEBUG",
+  "target": "服务器校时",
+  "message": "时间同步任务: 等待 40秒 到下一个30秒点",
+  "fields": {
+    "fields": {},
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > start_time_sync_task > server_time_sync_task"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.515Z",
+  "level": "DEBUG",
+  "target": "计算核心",
+  "message": "收到增量数据请求",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.515Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到增量数据请求，开始扫描脏标记...",
+  "fields": {
+    "fields": {},
+    "span_path": "run_aggregation_loop > process_deltas_request"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.515Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "增量数据打包完成，准备发送",
+  "fields": {
+    "dirty_kline_found": 14,
+    "fields": {
+      "dirty_kline_found": 14
+    },
+    "span_path": "run_aggregation_loop > process_deltas_request"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.515Z",
+  "level": "TRACE",
+  "target": "网关任务",
+  "message": "从聚合器拉取到增量数据",
+  "fields": {
+    "fields": {
+      "kline_count": 14
+    },
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task",
+    "kline_count": 14
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.515Z",
+  "level": "TRACE",
+  "target": "Pusher",
+  "message": "拉取到增量K线数据",
+  "fields": {
+    "batch_id": 1,
+    "span_path": "pusher_task",
+    "fields": {
+      "batch_id": 1,
+      "kline_count": 14
+    },
+    "kline_count": 14
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.536Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.575 @ 3854.39",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.536Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.39,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "price": 3854.39,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 0,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 7,
+      "period_index": 0
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "is_final": false,
+    "kline_offset": 7,
+    "global_symbol_index": 1
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "kline_offset": 8,
+    "is_final": false,
+    "period_index": 1,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 8,
+      "period_index": 1
+    },
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 9,
+      "period_index": 2
+    },
+    "global_symbol_index": 1,
+    "is_final": false,
+    "kline_offset": 9,
+    "period_index": 2
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 3,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 10,
+      "period_index": 3
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 1,
+    "is_final": false,
+    "kline_offset": 10
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 4,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 11,
+      "period_index": 4
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 1,
+    "kline_offset": 11,
+    "is_final": false
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 12,
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 12,
+      "period_index": 5
+    },
+    "is_final": false,
+    "global_symbol_index": 1,
+    "period_index": 5
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 1,
+    "fields": {
+      "global_symbol_index": 1,
+      "is_final": false,
+      "kline_offset": 13,
+      "period_index": 6
+    },
+    "is_final": false,
+    "period_index": 6,
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 13
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.098 @ 118662.80",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "BTCUSDT",
+    "fields": {
+      "price": 118662.8,
+      "symbol": "BTCUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 118662.8
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.537Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "span_path": "run_aggregation_loop > process_trade",
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 0,
+      "period_index": 0
+    },
+    "period_index": 0,
+    "is_final": false,
+    "global_symbol_index": 0,
+    "kline_offset": 0
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 1,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 1,
+      "period_index": 1
+    },
+    "span_path": "run_aggregation_loop > process_trade",
+    "is_final": false,
+    "global_symbol_index": 0,
+    "kline_offset": 1
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "is_final": false,
+    "period_index": 2,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 2,
+      "period_index": 2
+    },
+    "global_symbol_index": 0,
+    "kline_offset": 2,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 3,
+    "period_index": 3,
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 0,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 3,
+      "period_index": 3
+    },
+    "is_final": false
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "is_final": false,
+    "span_path": "run_aggregation_loop > process_trade",
+    "global_symbol_index": 0,
+    "period_index": 4,
+    "kline_offset": 4,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 4,
+      "period_index": 4
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "is_final": false,
+    "global_symbol_index": 0,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 5,
+      "period_index": 5
+    },
+    "period_index": 5,
+    "kline_offset": 5,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.538Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 6,
+    "fields": {
+      "global_symbol_index": 0,
+      "is_final": false,
+      "kline_offset": 6,
+      "period_index": 6
+    },
+    "is_final": false,
+    "kline_offset": 6,
+    "global_symbol_index": 0,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.652Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 8.259 @ 3854.40",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.652Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.4,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.4
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.798Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 5.760 @ 3854.40",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.798Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.4,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.4
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.814Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.004 @ 118662.70",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.814Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "BTCUSDT",
+    "price": 118662.7,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 118662.7,
+      "symbol": "BTCUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.841Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 2.108 @ 3854.39",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.841Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.39,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.39,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.858Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 31.369 @ 3854.40",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.859Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 1.410 @ 3854.41",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.859Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.4,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.4,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.859Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.41,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.41,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.860Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.42",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.860Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.42,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.42,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.165 @ 3854.48",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.48,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.48,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.52",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "price": 3854.52,
+    "fields": {
+      "price": 3854.52,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.53",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.53,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.53,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.866Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.54",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.867Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 3854.54,
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.54,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.870Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.067 @ 3854.57",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.870Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.57,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.57
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.876Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.58",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.58,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.58,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.080 @ 3854.58",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.58,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.58,
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.59",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.59,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.59,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.61",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.61,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.61
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.036 @ 3854.63",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.63,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.63,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.877Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.64",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.64,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "price": 3854.64,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.65",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.65,
+    "fields": {
+      "price": 3854.65,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.050 @ 3854.67",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.67,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.67,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.022 @ 3854.68",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.68,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.68,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.69",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.69,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.69
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.70",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.7,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.7,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.878Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.015 @ 3854.71",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.879Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.71,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "price": 3854.71
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.883Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.394 @ 3854.72",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.884Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "fields": {
+      "price": 3854.72,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.72,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.955Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.026 @ 118662.80",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.955Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 118662.8,
+      "symbol": "BTCUSDT"
+    },
+    "symbol": "BTCUSDT",
+    "price": 118662.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.955Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118662.90",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.955Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "BTCUSDT",
+    "price": 118662.9,
+    "fields": {
+      "price": 118662.9,
+      "symbol": "BTCUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.956Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 15.249 @ 3854.73",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.956Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "price": 3854.73,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.73,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118663.40",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 118663.4,
+    "span_path": "run_aggregation_loop",
+    "symbol": "BTCUSDT",
+    "fields": {
+      "price": 118663.4,
+      "symbol": "BTCUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.10",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "BTCUSDT",
+    "price": 118664.1,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 118664.1,
+      "symbol": "BTCUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.30",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 118664.3,
+    "fields": {
+      "price": 118664.3,
+      "symbol": "BTCUSDT"
+    },
+    "symbol": "BTCUSDT",
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.70",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 118664.7,
+    "symbol": "BTCUSDT",
+    "fields": {
+      "price": 118664.7,
+      "symbol": "BTCUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118665.40",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 118665.4,
+    "symbol": "BTCUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 118665.4,
+      "symbol": "BTCUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118665.50",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "symbol": "BTCUSDT",
+    "fields": {
+      "price": 118665.5,
+      "symbol": "BTCUSDT"
+    },
+    "price": 118665.5
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: BTCUSDT 0.001 @ 118665.60",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.958Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 118665.6,
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 118665.6,
+      "symbol": "BTCUSDT"
+    },
+    "symbol": "BTCUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.962Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.010 @ 3854.74",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.74,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT",
+    "price": 3854.74
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.76",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.77",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.76,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "price": 3854.76
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.036 @ 3854.80",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.77,
+      "symbol": "ETHUSDT"
+    },
+    "symbol": "ETHUSDT",
+    "price": 3854.77
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.81",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "price": 3854.8,
+    "fields": {
+      "price": 3854.8,
+      "symbol": "ETHUSDT"
+    },
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.963Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.81,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.81
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.965Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.060 @ 3854.82",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.965Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.83",
+  "fields": {
+    "fields": {},
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.965Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "fields": {
+      "price": 3854.82,
+      "symbol": "ETHUSDT"
+    },
+    "price": 3854.82,
+    "span_path": "run_aggregation_loop",
+    "symbol": "ETHUSDT"
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.966Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.84",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.966Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 3854.83,
+    "symbol": "ETHUSDT",
+    "span_path": "run_aggregation_loop",
+    "fields": {
+      "price": 3854.83,
+      "symbol": "ETHUSDT"
+    }
+  }
+}
+{
+  "timestamp": "2025-07-28T13:45:50.966Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.85",
+  "fields": {
+    "span_path": "websocket_connection",
+    "fields": {}
+  }
+}

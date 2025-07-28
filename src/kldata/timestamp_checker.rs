@@ -272,7 +272,7 @@ impl TimestampChecker {
                 let mut handles = Vec::new();
 
                 for task in tasks {
-                    let api_clone = self.api.clone();
+                    let _api_clone = self.api.clone();
                     let semaphore_clone = semaphore.clone();
                     let symbol = task.symbol.clone();
                     let symbol_for_span = symbol.clone();
