@@ -19,7 +19,7 @@ use kline_server::klcommon::{
     error::AppError,
     log::{self, init_ai_logging, shutdown_target_log_sender}, // 确保导入了 shutdown_target_log_sender
     server_time_sync::ServerTimeSyncManager,
-    websocket::{MiniTickerClient, MiniTickerConfig, MiniTickerMessageHandler, WebSocketClient},
+    websocket::{AggTradeMessageHandler, MiniTickerClient, MiniTickerConfig, MiniTickerMessageHandler, WebSocketClient},
     WatchdogV2, // 引入 WatchdogV2
     AggregateConfig,
 };
@@ -296,14 +296,20 @@ async fn run_app(
     // [修改] 变量重命名，并保持Vec结构以兼容gateway_task的签名，这是一种务实的做法
     let aggregator_handles = Arc::new(vec![aggregator_read_handle]);
 
-    // [修改] 启动唯一的 I/O 任务 (run_io_loop的签名也将被修改)
+    // [核心修改] 创建 Handler 并注入依赖
+    let agg_trade_handler = Arc::new(AggTradeMessageHandler::new(
+        aggregator_trade_sender,      // 传入 Aggregator 的 trade sender
+        symbol_to_global_index.clone(), // 注入全局索引
+    ));
+
+    // [修改] 启动 I/O 任务，传入 handler
     log::context::spawn_instrumented_on(
         klagg::run_io_loop(
             all_symbols,
             config.clone(),
             shutdown_rx.clone(),
             ws_cmd_rx,
-            aggregator_trade_sender,
+            agg_trade_handler, // 传入创建好的 handler 实例
             watchdog.clone(),
         ),
         io_runtime,

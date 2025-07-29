@@ -10,6 +10,7 @@ use kline_server::klcommon::{
 };
 use std::sync::{atomic::AtomicUsize, Arc};
 use std::time::Duration;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -109,10 +110,12 @@ async fn run_test_scenario(symbol_count: usize, test_duration: Duration) -> Resu
     // 创建一个简单的通道来接收交易数据
     let (trade_tx, mut trade_rx) = mpsc::channel(10000);
 
-    let handler = Arc::new(AggTradeMessageHandler::with_bounded_sender(
-        message_count.clone(),
-        error_count.clone(),
+    // 创建一个空的symbol索引映射用于测试
+    let symbol_to_global_index = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
+    let handler = Arc::new(AggTradeMessageHandler::new(
         trade_tx,
+        symbol_to_global_index,
     ));
 
     // 配置WebSocket客户端

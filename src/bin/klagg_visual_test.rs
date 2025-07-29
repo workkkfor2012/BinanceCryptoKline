@@ -224,6 +224,12 @@ async fn run_visual_test_app(
     let aggregator_trade_sender = aggregator.get_trade_sender();
     let aggregator_handles = Arc::new(vec![aggregator_read_handle]);
 
+    // 创建 AggTradeMessageHandler
+    let agg_trade_handler = Arc::new(kline_server::klcommon::websocket::AggTradeMessageHandler::new(
+        aggregator_trade_sender,
+        symbol_to_global_index.clone(),
+    ));
+
     // 启动 I/O 任务
     log::context::spawn_instrumented_on(
         klagg::run_io_loop(
@@ -231,7 +237,7 @@ async fn run_visual_test_app(
             config.clone(),
             shutdown_rx.clone(),
             ws_cmd_rx,
-            aggregator_trade_sender,
+            agg_trade_handler,
             watchdog.clone(),
         ),
         io_runtime,

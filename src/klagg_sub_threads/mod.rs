@@ -24,13 +24,13 @@ use crate::klcommon::{
     error::{AppError, Result},
     models::Kline as DbKline,
     websocket::{
-        self, AggTradeData, WebSocketClient,
+        self, WebSocketClient,
     },
     ComponentStatus, HealthReport, HealthReporter, WatchdogV2,
     AggregateConfig,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -40,7 +40,38 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 // --- 1. 类型定义 ---
 
+//=============================================================================
+// 入口优化：新的数据结构定义
+//=============================================================================
 
+/// 用于从原始WebSocket &[u8]载荷进行零拷贝反序列化的结构体。
+/// 字段直接借用于原始的 &[u8] buffer，生命周期为 'a。
+#[derive(Deserialize)]
+pub struct RawTradePayload<'a> {
+    #[serde(rename = "e")]
+    pub event_type: &'a str, // 保留此字段用于快速过滤
+    #[serde(rename = "s")]
+    pub symbol: &'a str,
+    #[serde(rename = "p")]
+    pub price: &'a str,
+    #[serde(rename = "q")]
+    pub quantity: &'a str,
+    #[serde(rename = "T")]
+    pub timestamp_ms: i64,
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool,
+}
+
+/// 发送到计算核心的、极度轻量化的交易数据。
+/// 它是 `Copy` 类型，跨线程传递开销极小。
+#[derive(Debug, Clone, Copy)]
+pub struct AggTradePayload {
+    pub global_symbol_index: usize,
+    pub price: f64,
+    pub quantity: f64,
+    pub timestamp_ms: i64,
+    pub is_buyer_maker: bool,
+}
 
 /// 用于封装 AddSymbol 指令携带的初始K线数据
 #[derive(Debug, Clone, Copy)]
@@ -236,7 +267,8 @@ impl HealthReporter for IoHealthReporter {
 
 // 【重构】: 使用脏标记机制替代缓冲区机制
 pub struct KlineAggregator {
-    periods: Arc<Vec<String>>,
+    periods: Arc<Vec<String>>,     // [保留] 用于非热路径，如日志和初始化
+    period_milliseconds: Vec<i64>, // [新增] 核心计算的毫秒数来源 (Single Source of Truth)
     kline_expirations: Vec<i64>,
     kline_states: Vec<KlineState>,
 
@@ -262,7 +294,7 @@ pub struct KlineAggregator {
     deltas_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
     deltas_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
     ws_cmd_tx: mpsc::Sender<WsCmd>,
-    trade_tx: mpsc::Sender<AggTradeData>,
+    trade_tx: mpsc::Sender<AggTradePayload>,
     last_clock_tick: i64,
     clock_rx: watch::Receiver<i64>,
     // [保留] 动态计算的创世周期索引
@@ -280,18 +312,24 @@ impl KlineAggregator {
         clock_rx: watch::Receiver<i64>,
         initial_klines: Arc<HashMap<(String, String), DbKline>>,
         config: &AggregateConfig,
-    ) -> Result<(Self, mpsc::Receiver<WsCmd>, mpsc::Receiver<AggTradeData>)> {
+    ) -> Result<(Self, mpsc::Receiver<WsCmd>, mpsc::Receiver<AggTradePayload>)> {
         let (full_snapshot_req_tx, full_snapshot_req_rx) = mpsc::channel(8);
         let (deltas_req_tx, deltas_req_rx) = mpsc::channel(8);
         let (ws_cmd_tx, ws_cmd_rx) = mpsc::channel(8);
-        let (trade_tx, trade_rx) = mpsc::channel(10240);
+        let (trade_tx, trade_rx) = mpsc::channel::<AggTradePayload>(10240);
         let num_periods = periods.len();
 
-        // [新增] 动态查找最小周期的索引，不再硬编码
-        let genesis_period_index = periods
+        // [核心修改] 在初始化时一次性计算所有周期的毫秒数
+        let period_milliseconds: Vec<i64> = periods
+            .iter()
+            .map(|p| interval_to_milliseconds(p))
+            .collect();
+
+        // [新增] 动态查找最小周期的索引，使用预计算的毫秒数
+        let genesis_period_index = period_milliseconds
             .iter()
             .enumerate()
-            .min_by_key(|(_, p)| interval_to_milliseconds(p))
+            .min_by_key(|(_, &ms)| ms)
             .map(|(idx, _)| idx)
             .unwrap_or(0); // 如果 periods 为空则默认为0，但应由配置加载保证其不为空
 
@@ -384,7 +422,8 @@ impl KlineAggregator {
                                     "成功应用初始K线数据到KlineAggregator状态"
                                 );
                                 kline_states[kline_offset] = kline_state;
-                                let interval_ms = interval_to_milliseconds(period);
+                                // [核心优化] 初始化kline_expirations时，直接使用预计算的毫秒数
+                                let interval_ms = period_milliseconds[period_idx];
                                 kline_expirations[kline_offset] = db_kline.open_time + interval_ms;
 
                                 // --- [核心修改] 初始化时标记为脏 ---
@@ -428,6 +467,7 @@ impl KlineAggregator {
 
         let aggregator = Self {
             periods,
+            period_milliseconds, // [新增] 存储预计算结果
             kline_expirations,
             kline_states,
             dirty_flags,      // [核心修改]
@@ -463,7 +503,7 @@ impl KlineAggregator {
         }
     }
 
-    pub fn get_trade_sender(&self) -> mpsc::Sender<AggTradeData> {
+    pub fn get_trade_sender(&self) -> mpsc::Sender<AggTradePayload> {
         self.trade_tx.clone()
     }
 
@@ -471,7 +511,7 @@ impl KlineAggregator {
     pub async fn run_aggregation_loop(
         &mut self,
         mut shutdown_rx: watch::Receiver<bool>,
-        mut trade_rx: mpsc::Receiver<AggTradeData>,
+        mut trade_rx: mpsc::Receiver<AggTradePayload>,
         watchdog: Arc<WatchdogV2>,
     ) {
         let health_probe = Arc::new(AtomicI64::new(0));
@@ -507,7 +547,7 @@ impl KlineAggregator {
                     klines_updated_count = 0;
                 },
                 Some(trade) = trade_rx.recv() => {
-                    trace!(target: "计算核心", symbol = %trade.symbol, price = trade.price, "收到交易数据");
+                    trace!(target: "计算核心", global_index = trade.global_symbol_index, price = trade.price, "收到交易数据");
                     self.process_trade(trade);
                     trades_count += 1;
                     klines_updated_count += 1; // 简化统计，每个交易都可能更新K线
@@ -539,27 +579,27 @@ impl KlineAggregator {
         warn!(target: "计算核心", "聚合循环退出");
     }
 
-    #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(symbol = %trade.symbol, price = trade.price))]
-    fn process_trade(&mut self, trade: AggTradeData) {
-        // [修改] 直接使用全量缓存进行O(1)查找，不再需要分区偏移
-        let global_index = match self.local_symbol_cache.get(&trade.symbol) {
-            Some(&idx) => idx,
-            None => return, // 品种未找到，直接返回
-        };
+    #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(global_index = trade.global_symbol_index, price = trade.price))]
+    fn process_trade(&mut self, trade: AggTradePayload) {
+        // [核心简化] 不再需要哈希查找，直接使用索引！
+        let global_index = trade.global_symbol_index;
 
-        let num_periods = self.periods.len();
+        let num_periods = self.period_milliseconds.len(); // <-- 从新字段获取长度
         let base_offset = global_index * num_periods;
 
         for period_idx in 0..num_periods {
-            let interval = &self.periods[period_idx];
             let kline_offset = base_offset + period_idx;
 
             if kline_offset >= self.kline_states.len() {
-                 error!(log_type = "assertion", symbol = %trade.symbol, "process_trade: K线偏移量越界！");
+                 error!(log_type = "assertion", global_index, period_idx, "process_trade: K线偏移量越界！");
                 continue;
             }
 
-            let trade_period_start = get_aligned_time(trade.timestamp_ms, interval);
+            // [核心优化] 直接使用毫秒数进行对齐计算，无字符串操作，无函数调用
+            let interval_ms = self.period_milliseconds[period_idx];
+            // 防御性编程：避免除以0的潜在panic
+            if interval_ms == 0 { continue; }
+            let trade_period_start = (trade.timestamp_ms / interval_ms) * interval_ms;
 
             let kline_open_time = self.kline_states[kline_offset].open_time;
 
@@ -611,7 +651,7 @@ impl KlineAggregator {
                 self.rollover_kline(kline_offset, trade_period_start, Some(&trade));
             } else {
                 // --- 路径3 (忽略): 陈旧或未初始化的交易 ---
-                trace!(target: "计算核心", symbol = %trade.symbol, trade_period_start, kline_open_time, "忽略不匹配的交易");
+                trace!(target: "计算核心", global_index, trade_period_start, kline_open_time, "忽略不匹配的交易");
             }
         }
     }
@@ -622,19 +662,16 @@ impl KlineAggregator {
         // 我们需要计算出它对应的理论"开盘/收盘"时间点
         let aligned_minute_time = (current_time / 60_000) * 60_000;
 
-        let num_periods = self.periods.len();
+        let num_periods = self.period_milliseconds.len(); // <-- 从新字段获取
         // 只检查已激活的品种数量，避免对未使用的槽位进行无效计算
         let num_managed_symbols = self.managed_symbols_count;
 
         // 1. 遍历所有支持的周期，找出在当前分钟需要检查的周期
         for period_idx in 0..num_periods {
-            let interval = self.periods[period_idx].clone(); // 克隆字符串避免借用冲突
-            let interval_ms = interval_to_milliseconds(&interval);
+            let interval_ms = self.period_milliseconds[period_idx]; // <-- 直接获取毫秒数
 
             // 2. 如果当前分钟是该周期的整数倍，则该周期需要检查
             if interval_ms > 0 && aligned_minute_time % interval_ms == 0 {
-                trace!(target = "计算核心", "时钟检查周期: {}", interval);
-
                 // 3. 遍历所有品种属于该周期的K线槽位
                 for symbol_idx in 0..num_managed_symbols {
                     let kline_offset = symbol_idx * num_periods + period_idx;
@@ -645,8 +682,8 @@ impl KlineAggregator {
                         let kline = &self.kline_states[kline_offset];
                         if !kline.is_initialized { continue; }
 
-                        // 计算理论上的下一个周期的开盘时间
-                        let next_open_time = get_aligned_time(current_time, &interval);
+                        // [核心优化] 直接进行对齐计算，不再需要period字符串或外部函数
+                        let next_open_time = (current_time / interval_ms) * interval_ms;
 
                         // 调用统一的切换函数，它能处理空洞填充等复杂情况
                         self.rollover_kline(kline_offset, next_open_time, None);
@@ -664,15 +701,14 @@ impl KlineAggregator {
 
 
     /// 核心K线切换函数，处理K线终结与播种，保证幂等性，并填充空缺K线。
-    fn rollover_kline(&mut self, kline_offset: usize, new_open_time: i64, trade_opt: Option<&AggTradeData>) {
+    fn rollover_kline(&mut self, kline_offset: usize, new_open_time: i64, trade_opt: Option<&AggTradePayload>) {
         // 幂等性保护：如果目标时间不比当前K线开盘时间晚，则直接返回。
         if new_open_time <= self.kline_states[kline_offset].open_time {
             return;
         }
 
-        let period_idx = kline_offset % self.periods.len();
-        let interval = &self.periods[period_idx].clone(); // .clone()是为了后续避免借用冲突
-        let interval_ms = interval_to_milliseconds(interval);
+        let period_idx = kline_offset % self.period_milliseconds.len();
+        let interval_ms = self.period_milliseconds[period_idx]; // <-- 直接获取，避免了之前的 .clone() 和函数调用
 
         let mut current_open_time = self.kline_states[kline_offset].open_time;
         let last_close = self.kline_states[kline_offset].close;
@@ -740,7 +776,7 @@ impl KlineAggregator {
     }
 
     /// 辅助函数：播种一根新的K线
-    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: f64, trade_opt: Option<&AggTradeData>) {
+    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: f64, trade_opt: Option<&AggTradePayload>) {
         let new_kline_state = match trade_opt {
             Some(trade) => KlineState { // 事件驱动：K线是确定的
                 open_time, open: trade.price, high: trade.price, low: trade.price, close: trade.price,
@@ -761,8 +797,8 @@ impl KlineAggregator {
 
         self.kline_states[kline_offset] = new_kline_state;
 
-        let period_idx = kline_offset % self.periods.len();
-        let interval_ms = interval_to_milliseconds(&self.periods[period_idx]);
+        let period_idx = kline_offset % self.period_milliseconds.len();
+        let interval_ms = self.period_milliseconds[period_idx]; // <-- 直接获取
         self.kline_expirations[kline_offset] = open_time + interval_ms;
     }
 
@@ -824,7 +860,7 @@ impl KlineAggregator {
                             is_final: false,
                             is_initialized: true,
                         };
-                        let interval_ms = interval_to_milliseconds(&genesis_interval);
+                        let interval_ms = self.period_milliseconds[self.genesis_period_index];
                         self.kline_expirations[genesis_kline_offset] = genesis_open_time + interval_ms;
                         self.finalize_and_snapshot_kline(genesis_kline_offset, initial_data.close, false);
                         trace!(target: "计算核心", %symbol, %genesis_interval, open_time = genesis_open_time, "为新品种创建了[创世]K线");
@@ -1036,7 +1072,8 @@ pub async fn run_io_loop(
     config: Arc<AggregateConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
     mut ws_cmd_rx: mpsc::Receiver<WsCmd>,
-    trade_tx: mpsc::Sender<AggTradeData>,
+    // [修改] 不再直接传递 trade_tx，而是传递已经配置好的 handler
+    handler: Arc<websocket::AggTradeMessageHandler>,
     watchdog: Arc<WatchdogV2>,
 ) {
     let metrics = Arc::new(IoLoopMetrics::default());
@@ -1046,18 +1083,12 @@ pub async fn run_io_loop(
     });
     watchdog.register(reporter);
 
-    info!(target: "I/O核心", log_type = "low_freq", "I/O 循环启动 (最终版)");
+    info!(target: "I/O核心", log_type = "low_freq", "I/O 循环启动 (入口优化版)");
 
-    // 1. 创建并配置 MessageHandler
-    let handler = Arc::new(
-        websocket::AggTradeMessageHandler::with_bounded_sender(
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            trade_tx,
-        ),
-    );
+    // [删除] 不再在这里创建 MessageHandler
+    // let handler = ...
 
-    // 2. 创建并配置 AggTradeClient
+    // 创建并配置 AggTradeClient，传入已经创建好的 handler
     let agg_trade_config = websocket::AggTradeConfig {
         use_proxy: config.websocket.use_proxy,
         proxy_addr: config.websocket.proxy_host.clone(),
