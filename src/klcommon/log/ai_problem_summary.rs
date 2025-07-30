@@ -128,14 +128,14 @@ where
         let level = metadata.level();
 
         // 收集事件的属性以检查log_type
-        let mut attributes = HashMap::new();
-        let mut visitor = crate::klcommon::log::ai_log::JsonVisitor(&mut attributes);
+        let mut attributes_map = serde_json::Map::new();
+        let mut visitor = crate::klcommon::log::ai_log::JsonVisitor(&mut attributes_map);
         event.record(&mut visitor);
 
         // ✨ [新的过滤逻辑] ✨
         let is_problem = *level <= tracing::Level::WARN;
 
-        let log_type = attributes.get("log_type").and_then(|v| v.as_str());
+        let log_type = attributes_map.get("log_type").and_then(|v| v.as_str());
         let is_summary_event = match log_type {
             Some("checkpoint") | Some("snapshot") | Some("assertion") => true,
             _ => false,
@@ -167,9 +167,15 @@ where
         // attributes已经在上面收集过了，这里不需要重复收集
 
         // 提取消息
-        let message = attributes.remove("message")
+        let message = attributes_map.remove("message")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| event.metadata().name().to_string());
+
+        // 转换为 HashMap 以保持现有代码兼容性
+        let mut attributes = HashMap::new();
+        for (k, v) in attributes_map {
+            attributes.insert(k, v);
+        }
 
         // 构建问题摘要
         let summary = ProblemSummary {

@@ -3,8 +3,9 @@
 //! 一个简单的、只关注模块化日志的层。
 //! 它将日志事件格式化为扁平的JSON，并通过一个专用的命名管道发送。
 
-use serde::Serialize;
-use std::collections::HashMap;
+// 【修改】移除不再需要的导入
+// use serde::Serialize;
+// use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
@@ -15,17 +16,10 @@ use once_cell::sync::Lazy;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{layer::Context, Layer};
 
-// --- 数据模型 ---
-// 这个结构将直接序列化为JSON发送给weblog。它的字段应与weblog端期望的LogEntry一致。
-#[derive(Debug, Serialize)]
-struct SimpleLog {
-    timestamp: String,
-    level: String,
-    target: String,
-    message: String,
-    fields: HashMap<String, serde_json::Value>,
-    span_path: Option<String>, 
-}
+// 【修改】删除或注释掉不再需要的 SimpleLog 结构体
+// use serde::Serialize;
+// #[derive(Debug, Serialize)]
+// struct SimpleLog { ... }
 
 // --- 后台发送任务 ---
 static TARGET_LOG_SENDER: Lazy<Mutex<Option<Sender<String>>>> = Lazy::new(|| Mutex::new(None));
@@ -103,22 +97,30 @@ where
 {
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         use crate::klcommon::log::JsonVisitor;
+        use serde_json::{json, Value};
 
-        let mut attributes = HashMap::new();
-        let mut visitor = JsonVisitor(&mut attributes);
+        // 1. 将所有业务字段收集到一个独立的 'fields_map' 中。
+        //    例如 `总耗时_秒`, `延迟追赶_秒` 等都会在这里。
+        let mut fields_map = serde_json::Map::new();
+        let mut visitor = JsonVisitor(&mut fields_map);
         event.record(&mut visitor);
 
-        // --- 新增逻辑：优先从字段中提取 target ---
-        let target = attributes.remove("target")
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| event.metadata().target().to_string());
-        // --- 结束新增逻辑 ---
-
-        let message = attributes.remove("message")
-            .and_then(|v| v.as_str().map(String::from))
+        // 2. 从业务字段中提取 'message'，如果不存在则使用元数据中的名称。
+        //    这使得 info!(message="...", ...) 和 info!(..., "...") 两种写法都健壮。
+        //    提取后，它将成为顶层 message，不再出现在 "fields" 对象中。
+        let message = fields_map.remove("message")
+            .and_then(|v| if let Value::String(s) = v { Some(s) } else { Some(v.to_string()) })
             .unwrap_or_else(|| event.metadata().name().to_string());
 
-        let span_path = ctx.lookup_current().map(|span| {
+        // 3. 构建一个全新的、结构清晰的根JSON对象，只包含元数据。
+        let mut root_map = serde_json::Map::new();
+        root_map.insert("timestamp".to_string(), json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)));
+        root_map.insert("level".to_string(), json!(event.metadata().level().to_string()));
+        root_map.insert("target".to_string(), json!(event.metadata().target()));
+        root_map.insert("message".to_string(), json!(message));
+
+        // 4. 获取并插入 span_path 到元数据中
+        if let Some(span) = ctx.lookup_current() {
             let mut path = vec![];
             let mut current = Some(span);
             while let Some(s) = current {
@@ -126,21 +128,25 @@ where
                 current = s.parent();
             }
             path.reverse();
-            path.join(" > ")
-        });
+            root_map.insert("span_path".to_string(), json!(path.join(" > ")));
+        }
 
-        let log = SimpleLog {
-            timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            level: event.metadata().level().to_string(),
-            target, // <--- 使用我们新逻辑处理过的 target
-            message,
-            fields: attributes,
-            span_path,
-        };
+        // 5. 将剩余的所有业务字段作为一个嵌套对象放入 'fields' 键下。
+        //    如果业务字段为空，则不添加 'fields' 键，保持日志整洁。
+        if !fields_map.is_empty() {
+            root_map.insert("fields".to_string(), Value::Object(fields_map));
 
-        if let Ok(json) = serde_json::to_string(&log) {
+            // [修复] 移除这行导致无限递归的 trace! 调用。
+            // 日志层内部绝不能使用 tracing! 宏来记录自身状态。
+            // trace!(target: "target_log", fields_count, "业务字段已添加到日志");
+        }
+
+        // 6. 将最终的结构化对象序列化为字符串并发送
+        let final_json = Value::Object(root_map);
+        if let Ok(json_string) = serde_json::to_string(&final_json) {
             if let Some(sender) = &*TARGET_LOG_SENDER.lock().unwrap() {
-                let _ = sender.try_send(json);
+                // 使用 try_send 避免在日志高峰期阻塞业务线程
+                let _ = sender.try_send(json_string);
             }
         }
     }

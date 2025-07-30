@@ -16,6 +16,8 @@ use tokio::time::sleep;
 use tokio_socks::tcp::Socks5Stream;
 use serde_json::json;
 use serde::Deserialize;
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use crate::klagg_sub_threads::{AggTradePayload, RawTradePayload};
 
 use bytes::Bytes;
@@ -53,6 +55,29 @@ pub const WEBSOCKET_CONNECTION_TARGET: &str = "websocket连接";
 
 /// 全市场精简Ticker日志目标
 pub const MINI_TICKER_TARGET: &str = "全市场精简Ticker";
+
+//=============================================================================
+// 上下文感知解析类型定义
+//=============================================================================
+
+/// 【新增】明确定义WebSocket端点的类型，用于上下文感知解析。
+#[derive(Debug, Clone, Copy)]
+pub enum EndpointType {
+    /// 对应 /stream 端点，返回格式: {"stream": "...", "data": {...}}
+    CombinedStream,
+    /// 对应 /ws 端点，返回原始消息格式: {...}
+    SingleStream,
+}
+
+/// 【新增】用于从组合流（Combined Stream）中解包数据的结构体。
+/// 使用 `RawValue` 来避免对内层 `data` 进行不必要的解析，保持零拷贝优势。
+#[derive(Deserialize)]
+struct CombinedStreamPayload<'a> {
+    #[serde(rename = "stream")]
+    _stream: &'a str,
+    #[serde(borrow, rename = "data")]
+    data: &'a serde_json::value::RawValue,
+}
 
 //=============================================================================
 // WebSocket配置
@@ -225,9 +250,9 @@ pub struct AggTradeData {
     /// 交易品种
     pub symbol: String,
     /// 成交价格
-    pub price: f64,
+    pub price: Decimal,
     /// 成交数量
-    pub quantity: f64,
+    pub quantity: Decimal,
     /// 成交时间戳（毫秒）
     pub timestamp_ms: i64,
     /// 买方是否为做市商
@@ -247,8 +272,8 @@ impl AggTradeData {
     pub fn from_binance_raw(raw: &BinanceRawAggTrade) -> Self {
         Self {
             symbol: raw.symbol.clone(),
-            price: raw.price.parse().unwrap_or(0.0),
-            quantity: raw.quantity.parse().unwrap_or(0.0),
+            price: Decimal::from_str(&raw.price).unwrap_or(Decimal::ZERO),
+            quantity: Decimal::from_str(&raw.quantity).unwrap_or(Decimal::ZERO),
             timestamp_ms: raw.trade_time as i64,
             is_buyer_maker: raw.is_buyer_maker,
             agg_trade_id: raw.aggregate_trade_id as i64,
@@ -263,10 +288,15 @@ impl AggTradeData {
 // 消息处理
 //=============================================================================
 
-/// 消息处理接口
+/// 【修改】消息处理接口
 pub trait MessageHandler {
-    /// 处理WebSocket消息 - 入口优化版本，直接处理 &[u8] 载荷
-    fn handle_message(&self, connection_id: usize, payload: &[u8]) -> impl std::future::Future<Output = Result<()>> + Send;
+    /// 处理WebSocket消息 - 新增 endpoint_type 参数用于上下文感知
+    fn handle_message(
+        &self,
+        connection_id: usize,
+        payload: &[u8],
+        endpoint_type: EndpointType, // <-- 【核心修改】新增上下文参数
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 /// 公开的WebSocket命令，用于动态控制
@@ -298,7 +328,55 @@ impl AggTradeMessageHandler {
         }
     }
 
+    /// 【新增】提取出的公共处理逻辑的辅助函数
+    async fn process_raw_trade(&self, raw_trade: RawTradePayload<'_>) -> Result<()> {
+        let global_symbol_index = {
+            let guard = self.symbol_to_global_index.read().await;
+            match guard.get(raw_trade.symbol) {
+                Some(index) => *index,
+                None => {
+                    tracing::trace!(target: AGG_TRADE_TARGET, "收到未索引的品种交易: {}", raw_trade.symbol);
+                    return Ok(());
+                }
+            }
+        };
 
+        // 【新增】添加交易数据接收日志
+        info!(target: AGG_TRADE_TARGET, "收到归集交易: {} {} @ {}",
+            raw_trade.symbol, raw_trade.quantity, raw_trade.price);
+
+        let price = match Decimal::from_str(raw_trade.price) {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(target: AGG_TRADE_TARGET, "解析价格失败: {}", raw_trade.price);
+                self.error_count.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+        };
+        let quantity = match Decimal::from_str(raw_trade.quantity) {
+            Ok(q) => q,
+            Err(_) => {
+                warn!(target: AGG_TRADE_TARGET, "解析数量失败: {}", raw_trade.quantity);
+                self.error_count.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+        };
+
+        let agg_payload = AggTradePayload {
+            global_symbol_index,
+            price,
+            quantity,
+            timestamp_ms: raw_trade.timestamp_ms,
+            is_buyer_maker: raw_trade.is_buyer_maker,
+        };
+
+        if let Err(e) = self.sender.send(agg_payload).await {
+            error!(target: AGG_TRADE_TARGET, "发送解析后的交易到计算核心失败: {}", e);
+            self.error_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        Ok(())
+    }
 }
 
 /// 全市场精简Ticker消息处理器
@@ -315,7 +393,8 @@ impl MiniTickerMessageHandler {
 }
 
 impl MessageHandler for MiniTickerMessageHandler {
-    fn handle_message(&self, connection_id: usize, payload: &[u8]) -> impl std::future::Future<Output = Result<()>> + Send {
+    /// 【修改】增加 endpoint_type 参数但忽略它，因为 MiniTicker 格式是固定的
+    fn handle_message(&self, connection_id: usize, payload: &[u8], _endpoint_type: EndpointType) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
             // 从 &[u8] 转换为 &str
             let message = match std::str::from_utf8(payload) {
@@ -347,74 +426,44 @@ impl MessageHandler for MiniTickerMessageHandler {
     }
 }
 
+/// 【修改】AggTradeMessageHandler 的实现，采用上下文感知解析
 impl MessageHandler for AggTradeMessageHandler {
-    fn handle_message(&self, connection_id: usize, payload: &[u8]) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn handle_message(&self, _connection_id: usize, payload: &[u8], endpoint_type: EndpointType) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            // 快速路径优化: 绝大多数消息都是交易数据，以极低成本过滤掉其他消息
-            if !payload.starts_with(b"{\"e\":\"aggTrade\"") {
-                // 这里可以保留旧的JSON Value解析逻辑来处理非交易消息（如订阅确认）
-                // 但对于aggTrade流，最高效的方式是直接返回，忽略它们。
-                tracing::trace!(target: AGG_TRADE_TARGET, "忽略非交易消息: {}", String::from_utf8_lossy(payload));
-                return Ok(());
-            }
-
-            // 1. 零拷贝反序列化
-            let raw_trade: RawTradePayload = match serde_json::from_slice(payload) {
-                Ok(trade) => trade,
-                Err(e) => {
-                    warn!(target: AGG_TRADE_TARGET, "反序列化交易数据失败: {}, 原始消息: {}", e, String::from_utf8_lossy(payload));
-                    self.error_count.fetch_add(1, Ordering::Relaxed);
-                    return Ok(()); // 健壮性：丢弃错误数据，不崩溃
-                }
-            };
-
-            // 2. 索引转换 (只读锁非常快)
-            let global_symbol_index = {
-                let guard = self.symbol_to_global_index.read().await;
-                match guard.get(raw_trade.symbol) {
-                    Some(index) => *index,
-                    None => {
-                        // 品种可能刚刚上市，索引尚未同步，或者是一个无关的品种
-                        tracing::trace!(target: AGG_TRADE_TARGET, "收到未索引的品种交易: {}", raw_trade.symbol);
-                        return Ok(()); // 丢弃
+            // --- 【核心修改】基于上下文的确定性解析 ---
+            match endpoint_type {
+                EndpointType::CombinedStream => {
+                    // 1. 优先尝试按组合流格式解析
+                    if let Ok(combined_payload) = serde_json::from_slice::<CombinedStreamPayload>(payload) {
+                        // 2. 如果成功，从 `data` 字段的原始字节中解析出 `RawTradePayload`
+                        match serde_json::from_slice(combined_payload.data.get().as_bytes()) {
+                            Ok(raw_trade) => {
+                                // 3. 调用辅助函数处理
+                                return self.process_raw_trade(raw_trade).await;
+                            },
+                            Err(e) => {
+                                warn!(target: AGG_TRADE_TARGET, "从组合流的data字段反序列化交易数据失败: {}, 原始data: {}", e, combined_payload.data.get());
+                                self.error_count.fetch_add(1, Ordering::Relaxed);
+                            }
+                        };
+                    } else {
+                        // 这通常是订阅确认等消息，可以安全忽略或记录为 trace
+                        tracing::trace!(target: AGG_TRADE_TARGET, "忽略非组合流格式或非交易消息: {}", String::from_utf8_lossy(payload));
                     }
                 }
-            };
-
-            // 3. 高效解析浮点数
-            let price = match raw_trade.price.parse::<f64>() {
-                Ok(p) => p,
-                Err(_) => {
-                    warn!(target: AGG_TRADE_TARGET, "解析价格失败: {}", raw_trade.price);
-                    self.error_count.fetch_add(1, Ordering::Relaxed);
-                    return Ok(());
+                EndpointType::SingleStream => {
+                    // 1. 按原始格式解析 (兼容单流)
+                    if let Ok(raw_trade) = serde_json::from_slice::<RawTradePayload>(payload) {
+                         // 2. 检查事件类型是否真的是 aggTrade，这是一个很好的健壮性补充
+                         if raw_trade.event_type == "aggTrade" {
+                            // 3. 调用辅助函数处理
+                            return self.process_raw_trade(raw_trade).await;
+                         }
+                    }
+                    // 如果不是 aggTrade，则忽略（可能是订阅确认等消息）
+                    tracing::trace!(target: AGG_TRADE_TARGET, "忽略非aggTrade原始流消息: {}", String::from_utf8_lossy(payload));
                 }
-            };
-            let quantity = match raw_trade.quantity.parse::<f64>() {
-                Ok(q) => q,
-                Err(_) => {
-                    warn!(target: AGG_TRADE_TARGET, "解析数量失败: {}", raw_trade.quantity);
-                    self.error_count.fetch_add(1, Ordering::Relaxed);
-                    return Ok(());
-                }
-            };
-
-            // 4. 组装轻量级载荷
-            let agg_payload = AggTradePayload {
-                global_symbol_index,
-                price,
-                quantity,
-                timestamp_ms: raw_trade.timestamp_ms,
-                is_buyer_maker: raw_trade.is_buyer_maker,
-            };
-
-            // 5. 发送到计算核心
-            if let Err(e) = self.sender.send(agg_payload).await {
-                // 如果通道已满或关闭，这是一个严重问题
-                error!(target: AGG_TRADE_TARGET, "发送解析后的交易到计算核心失败: {}", e);
-                self.error_count.fetch_add(1, Ordering::Relaxed);
             }
-
             Ok(())
         }
     }
@@ -455,7 +504,8 @@ pub async fn process_messages<H: MessageHandler>(
         }
 
         // 处理消息 - 直接传递字节数据
-        if let Err(e) = handler.handle_message(connection_id, &payload).await {
+        // 注意：这里使用 SingleStream 作为默认值，具体的端点类型应该由调用方决定
+        if let Err(e) = handler.handle_message(connection_id, &payload, EndpointType::SingleStream).await {
             error!(target: WEBSOCKET_CONNECTION_TARGET, "处理消息失败: {}", e);
         }
     }
@@ -989,7 +1039,8 @@ impl WebSocketClient for AggTradeClient {
                                                                     conn.message_count += 1;
                                                                 }
                                                             }
-                                                            if let Err(e) = handler.handle_message(connection_id, &payload).await {
+                                                            // --- 【核心修改】传入正确的 EndpointType 上下文 ---
+                                                            if let Err(e) = handler.handle_message(connection_id, &payload, EndpointType::CombinedStream).await {
                                                                 warn!(target: AGG_TRADE_TARGET, "Message handler failed: {}", e);
                                                             }
                                                         },
@@ -1226,7 +1277,8 @@ impl WebSocketClient for MiniTickerClient {
                                             OpCode::Text => {
                                                 let payload = frame.payload.to_vec();
                                                 connections.lock().await.get_mut(&connection_id).map(|c| c.message_count += 1);
-                                                if let Err(e) = handler.handle_message(connection_id, &payload).await {
+                                                // --- 【核心修改】传入正确的 EndpointType 上下文 ---
+                                                if let Err(e) = handler.handle_message(connection_id, &payload, EndpointType::SingleStream).await {
                                                     warn!(target: MINI_TICKER_TARGET, "消息处理失败: {}", e);
                                                 }
                                             },

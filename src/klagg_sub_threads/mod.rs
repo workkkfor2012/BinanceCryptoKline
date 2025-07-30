@@ -30,13 +30,21 @@ use crate::klcommon::{
     AggregateConfig,
 };
 use serde::{Deserialize, Serialize};
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument, trace, warn};
+
+// --- 常量定义 ---
+
+/// 【优化采纳】将周线对齐的魔法数字提取为模块级常量，遵循DRY原则。
+/// 这是从Unix纪元日（星期四）回溯到币安周线开盘日（星期一）所需的时间偏移量。
+const MONDAY_ALIGNMENT_OFFSET_MS: i64 = 3 * 24 * 60 * 60 * 1000; // 3 days in milliseconds
 
 // --- 1. 类型定义 ---
 
@@ -67,8 +75,8 @@ pub struct RawTradePayload<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AggTradePayload {
     pub global_symbol_index: usize,
-    pub price: f64,
-    pub quantity: f64,
+    pub price: Decimal,
+    pub quantity: Decimal,
     pub timestamp_ms: i64,
     pub is_buyer_maker: bool,
 }
@@ -76,26 +84,26 @@ pub struct AggTradePayload {
 /// 用于封装 AddSymbol 指令携带的初始K线数据
 #[derive(Debug, Clone, Copy)]
 pub struct InitialKlineData {
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-    pub turnover: f64,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: Decimal,
+    pub turnover: Decimal,
 }
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct KlineState {
     pub open_time: i64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-    pub turnover: f64,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: Decimal,
+    pub turnover: Decimal,
     pub trade_count: i64, // 这个字段现在是区分临时K线的关键：0表示临时，>0表示有真实交易
-    pub taker_buy_volume: f64,
-    pub taker_buy_turnover: f64,
+    pub taker_buy_volume: Decimal,
+    pub taker_buy_turnover: Decimal,
     pub is_final: bool,
     pub is_initialized: bool,
 }
@@ -105,15 +113,15 @@ pub struct KlineData {
     pub global_symbol_index: usize,
     pub period_index: usize,
     pub open_time: i64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-    pub turnover: f64,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: Decimal,
+    pub turnover: Decimal,
     pub trade_count: i64,
-    pub taker_buy_volume: f64,
-    pub taker_buy_turnover: f64,
+    pub taker_buy_volume: Decimal,
+    pub taker_buy_turnover: Decimal,
     pub is_final: bool,
     // is_updated 字段被移除，现在 KlineData 是纯粹的数据载体
 }
@@ -228,7 +236,6 @@ impl HealthReporter for ComputationHealthReporter {
 
 #[derive(Default)]
 struct IoLoopMetrics {
-    messages_received: AtomicU64,
     last_message_timestamp: AtomicI64,
     reconnects: AtomicU64,
 }
@@ -269,12 +276,13 @@ impl HealthReporter for IoHealthReporter {
 pub struct KlineAggregator {
     periods: Arc<Vec<String>>,     // [保留] 用于非热路径，如日志和初始化
     period_milliseconds: Vec<i64>, // [新增] 核心计算的毫秒数来源 (Single Source of Truth)
-    kline_expirations: Vec<i64>,
-    kline_states: Vec<KlineState>,
+    // [修复栈溢出] 使用Box将大型向量存储在堆上
+    kline_expirations: Box<Vec<i64>>,
+    kline_states: Box<Vec<KlineState>>,
 
     // --- [核心修改] ---
     /// 快速检查K线是否脏的标记位图。
-    dirty_flags: Vec<bool>,
+    dirty_flags: Box<Vec<bool>>,
     /// 存储所有脏K线索引的向量，用于快速遍历。
     dirty_indices: Vec<usize>,
     // --- [旧字段被移除] ---
@@ -285,8 +293,8 @@ pub struct KlineAggregator {
 
     /// [修改] local_symbol_cache 语义变更为全量热路径缓存 (symbol -> global_index)
     local_symbol_cache: HashMap<String, usize>,
-    /// [新增] 内部反向缓存 (global_index -> symbol)
-    global_index_to_symbol_cache: Vec<String>,
+    /// [新增] 内部反向缓存 (global_index -> symbol) - 使用Box避免栈溢出
+    global_index_to_symbol_cache: Box<Vec<String>>,
     managed_symbols_count: usize,
     cmd_rx: Option<mpsc::Receiver<WorkerCmd>>,
     full_snapshot_req_tx: mpsc::Sender<oneshot::Sender<Vec<KlineData>>>,
@@ -355,17 +363,18 @@ impl KlineAggregator {
         let capacity_symbols = config.max_symbols;
         let total_slots = capacity_symbols * num_periods;
 
-        let mut kline_states = vec![KlineState::default(); total_slots];
-        let mut kline_expirations = vec![i64::MAX; total_slots];
+        // [修复栈溢出] 使用Box将大型向量分配到堆上，避免栈溢出
+        let mut kline_states = Box::new(vec![KlineState::default(); total_slots]);
+        let mut kline_expirations = Box::new(vec![i64::MAX; total_slots]);
 
         // --- [核心修改] 初始化稀疏集 ---
-        let mut dirty_flags = vec![false; total_slots];
+        let mut dirty_flags = Box::new(vec![false; total_slots]);
         // 预分配容量，减少后续push时的重分配可能
         let mut dirty_indices = Vec::with_capacity(assigned_symbols.len() * num_periods);
 
         let mut local_symbol_cache = HashMap::with_capacity(assigned_symbols.len());
-        // [新增] 初始化反向缓存
-        let mut global_index_to_symbol_cache = vec![String::new(); capacity_symbols];
+        // [新增] 初始化反向缓存 - 使用Box避免栈溢出
+        let mut global_index_to_symbol_cache = Box::new(vec![String::new(); capacity_symbols]);
 
         let guard = symbol_to_global_index.read().await;
         for symbol in assigned_symbols {
@@ -377,16 +386,16 @@ impl KlineAggregator {
                     global_index_to_symbol_cache[global_index] = symbol.clone();
                 }
 
-                let parse_or_warn = |value: &str, field_name: &str| -> f64 {
-                    value.parse().unwrap_or_else(|e| {
+                let parse_or_warn = |value: &str, field_name: &str| -> Decimal {
+                    Decimal::from_str(value).unwrap_or_else(|e| {
                         warn!(
                             target: "计算核心",
                             symbol,
                             field_name,
                             error = ?e,
-                            "解析DbKline字段失败，使用0.0作为默认值"
+                            "解析DbKline字段失败，使用Decimal::ZERO作为默认值"
                         );
-                        0.0
+                        Decimal::ZERO
                     })
                 };
 
@@ -547,7 +556,7 @@ impl KlineAggregator {
                     klines_updated_count = 0;
                 },
                 Some(trade) = trade_rx.recv() => {
-                    trace!(target: "计算核心", global_index = trade.global_symbol_index, price = trade.price, "收到交易数据");
+                    trace!(target: "计算核心", global_index = trade.global_symbol_index, price = %trade.price, "收到交易数据");
                     self.process_trade(trade);
                     trades_count += 1;
                     klines_updated_count += 1; // 简化统计，每个交易都可能更新K线
@@ -579,7 +588,7 @@ impl KlineAggregator {
         warn!(target: "计算核心", "聚合循环退出");
     }
 
-    #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(global_index = trade.global_symbol_index, price = trade.price))]
+    #[instrument(target = "计算核心", level = "trace", skip(self, trade), fields(global_index = trade.global_symbol_index, price = %trade.price))]
     fn process_trade(&mut self, trade: AggTradePayload) {
         // [核心简化] 不再需要哈希查找，直接使用索引！
         let global_index = trade.global_symbol_index;
@@ -599,7 +608,15 @@ impl KlineAggregator {
             let interval_ms = self.period_milliseconds[period_idx];
             // 防御性编程：避免除以0的潜在panic
             if interval_ms == 0 { continue; }
-            let trade_period_start = (trade.timestamp_ms / interval_ms) * interval_ms;
+
+            // ==================== 周线对齐逻辑（已优化） ====================
+            let trade_period_start = if self.periods[period_idx] == "1w" {
+                // 【优化采纳】直接引用模块级常量
+                ((trade.timestamp_ms + MONDAY_ALIGNMENT_OFFSET_MS) / interval_ms) * interval_ms - MONDAY_ALIGNMENT_OFFSET_MS
+            } else {
+                (trade.timestamp_ms / interval_ms) * interval_ms
+            };
+            // =============================================================
 
             let kline_open_time = self.kline_states[kline_offset].open_time;
 
@@ -621,8 +638,8 @@ impl KlineAggregator {
                             kline.taker_buy_turnover = trade.price * trade.quantity;
                         } else {
                             // 确保在没有买方主动成交时清零
-                            kline.taker_buy_volume = 0.0;
-                            kline.taker_buy_turnover = 0.0;
+                            kline.taker_buy_volume = Decimal::ZERO;
+                            kline.taker_buy_turnover = Decimal::ZERO;
                         }
                     } else {
                         // 非首笔交易，执行常规更新
@@ -656,40 +673,111 @@ impl KlineAggregator {
         }
     }
 
+    // 【完全替换】旧的 process_clock_tick 函数，以实现最终版生产级剪枝算法
     #[instrument(target = "计算核心", level = "debug", skip(self), fields(current_time))]
     fn process_clock_tick(&mut self, current_time: i64) {
-        // current_time 是由全局时钟发送的、略微延迟的整分钟时间戳
-        // 我们需要计算出它对应的理论"开盘/收盘"时间点
-        let aligned_minute_time = (current_time / 60_000) * 60_000;
+        let start_time = Instant::now();
+        let mut expired_kline_count = 0;
+        let mut checked_kline_count = 0;
 
-        let num_periods = self.period_milliseconds.len(); // <-- 从新字段获取
-        // 只检查已激活的品种数量，避免对未使用的槽位进行无效计算
-        let num_managed_symbols = self.managed_symbols_count;
+        // 使用高效的整数运算提取时间组件
+        const ONE_MINUTE_MS: i64 = 60_000;
+        const ONE_HOUR_MS: i64 = 3_600_000;
+        const ONE_DAY_MS: i64 = 86_400_000;
+        const ONE_WEEK_MS: i64 = 7 * ONE_DAY_MS;
 
-        // 1. 遍历所有支持的周期，找出在当前分钟需要检查的周期
-        for period_idx in 0..num_periods {
-            let interval_ms = self.period_milliseconds[period_idx]; // <-- 直接获取毫秒数
+        let minute_of_hour = (current_time / ONE_MINUTE_MS) % 60;
+        let hour_of_day = (current_time / ONE_HOUR_MS) % 24;
 
-            // 2. 如果当前分钟是该周期的整数倍，则该周期需要检查
-            if interval_ms > 0 && aligned_minute_time % interval_ms == 0 {
-                // 3. 遍历所有品种属于该周期的K线槽位
-                for symbol_idx in 0..num_managed_symbols {
-                    let kline_offset = symbol_idx * num_periods + period_idx;
+        for symbol_idx in 0..self.managed_symbols_count {
+            for period_idx in 0..self.periods.len() {
 
-                    // 4. 检查这根K线是否真的到期了
-                    // 这个检查是必要的，因为交易驱动可能已经提前滚动了K线
-                    if self.kline_expirations[kline_offset] <= current_time {
-                        let kline = &self.kline_states[kline_offset];
-                        if !kline.is_initialized { continue; }
+                let period_str = &self.periods[period_idx];
 
-                        // [核心优化] 直接进行对齐计算，不再需要period字符串或外部函数
-                        let next_open_time = (current_time / interval_ms) * interval_ms;
-
-                        // 调用统一的切换函数，它能处理空洞填充等复杂情况
-                        self.rollover_kline(kline_offset, next_open_time, None);
+                // 实现基于整数运算的、逻辑修正后的完整剪枝
+                let should_check = match period_str.as_str() {
+                    "1m"  => true,
+                    "5m"  => minute_of_hour % 5 == 0,
+                    "30m" => minute_of_hour % 30 == 0,
+                    "1h"  => minute_of_hour == 0,
+                    "4h"  => minute_of_hour == 0 && hour_of_day % 4 == 0,
+                    "1d"  => minute_of_hour == 0 && hour_of_day == 0,
+                    "1w"  => {
+                        // 增加5分钟容错窗口，提升鲁棒性
+                        let week_start_time = ((current_time + MONDAY_ALIGNMENT_OFFSET_MS) / ONE_WEEK_MS) * ONE_WEEK_MS - MONDAY_ALIGNMENT_OFFSET_MS;
+                        let time_since_week_start = current_time - week_start_time;
+                        // 添加合理性检查，异常时不剪枝以确保安全
+                        if time_since_week_start < 0 || time_since_week_start > ONE_WEEK_MS {
+                            warn!(target: "计算核心", current_time, week_start_time, "周线时间计算异常，跳过剪枝");
+                            true
+                        } else {
+                            time_since_week_start < (5 * ONE_MINUTE_MS)
+                        }
+                    },
+                    _ => {
+                        // 对未知周期增加告警，并保持安全的不剪枝策略
+                        warn!(target: "计算核心", period = period_str.as_str(), "发现未知周期类型，跳过剪枝以确保安全");
+                        true
                     }
+                };
+
+                if !should_check {
+                    continue; // 剪枝！
+                }
+
+                checked_kline_count += 1;
+
+                // 后续的检查和处理逻辑保持不变
+                let kline_offset = symbol_idx * self.periods.len() + period_idx;
+                let interval_ms = self.period_milliseconds[period_idx];
+
+                if interval_ms > 0 && self.kline_expirations[kline_offset] <= current_time {
+                    if !self.kline_states[kline_offset].is_initialized { continue; }
+
+                    expired_kline_count += 1;
+
+                    let next_open_time = if self.periods[period_idx] == "1w" {
+                        ((current_time + MONDAY_ALIGNMENT_OFFSET_MS) / interval_ms) * interval_ms - MONDAY_ALIGNMENT_OFFSET_MS
+                    } else {
+                        (current_time / interval_ms) * interval_ms
+                    };
+
+                    self.rollover_kline(kline_offset, next_open_time, None);
                 }
             }
+        }
+
+        // 日志记录部分，用于验证优化效果
+        let elapsed_micros = start_time.elapsed().as_micros();
+        let total_slots = self.managed_symbols_count * self.periods.len();
+
+        if elapsed_micros > 1000 { // 超过1毫秒，值得注意
+            warn!(
+                target: "计算核心",
+                total_slots,
+                slots_checked_after_pruning = checked_kline_count,
+                expired_found = expired_kline_count,
+                elapsed_micros,
+                "时钟滴答检查完成"
+            );
+        } else if expired_kline_count > 0 {
+            debug!(
+                target: "计算核心",
+                total_slots,
+                slots_checked_after_pruning = checked_kline_count,
+                expired_found = expired_kline_count,
+                elapsed_micros,
+                "时钟滴答检查完成"
+            );
+        } else {
+            trace!(
+                target: "计算核心",
+                total_slots,
+                slots_checked_after_pruning = checked_kline_count,
+                expired_found = expired_kline_count,
+                elapsed_micros,
+                "时钟滴答检查完成"
+            );
         }
     }
 
@@ -737,7 +825,7 @@ impl KlineAggregator {
 
     /// 辅助函数：终结当前K线并写入快照
     /// is_final: 标记这是否是一根完整的、已结束的K线
-    fn finalize_and_snapshot_kline(&mut self, kline_offset: usize, final_close: f64, is_final: bool) {
+    fn finalize_and_snapshot_kline(&mut self, kline_offset: usize, final_close: Decimal, is_final: bool) {
         let old_kline = &mut self.kline_states[kline_offset];
 
         // 如果是标记为final的调用，并且K线已经是final状态，则跳过
@@ -776,21 +864,21 @@ impl KlineAggregator {
     }
 
     /// 辅助函数：播种一根新的K线
-    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: f64, trade_opt: Option<&AggTradePayload>) {
+    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: Decimal, trade_opt: Option<&AggTradePayload>) {
         let new_kline_state = match trade_opt {
             Some(trade) => KlineState { // 事件驱动：K线是确定的
                 open_time, open: trade.price, high: trade.price, low: trade.price, close: trade.price,
                 volume: trade.quantity, turnover: trade.price * trade.quantity,
                 trade_count: 1, // 由真实交易创建，trade_count从1开始
-                taker_buy_volume: if !trade.is_buyer_maker { trade.quantity } else { 0.0 },
-                taker_buy_turnover: if !trade.is_buyer_maker { trade.price * trade.quantity } else { 0.0 },
+                taker_buy_volume: if !trade.is_buyer_maker { trade.quantity } else { Decimal::ZERO },
+                taker_buy_turnover: if !trade.is_buyer_maker { trade.price * trade.quantity } else { Decimal::ZERO },
                 is_final: false, is_initialized: true,
             },
             None => KlineState { // 时钟驱动 / 空K线：K线是临时的
                 open_time, open: last_close, high: last_close, low: last_close, close: last_close,
-                volume: 0.0, turnover: 0.0,
+                volume: Decimal::ZERO, turnover: Decimal::ZERO,
                 trade_count: 0, // 时钟驱动创建，trade_count为0自然表示"临时"
-                taker_buy_volume: 0.0, taker_buy_turnover: 0.0,
+                taker_buy_volume: Decimal::ZERO, taker_buy_turnover: Decimal::ZERO,
                 is_final: false, is_initialized: true,
             },
         };
@@ -855,8 +943,8 @@ impl KlineAggregator {
                             volume: initial_data.volume,
                             turnover: initial_data.turnover,
                             trade_count: 1,
-                            taker_buy_volume: 0.0,
-                            taker_buy_turnover: 0.0,
+                            taker_buy_volume: Decimal::ZERO,
+                            taker_buy_turnover: Decimal::ZERO,
                             is_final: false,
                             is_initialized: true,
                         };

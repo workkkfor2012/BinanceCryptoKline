@@ -1,14 +1,23 @@
 //! K线聚合服务可视化测试入口
 //!
-//! 这个入口专门用于测试和可视化，具有以下特点：
-//! - 硬编码启用可视化测试模式
-//! - 使用少量测试品种（8个主要品种）
+//! 这个入口专门用于测试和可视化，支持两种模式：
+//!
+//! ## 严格测试模式 (STRICT_TEST_MODE = true)
+//! - 使用固定的10个主要品种进行测试
+//! - 不进行任何动态添加/删除操作
+//! - 专注于核心K线聚合功能的稳定性测试
 //! - 启动Web服务器进行数据可视化
 //! - 禁用数据库持久化
-//! - 每60秒模拟添加新品种
+//!
+//! ## 动态测试模式 (STRICT_TEST_MODE = false)
+//! - 从单个品种开始，每60秒模拟添加新品种
+//! - 测试动态品种管理功能
+//! - 启动Web服务器进行数据可视化
+//! - 禁用数据库持久化
 
 use anyhow::Result;
 use chrono;
+use rust_decimal_macros::dec;
 use kline_server::klagg_sub_threads::{self as klagg, DeltaBatch, InitialKlineData, WorkerCmd};
 use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
@@ -35,7 +44,31 @@ const CLOCK_SAFETY_MARGIN_MS: u64 = 10;
 const MIN_SLEEP_MS: u64 = 10;
 const HEALTH_CHECK_INTERVAL_S: u64 = 10;
 
+// --- 【新增】严格测试模式标志位 ---
+/// 严格测试模式：只测试指定品种，不进行任何动态添加/删除操作
+const STRICT_TEST_MODE: bool = true;
+
 fn main() -> Result<()> {
+    // [修复栈溢出] 检查是否需要在新线程中运行以获得更大的栈空间
+    if std::env::var("KLINE_VISUAL_TEST_MAIN_THREAD").is_err() {
+        // 设置环境变量标记，避免无限递归
+        std::env::set_var("KLINE_VISUAL_TEST_MAIN_THREAD", "1");
+
+        // 在新线程中运行主逻辑，使用更大的栈大小 (16MB)
+        let handle = std::thread::Builder::new()
+            .name("visual-test-main-with-large-stack".to_string())
+            .stack_size(16 * 1024 * 1024) // 16MB 栈大小
+            .spawn(|| {
+                actual_main()
+            })?;
+
+        return handle.join().unwrap();
+    }
+
+    actual_main()
+}
+
+fn actual_main() -> Result<()> {
     // 1. ==================== 日志系统必须最先初始化 ====================
     let _guard = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -424,12 +457,24 @@ async fn initialize_test_symbol_indexing(
 ) -> Result<(Vec<String>, HashMap<String, usize>)> {
     info!(target: "应用生命周期", "开始初始化测试品种索引");
 
-    // 测试模式使用固定的8个主要品种
-    //let symbols = vec!["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "BNBUSDT", "LTCUSDT"]
-    let symbols = vec!["BTCUSDT"]
+    // 根据测试模式选择品种列表
+    let symbols = if STRICT_TEST_MODE {
+        // 严格测试模式：使用固定的多个主要品种，不进行动态添加/删除
+        vec![
+             "BTCUSDT"
+           // "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+            //"ADAUSDT", "BNBUSDT", "LTCUSDT", "AVAXUSDT", "DOTUSDT"
+        ]
         .into_iter()
         .map(String::from)
-        .collect::<Vec<String>>();
+        .collect::<Vec<String>>()
+    } else {
+        // 动态测试模式：只使用一个品种，后续会动态添加
+        vec!["BTCUSDT"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    };
 
     info!(target: "应用生命周期", count = symbols.len(), "测试品种列表获取成功");
 
@@ -492,7 +537,16 @@ async fn run_test_symbol_manager(
     global_symbol_count: Arc<AtomicUsize>,
     cmd_tx: mpsc::Sender<WorkerCmd>,
 ) -> Result<()> {
-    info!(target: "品种管理器", log_type = "low_freq", "测试模式启动，等待2秒以确保I/O核心初始化...");
+    // 【新增】严格测试模式检查
+    if STRICT_TEST_MODE {
+        info!(target: "品种管理器", log_type = "low_freq", "严格测试模式已启用，跳过所有动态品种管理操作");
+        // 在严格测试模式下，只是保持任务运行但不执行任何操作
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }
+
+    info!(target: "品种管理器", log_type = "low_freq", "动态测试模式启动，等待2秒以确保I/O核心初始化...");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // 立即添加 ETHUSDT 进行测试
@@ -628,12 +682,12 @@ async fn add_symbol_to_system(
 
     // 创建一个模拟的 InitialKlineData
     let initial_data = InitialKlineData {
-        open: 100.0,
-        high: 101.0,
-        low: 99.0,
-        close: 100.5,
-        volume: 10.0,
-        turnover: 1005.0,
+        open: dec!(100.0),
+        high: dec!(101.0),
+        low: dec!(99.0),
+        close: dec!(100.5),
+        volume: dec!(10.0),
+        turnover: dec!(1005.0),
     };
 
     let cmd = WorkerCmd::AddSymbol {

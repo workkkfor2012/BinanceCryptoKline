@@ -366,23 +366,25 @@ fn send_log(log: StructuredLog) {
 // --- 3. 核心转换层 (McpLayer) ---
 
 // 辅助工具：用于从tracing字段中提取serde_json::Value
-pub struct JsonVisitor<'a>(pub &'a mut HashMap<String, AttributeValue>);
+// 【修改】将 JsonVisitor 的内部类型从 &mut HashMap 更改为 &mut serde_json::Map
+pub struct JsonVisitor<'a>(pub &'a mut serde_json::Map<String, serde_json::Value>);
+
 impl<'a> tracing::field::Visit for JsonVisitor<'a> {
-    // 实现所有类型，确保不会漏掉字段
-    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) { 
-        self.0.insert(field.name().to_string(), serde_json::json!(value)); 
+    // 【修改】将 self.0.insert 的调用目标从 HashMap 改为 serde_json::Map
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.0.insert(field.name().to_string(), serde_json::json!(value));
     }
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) { 
-        self.0.insert(field.name().to_string(), serde_json::json!(value)); 
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.0.insert(field.name().to_string(), serde_json::json!(value));
     }
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) { 
-        self.0.insert(field.name().to_string(), serde_json::json!(value)); 
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.0.insert(field.name().to_string(), serde_json::json!(value));
     }
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) { 
-        self.0.insert(field.name().to_string(), serde_json::json!(value)); 
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.0.insert(field.name().to_string(), serde_json::json!(value));
     }
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) { 
-        self.0.insert(field.name().to_string(), serde_json::json!(value)); 
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name().to_string(), serde_json::json!(value));
     }
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         self.0.insert(field.name().to_string(), serde_json::json!(format!("{:?}", value)));
@@ -424,9 +426,15 @@ where
         };
 
         // 正常收集字段
-        let mut attributes = HashMap::new();
-        let mut visitor = JsonVisitor(&mut attributes);
+        let mut attributes_map = serde_json::Map::new();
+        let mut visitor = JsonVisitor(&mut attributes_map);
         attrs.record(&mut visitor);
+
+        // 转换为 HashMap 以保持现有代码兼容性
+        let mut attributes = HashMap::new();
+        for (k, v) in attributes_map {
+            attributes.insert(k, v);
+        }
 
         // 正常存储上下文
         extensions.insert(Instant::now());
@@ -451,9 +459,15 @@ where
                 }
 
                 // 收集事件的字段
-                let mut attributes = HashMap::new();
-                let mut visitor = JsonVisitor(&mut attributes);
+                let mut attributes_map = serde_json::Map::new();
+                let mut visitor = JsonVisitor(&mut attributes_map);
                 event.record(&mut visitor);
+
+                // 转换为 HashMap 以保持现有代码兼容性
+                let mut attributes = HashMap::new();
+                for (k, v) in attributes_map {
+                    attributes.insert(k, v);
+                }
 
                 // 将 `message` 字段作为事件的 `name`
                 let name = if let Some(serde_json::Value::String(msg)) = attributes.remove("message") {
@@ -472,9 +486,15 @@ where
         } else {
             // --- [新增行为]: 处理独立的、不在任何Span内的事件 ---
             // 将这种独立事件视为一个"瞬时"的、零时长的Span来处理
-            let mut attributes = HashMap::new();
-            let mut visitor = JsonVisitor(&mut attributes);
+            let mut attributes_map = serde_json::Map::new();
+            let mut visitor = JsonVisitor(&mut attributes_map);
             event.record(&mut visitor);
+
+            // 转换为 HashMap 以保持现有代码兼容性
+            let mut attributes = HashMap::new();
+            for (k, v) in attributes_map {
+                attributes.insert(k, v);
+            }
 
             let name = attributes.remove("message")
                 .and_then(|v| if let serde_json::Value::String(s) = v { Some(s) } else { None })

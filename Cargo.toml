@@ -175,6 +175,8 @@ md5 = "0.7"
 async-trait = "0.1.88"
 rand = "0.9.1"
 wide = { version = "0.7", optional = true }
+rust_decimal = { version = "1.35", features = ["serde-with-str"] }
+rust_decimal_macros = "1.35"
 
 [dev-dependencies]
 

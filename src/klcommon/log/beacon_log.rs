@@ -46,7 +46,8 @@ where
     S: Subscriber + for<'lookup> tracing_subscriber::registry::LookupSpan<'lookup>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let mut fields = std::collections::HashMap::new();
+        // 【修改】JsonVisitor 现在直接操作 serde_json::Map
+        let mut fields = serde_json::Map::new();
         let mut visitor = super::ai_log::JsonVisitor(&mut fields);
         event.record(&mut visitor);
 
@@ -58,9 +59,9 @@ where
         let metadata = event.metadata();
         let message = fields.remove("message")
             .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(String::new);
+            .unwrap_or_else(|| event.metadata().name().to_string());
 
-        write_beacon_log(metadata, &message, &fields);
+        write_beacon_log(metadata, &message, fields); // 【修改】传递 Map 而不是 HashMap
     }
 }
 
@@ -68,16 +69,16 @@ where
 fn write_beacon_log(
     metadata: &tracing::Metadata,
     message: &str,
-    fields: &std::collections::HashMap<String, serde_json::Value>
+    mut fields: serde_json::Map<String, serde_json::Value> // 【修改】接收 Map
 ) {
     if let Some(writer) = &mut *BEACON_WRITER.lock().unwrap() {
-        let log_entry = serde_json::json!({
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-            "level": metadata.level().to_string(),
-            "target": metadata.target(),
-            "message": message,
-            "fields": fields,
-        });
+        // 【修改】将元数据直接插入到 Map 中，实现扁平化
+        fields.insert("timestamp".to_string(), serde_json::json!(chrono::Utc::now().to_rfc3339()));
+        fields.insert("level".to_string(), serde_json::json!(metadata.level().to_string()));
+        fields.insert("target".to_string(), serde_json::json!(metadata.target()));
+        fields.insert("message".to_string(), serde_json::json!(message));
+
+        let log_entry = serde_json::Value::Object(fields);
 
         if let Ok(json) = serde_json::to_string(&log_entry) {
             if let Err(e) = writeln!(writer, "{}", json) {

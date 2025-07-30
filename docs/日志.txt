@@ -1,2418 +1,2707 @@
-{
-  "timestamp": "2025-07-28T13:45:50.206Z",
+
+  "timestamp": "2025-07-29T16:38:24.914Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "📋 使用 /stream 端点，品种已在URL中指定: 2 个品种",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
+  "message": "启动归集交易客户端 (支持动态订阅)"
 }
 {
-  "timestamp": "2025-07-28T13:45:50.206Z",
+  "timestamp": "2025-07-29T16:38:24.914Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "📋 品种列表: [\"btcusdt@aggTrade\", \"ethusdt@aggTrade\"]",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
+  "message": "使用代理: true"
 }
 {
-  "timestamp": "2025-07-28T13:45:50.207Z",
+  "timestamp": "2025-07-29T16:38:24.914Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "📋 /stream 端点将返回combined格式的消息",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
+  "message": "代理地址: 127.0.0.1:1080"
 }
 {
-  "timestamp": "2025-07-28T13:45:50.254Z",
+  "timestamp": "2025-07-29T16:38:24.915Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.456 @ 3854.72",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
+  "message": "初始订阅 1 个流: [\"btcusdt@aggTrade\"]"
 }
 {
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.72,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.72
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "global_symbol_index": 1,
-    "period_index": 0,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 7,
-      "period_index": 0
-    },
-    "kline_offset": 7,
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "is_final": false,
-    "kline_offset": 8,
-    "period_index": 1,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 8,
-      "period_index": 1
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 1
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "global_symbol_index": 1,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 9,
-      "period_index": 2
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "kline_offset": 9,
-    "is_final": false,
-    "period_index": 2
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 10,
-    "period_index": 3,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 10,
-      "period_index": 3
-    },
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 1
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 11,
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade",
-    "period_index": 4,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 11,
-      "period_index": 4
-    },
-    "global_symbol_index": 1
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.254Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "global_symbol_index": 1,
-    "kline_offset": 12,
-    "period_index": 5,
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 12,
-      "period_index": 5
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.255Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "global_symbol_index": 1,
-    "span_path": "run_aggregation_loop > process_trade",
-    "kline_offset": 13,
-    "period_index": 6,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 13,
-      "period_index": 6
-    },
-    "is_final": false
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.276Z",
+  "timestamp": "2025-07-29T16:38:24.915Z",
   "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.263 @ 3854.71",
+  "target": "websocket连接",
+  "message": "🔄 WebSocket连接尝试 1/5",
   "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
+    "log_type": "low_freq",
+    "span_path": "websocket_connection > connect"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.276Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.71,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.71
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
+  "timestamp": "2025-07-29T16:38:24.915Z",
   "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.70",
+  "target": "websocket连接",
+  "message": "🔗 WebSocket连接详情 - 统一端点URL: wss://fstream.binance.com:443/stream?streams=btcusdt@aggTrade",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
+    "span_path": "websocket_connection > connect > connect_once",
+    "log_type": "low_freq"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.7,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.7,
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
+  "timestamp": "2025-07-29T16:38:24.915Z",
   "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.69",
+  "target": "websocket连接",
+  "message": "🌐 代理设置: 启用=true, 地址=127.0.0.1:1080",
   "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
+    "span_path": "websocket_connection > connect > connect_once",
+    "log_type": "low_freq"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "span_path": "run_aggregation_loop",
-    "price": 3854.69,
-    "fields": {
-      "price": 3854.69,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.67",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.67,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.67
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.66",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.277Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.66,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.66,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.284Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.65",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.285Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.65,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.65
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.287Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.013 @ 3854.63",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.63,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.63,
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.62",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.62,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.62
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.61",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.61,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.61,
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.60",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "span_path": "run_aggregation_loop",
-    "price": 3854.6,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.6,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.042 @ 3854.58",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.288Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "price": 3854.58,
-    "fields": {
-      "price": 3854.58,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.289Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.55",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.289Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.55,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.55
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.302Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.043 @ 118662.80",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.52",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "span_path": "run_aggregation_loop",
-    "symbol": "BTCUSDT",
-    "price": 118662.8,
-    "fields": {
-      "price": 118662.8,
-      "symbol": "BTCUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "span_path": "run_aggregation_loop > process_trade",
-    "is_final": false,
-    "kline_offset": 0,
-    "period_index": 0,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 0,
-      "period_index": 0
-    },
-    "global_symbol_index": 0
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "period_index": 1,
-    "is_final": false,
-    "kline_offset": 1,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 1,
-      "period_index": 1
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 0
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 2,
-    "period_index": 2,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 2,
-      "period_index": 2
-    },
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 0
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 3,
-    "global_symbol_index": 0,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 3,
-      "period_index": 3
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "is_final": false,
-    "period_index": 3
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 4,
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 4,
-      "period_index": 4
-    },
-    "is_final": false,
-    "global_symbol_index": 0,
-    "period_index": 4
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.303Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "kline_offset": 5,
-    "is_final": false,
-    "period_index": 5,
-    "global_symbol_index": 0,
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 5,
-      "period_index": 5
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.304Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
-  "fields": {
-    "global_symbol_index": 0,
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 6,
-      "period_index": 6
-    },
-    "period_index": 6,
-    "is_final": false,
-    "kline_offset": 6
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.304Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.52,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.52,
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.365Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.091 @ 3854.52",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.365Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.52,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.52,
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.367Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.001 @ 3854.51",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.367Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "price": 3854.51,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.51,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.368Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.48",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.48,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.48
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.46",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.46,
-    "fields": {
-      "price": 3854.46,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.44",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.44,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.44,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.43",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.369Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.43,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.43,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.422Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.016 @ 3854.42",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.422Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.42,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.42
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.422Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.007 @ 3854.41",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.423Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.41,
-    "fields": {
-      "price": 3854.41,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.423Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.412 @ 3854.40",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.423Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.4,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.4
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.423Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.101 @ 3854.40",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.423Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.4,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.4,
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.470Z",
-  "level": "INFO",
-  "target": "服务器校时",
-  "message": "币安服务器时间: 1753710350013, 网络延迟: 232毫秒",
-  "fields": {
-    "fields": {},
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > sync_time_once"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.470Z",
-  "level": "INFO",
-  "target": "服务器校时",
-  "message": "本地时间与服务器时间差值: -457毫秒",
-  "fields": {
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > sync_time_once",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.470Z",
-  "level": "INFO",
-  "target": "服务器校时",
-  "message": "初始时间同步完成，时间差值: -457毫秒，网络延迟: 232毫秒",
-  "fields": {
-    "fields": {},
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.470Z",
-  "level": "INFO",
-  "target": "服务器校时",
-  "message": "启动独立的时间同步任务，将在每分钟的第30秒运行",
-  "fields": {
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > start_time_sync_task",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.471Z",
+  "timestamp": "2025-07-29T16:38:24.916Z",
   "level": "DEBUG",
-  "target": "服务器校时",
-  "message": "时间同步任务: 等待 40秒 到下一个30秒点",
+  "target": "websocket连接",
+  "message": "🌐 通过代理 127.0.0.1:1080 连接"
+}
+{
+  "timestamp": "2025-07-29T16:38:24.916Z",
+  "level": "INFO",
+  "target": "网关任务",
+  "message": "网关任务已启动 (高频轮询模式)，将每 500 毫秒拉取一次增量数据",
   "fields": {
-    "fields": {},
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > start > start_time_sync_task > server_time_sync_task"
+    "pull_interval_ms": 500,
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.515Z",
+  "timestamp": "2025-07-29T16:38:24.917Z",
+  "level": "INFO",
+  "target": "WebServer",
+  "message": "静态文件目录",
+  "fields": {
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > run_visual_test_server",
+    "static_path": "\"F:\\\\work\\\\github\\\\BinanceCryptoKline\\\\src\\\\klagg_sub_threads\\\\static\""
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.917Z",
+  "level": "INFO",
+  "target": "WebServer",
+  "message": "可视化Web服务器已启动",
+  "fields": {
+    "log_type": "low_freq",
+    "addr": "http://0.0.0.0:9090",
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > run_visual_test_server"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.917Z",
+  "level": "INFO",
+  "target": "Pusher",
+  "message": "Gateway数据订阅推送器已启动",
+  "fields": {
+    "log_type": "low_freq",
+    "span_path": "pusher_task"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.917Z",
+  "level": "INFO",
+  "target": "品种管理器",
+  "message": "严格测试模式已启用，跳过所有动态品种管理操作",
+  "fields": {
+    "log_type": "low_freq",
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > run_test_symbol_manager"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.918Z",
+  "level": "INFO",
+  "target": "状态监控",
+  "message": "WatchdogV2 监控中枢已启动",
+  "fields": {
+    "span_path": "run",
+    "log_type": "low_freq",
+    "interval_s": 10
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.918Z",
+  "level": "INFO",
+  "target": "计算核心",
+  "message": "周期性统计: trades_per_10s=0, klines_updated_per_10s=0",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "log_type": "low_freq"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.918Z",
+  "level": "INFO",
+  "target": "网关任务",
+  "message": "周期性统计: batches_pulled_per_10s=0, klines_processed_per_10s=0",
+  "fields": {
+    "log_type": "low_freq",
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:24.918Z",
   "level": "DEBUG",
   "target": "计算核心",
   "message": "收到增量数据请求",
   "fields": {
-    "span_path": "run_aggregation_loop",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.515Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到增量数据请求，开始扫描脏标记...",
-  "fields": {
-    "fields": {},
-    "span_path": "run_aggregation_loop > process_deltas_request"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.515Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "增量数据打包完成，准备发送",
-  "fields": {
-    "dirty_kline_found": 14,
-    "fields": {
-      "dirty_kline_found": 14
-    },
-    "span_path": "run_aggregation_loop > process_deltas_request"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.515Z",
-  "level": "TRACE",
-  "target": "网关任务",
-  "message": "从聚合器拉取到增量数据",
-  "fields": {
-    "fields": {
-      "kline_count": 14
-    },
-    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task",
-    "kline_count": 14
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.515Z",
-  "level": "TRACE",
-  "target": "Pusher",
-  "message": "拉取到增量K线数据",
-  "fields": {
-    "batch_id": 1,
-    "span_path": "pusher_task",
-    "fields": {
-      "batch_id": 1,
-      "kline_count": 14
-    },
-    "kline_count": 14
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.536Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.575 @ 3854.39",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.536Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.39,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "price": 3854.39,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:24.918Z",
   "level": "TRACE",
   "target": "计算核心",
-  "message": "设置脏标记",
+  "message": "收到增量数据请求，开始扫描脏标记...",
   "fields": {
-    "period_index": 0,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 7,
-      "period_index": 0
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "is_final": false,
-    "kline_offset": 7,
-    "global_symbol_index": 1
+    "span_path": "run_aggregation_loop > process_deltas_request"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:24.918Z",
   "level": "TRACE",
   "target": "计算核心",
-  "message": "设置脏标记",
+  "message": "增量数据打包完成，准备发送",
   "fields": {
-    "global_symbol_index": 1,
-    "kline_offset": 8,
-    "is_final": false,
-    "period_index": 1,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 8,
-      "period_index": 1
-    },
-    "span_path": "run_aggregation_loop > process_trade"
+    "dirty_kline_found": 7,
+    "span_path": "run_aggregation_loop > process_deltas_request"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:24.918Z",
   "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
+  "target": "网关任务",
+  "message": "从聚合器拉取到增量数据",
   "fields": {
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 9,
-      "period_index": 2
-    },
-    "global_symbol_index": 1,
-    "is_final": false,
-    "kline_offset": 9,
-    "period_index": 2
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task",
+    "kline_count": 7
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:24.918Z",
   "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
+  "target": "Pusher",
+  "message": "拉取到增量K线数据",
   "fields": {
-    "period_index": 3,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 10,
-      "period_index": 3
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 1,
-    "is_final": false,
-    "kline_offset": 10
+    "batch_id": 0,
+    "kline_count": 7,
+    "span_path": "pusher_task"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
+  "timestamp": "2025-07-29T16:38:24.919Z",
+  "level": "INFO",
+  "target": "状态监控",
+  "message": "系统健康状态巡检",
   "fields": {
-    "period_index": 4,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 11,
-      "period_index": 4
-    },
-    "span_path": "run_aggregation_loop > process_trade",
-    "global_symbol_index": 1,
-    "kline_offset": 11,
-    "is_final": false
+    "status_reports": "[HealthReport { component_name: \"Computation-Aggregator\", status: Ok, message: None, details: {\"last_activity_ago_ms\": Number(5)} }, HealthReport { component_name: \"IO-Loop\", status: Ok, message: None, details: {\"last_message_ago_ms\": Number(1753807104918), \"reconnects\": Number(0)} }]",
+    "span_path": "run",
+    "log_type": "beacon"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
+  "timestamp": "2025-07-29T16:38:24.921Z",
+  "level": "DEBUG",
+  "target": "websocket连接",
+  "message": "✅ TCP连接已建立"
+}
+{
+  "timestamp": "2025-07-29T16:38:24.921Z",
+  "level": "DEBUG",
+  "target": "websocket连接",
+  "message": "🔐 建立TLS连接..."
+}
+{
+  "timestamp": "2025-07-29T16:38:24.922Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "No cached session for DnsName(\"fstream.binance.com\")",
   "fields": {
-    "kline_offset": 12,
-    "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 12,
-      "period_index": 5
-    },
-    "is_final": false,
-    "global_symbol_index": 1,
-    "period_index": 5
+    "log.module_path": "rustls::client::hs",
+    "log.line": 73,
+    "log.target": "rustls::client::hs",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "设置脏标记",
+  "timestamp": "2025-07-29T16:38:24.922Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "Not resuming any session",
   "fields": {
-    "global_symbol_index": 1,
-    "fields": {
-      "global_symbol_index": 1,
-      "is_final": false,
-      "kline_offset": 13,
-      "period_index": 6
-    },
-    "is_final": false,
-    "period_index": 6,
-    "span_path": "run_aggregation_loop > process_trade",
-    "kline_offset": 13
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs",
+    "log.line": 132,
+    "log.module_path": "rustls::client::hs",
+    "log.target": "rustls::client::hs"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:24.922Z",
+  "level": "TRACE",
+  "target": "log",
+  "message": "Sending ClientHello Message {\n    version: TLSv1_0,\n    payload: Handshake {\n        parsed: HandshakeMessagePayload {\n            typ: ClientHello,\n            payload: ClientHello(\n                ClientHelloPayload {\n                    client_version: TLSv1_2,\n                    random: c6bf21fe45563e4243eba1348b0596281b758eacca347f69b69011b95055bced,\n                    session_id: cb0752c87d504fc1d3a544e63b727b20e130ee7ac593823c3ae97fb72f668d21,\n                    cipher_suites: [\n                        TLS13_AES_256_GCM_SHA384,\n                        TLS13_AES_128_GCM_SHA256,\n                        TLS13_CHACHA20_POLY1305_SHA256,\n                        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,\n                        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,\n                        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,\n                        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,\n                        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,\n                        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,\n                        TLS_EMPTY_RENEGOTIATION_INFO_SCSV,\n                    ],\n                    compression_methods: [\n                        Null,\n                    ],\n                    extensions: [\n                        SupportedVersions(\n                            [\n                                TLSv1_3,\n                                TLSv1_2,\n                            ],\n                        ),\n                        ECPointFormats(\n                            [\n                                Uncompressed,\n                            ],\n                        ),\n                        NamedGroups(\n                            [\n                                X25519,\n                                secp256r1,\n                                secp384r1,\n                            ],\n                        ),\n                        SignatureAlgorithms(\n                            [\n                                ECDSA_NISTP384_SHA384,\n                                ECDSA_NISTP256_SHA256,\n                                ED25519,\n                                RSA_PSS_SHA512,\n                                RSA_PSS_SHA384,\n                                RSA_PSS_SHA256,\n                                RSA_PKCS1_SHA512,\n                                RSA_PKCS1_SHA384,\n                                RSA_PKCS1_SHA256,\n                            ],\n                        ),\n                        ExtendedMasterSecretRequest,\n                        CertificateStatusRequest(\n                            OCSP(\n                                OCSPCertificateStatusRequest {\n                                    responder_ids: [],\n                                    extensions: ,\n                                },\n                            ),\n                        ),\n                        ServerName(\n                            [\n                                ServerName {\n                                    typ: HostName,\n                                    payload: HostName(\n                                        DnsName(\n                                            \"fstream.binance.com\",\n                                        ),\n                                    ),\n                                },\n                            ],\n                        ),\n                        SignedCertificateTimestampRequest,\n                        KeyShare(\n                            [\n                                KeyShareEntry {\n                                    group: X25519,\n                                    payload: 40b3b0f7d8ff756f907db96c28796f396ac0c6e568df3f304876e3b813372338,\n                                },\n                            ],\n                        ),\n                        PresharedKeyModes(\n                            [\n                                PSK_DHE_KE,\n                            ],\n                        ),\n                        SessionTicket(\n                            Request,\n                        ),\n                    ],\n                },\n            ),\n        },\n        encoded: 010000f10303c6bf21fe45563e4243eba1348b0596281b758eacca347f69b69011b95055bced20cb0752c87d504fc1d3a544e63b727b20e130ee7ac593823c3ae97fb72f668d210014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000136673747265616d2e62696e616e63652e636f6d00120000003300260024001d002040b3b0f7d8ff756f907db96c28796f396ac0c6e568df3f304876e3b813372338002d0002010100230000,\n    },\n}",
+  "fields": {
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.target": "rustls::client::hs",
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs",
+    "log.module_path": "rustls::client::hs",
+    "log.line": 329
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "TRACE",
+  "target": "log",
+  "message": "We got ServerHello ServerHelloPayload {\n    legacy_version: TLSv1_2,\n    random: 8cd6cea891a45b0bf5f72c3859fb8d47e38e2ff1e57d60351a6416466106d47d,\n    session_id: cb0752c87d504fc1d3a544e63b727b20e130ee7ac593823c3ae97fb72f668d21,\n    cipher_suite: TLS13_AES_128_GCM_SHA256,\n    compression_method: Null,\n    extensions: [\n        SupportedVersions(\n            TLSv1_3,\n        ),\n        KeyShare(\n            KeyShareEntry {\n                group: X25519,\n                payload: 68178d966b5b0478a6529deacb770945c8e004baf411d532060eb58a71c5017a,\n            },\n        ),\n    ],\n}",
+  "fields": {
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.line": 493,
+    "log.module_path": "rustls::client::hs",
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs",
+    "log.target": "rustls::client::hs"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "Using ciphersuite TLS13_AES_128_GCM_SHA256",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs",
+    "log.line": 615,
+    "log.target": "rustls::client::hs",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.module_path": "rustls::client::hs"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "Not resuming",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\tls13.rs",
+    "log.target": "rustls::client::tls13",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.line": 142,
+    "log.module_path": "rustls::client::tls13"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "TRACE",
+  "target": "log",
+  "message": "EarlyData rejected",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\client_conn.rs",
+    "log.line": 458,
+    "log.module_path": "rustls::client::client_conn",
+    "log.target": "rustls::client::client_conn",
+    "span_path": "websocket_connection > connect > connect_once"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "TRACE",
+  "target": "log",
+  "message": "Dropping CCS",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\conn.rs",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.target": "rustls::conn",
+    "log.module_path": "rustls::conn",
+    "log.line": 722
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "TLS1.3 encrypted extensions: [ServerNameAck]",
+  "fields": {
+    "log.target": "rustls::client::tls13",
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\tls13.rs",
+    "log.module_path": "rustls::client::tls13",
+    "log.line": 381,
+    "span_path": "websocket_connection > connect > connect_once"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "DEBUG",
+  "target": "log",
+  "message": "ALPN protocol is None",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\hs.rs",
+    "log.target": "rustls::client::hs",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.module_path": "rustls::client::hs",
+    "log.line": 472
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.029Z",
+  "level": "TRACE",
+  "target": "log",
+  "message": "Server cert is [Certificate(b\"0\\x82\\x06n0\\x82\\x05V\\xa0\\x03\\x02\\x01\\x02\\x02\\x10\\r\\x1f\\xc8_\\xa0\\xce\\xc5\\xb2\\xa0\\xbd\\xfc\\xd0D\\x90\\xcd\\xfd0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\00`1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02US1\\x150\\x13\\x06\\x03U\\x04\\n\\x13\\x0cDigiCert Inc1\\x190\\x17\\x06\\x03U\\x04\\x0b\\x13\\x10www.digicert.com1\\x1f0\\x1d\\x06\\x03U\\x04\\x03\\x13\\x16GeoTrust TLS RSA CA G10\\x1e\\x17\\r241213000000Z\\x17\\r260113235959Z0^1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02KY1\\x140\\x12\\x06\\x03U\\x04\\x07\\x13\\x0bGEORGE TOWN1!0\\x1f\\x06\\x03U\\x04\\n\\x13\\x18Binance Holdings Limited1\\x160\\x14\\x06\\x03U\\x04\\x03\\x0c\\r*.binance.com0\\x82\\x01\\\"0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x01\\x05\\0\\x03\\x82\\x01\\x0f\\00\\x82\\x01\\n\\x02\\x82\\x01\\x01\\0\\xad\\xd5\\x0b\\xef4\\xc9\\xc4\\xcf\\x91\\x97\\xbb\\xd4`\\xf1\\xa5\\xc4\\x99\\xbf\\x82\\xdb6tr\\xca\\xbe\\x9c\\xe1RF\\x8e701Yl`E+\\xfa&\\xf9\\xb7\\x99r\\xac\\x06\\xa9n_Q?\\xfbh\\xa2x\\x9d]\\x10\\x14\\x04}\\x96\\xfc\\x1f1\\xa8\\x89\\x83\\xe3\\xc7v\\xa2\\x06\\x9b\\x14\\x90]\\xf8\\x8e\\xe8\\xaa\\xf3]]\\x90B\\xb9\\xae\\xaaw2\\xa1[\\xcd{E{\\x85\\x9e\\x0c\\xda\\xffM\\nZ\\xcc'8\\xbd\\x185\\xd7\\xd1\\xb9\\xdc;\\xb3\\x82\\x96p)\\xfdq\\x8c\\xe2\\xa6A\\x11\\0\\x8e\\xc3\\x1b\\xec\\x92@\\xc9+A\\xeb\\xd8\\x92\\xfc\\xba\\xae%\\xfe\\\\\\x8d4\\xcf\\x02,\\x92bj\\0.-\\xfe{~\\x0eU\\x9eC\\xe3\\xa7\\x84i\\xee\\x98\\xb4:\\x10\\xc5U\\xa8\\xf9z\\xe6$sr\\xe2N\\xde<\\xc5\\xf4\\x90\\xbd\\xcf\\xe4/\\xe2\\xbc/\\xcb5D\\xc2U\\x17o\\x18t~h\\x9fK\\x7f \\x7f\\xe9\\x98\\xd3\\x16oz\\x1d8_\\t\\x92\\x0e\\xbc4\\x95\\xf8\\x1d8\\xabU\\x97\\xdb/\\x91\\xf3]^/\\x9a\\x91\\xfcW\\xac\\xd0T\\xe6\\xd09\\xac\\\"5\\x01=\\x02\\x03\\x01\\0\\x01\\xa3\\x82\\x03$0\\x82\\x03 0\\x1f\\x06\\x03U\\x1d#\\x04\\x180\\x16\\x80\\x14\\x94O\\xd4]\\x8b\\xe4\\xa4\\xe2\\xa6\\x80\\xfe\\xfd\\xd8\\xf9\\0\\xef\\xa3\\xbe\\x02W0\\x1d\\x06\\x03U\\x1d\\x0e\\x04\\x16\\x04\\x14BK5g\\xe7[0\\xf6\\xa6A\\x04\\xa0}\\x9aS\\x88V%\\xe4\\xbc0%\\x06\\x03U\\x1d\\x11\\x04\\x1e0\\x1c\\x82\\r*.binance.com\\x82\\x0bbinance.com0>\\x06\\x03U\\x1d \\x0470503\\x06\\x06g\\x81\\x0c\\x01\\x02\\x020)0'\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x02\\x01\\x16\\x1bhttp://www.digicert.com/CPS0\\x0e\\x06\\x03U\\x1d\\x0f\\x01\\x01\\xff\\x04\\x04\\x03\\x02\\x05\\xa00\\x1d\\x06\\x03U\\x1d%\\x04\\x160\\x14\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x03\\x01\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x03\\x020?\\x06\\x03U\\x1d\\x1f\\x0480604\\xa02\\xa00\\x86.http://cdp.geotrust.com/GeoTrustTLSRSACAG1.crl0v\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x01\\x01\\x04j0h0&\\x06\\x08+\\x06\\x01\\x05\\x05\\x070\\x01\\x86\\x1ahttp://status.geotrust.com0>\\x06\\x08+\\x06\\x01\\x05\\x05\\x070\\x02\\x862http://cacerts.geotrust.com/GeoTrustTLSRSACAG1.crt0\\x0c\\x06\\x03U\\x1d\\x13\\x01\\x01\\xff\\x04\\x020\\00\\x82\\x01\\x7f\\x06\\n+\\x06\\x01\\x04\\x01\\xd6y\\x02\\x04\\x02\\x04\\x82\\x01o\\x04\\x82\\x01k\\x01i\\0w\\0\\x0eW\\x94\\xbc\\xf3\\xae\\xa9>3\\x1b,\\x99\\x07\\xb3\\xf7\\x90\\xdf\\x9b\\xc2=q2%\\xdd!\\xa9%\\xaca\\xc5N!\\0\\0\\x01\\x93\\xc0,\\xc7\\x0c\\0\\0\\x04\\x03\\0H0F\\x02!\\0\\xde+\\x9c\\xca\\xd5\\xe8\\xae\\x96\\x0c\\xd4\\xe4*\\xf0\\xde\\xed\\x15\\xae\\x83i\\xa0`\\xc2\\xb2\\xcb\\xdd\\xfd\\x07\\x05\\x96{\\x98\\xbd\\x02!\\0\\xc7\\x1b\\x17'\\xb8\\x9d\\x9c\\xd8\\xec\\x1c\\xb6\\r$\\x8c\\xd2\\xdcX9a/\\x96\\xe4\\xae\\x18\\xa4\\xc3\\xc9N\\xa9\\x91\\xc3\\xa8\\0v\\0d\\x11\\xc4l\\xa4\\x12\\xec\\xa7\\x89\\x1c\\xa2\\x02.\\0\\xbc\\xabO(\\x07\\xd4\\x1e5'\\xab\\xea\\xfe\\xd5\\x03\\xc9}\\xcd\\xf0\\0\\0\\x01\\x93\\xc0,\\xc7D\\0\\0\\x04\\x03\\0G0E\\x02!\\0\\xcdI\\x02\\xd0\\xc9\\x84\\x08D\\xf1IY\\xb0U\\x07\\xa4-\\xc3\\x19\\x93\\x91\\xc6b\\xd4V\\x96\\xc1t\\xe9<\\xc4\\xa3'\\x02 WE\\x90\\x04}n\\xef\\xeeh\\xd2a\\xb92\\x93\\xb5\\xcf\\x89\\xfaU\\xac\\x8c1\\xd3\\x02='C0?\\xa4\\xbe\\x1f\\0v\\0I\\x9c\\x9bi\\xde\\x1d|\\xec\\xfc6\\xde\\xcd\\x87d\\xa6\\xb8[\\xaf\\n\\x87\\x80\\x19\\xd1UR\\xfb\\xe9\\xeb)\\xdd\\xf8\\xc3\\0\\0\\x01\\x93\\xc0,\\xc7S\\0\\0\\x04\\x03\\0G0E\\x02 \\x18w5Ek\\xcc\\xb0\\x07$.\\x08\\x83\\xcfny\\xf39E\\xa5F\\x1c\\x8a\\xcf\\x0b\\x065\\x8c\\x11\\xcft?Y\\x02!\\0\\xf2z\\xdc\\xb3\\xed \\xdf\\xc9\\xe0\\x05JWU\\x08j\\xe25V-3\\0\\xf7=\\x8f\\xdd\\x07a\\x07\\x97\\x12|\\x0b0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\0\\x03\\x82\\x01\\x01\\0\\x8b\\xc5\\r\\xd6\\xc6\\xb7<\\xc5{\\x90\\xea\\xfd\\xec&_\\xb0\\xb7\\xbd\\x9c\\x0e\\x9c\\xfak\\x01\\xd5\\xd4\\x82\\x80\\xf8(\\\"T[\\x12\\xde\\x0f\\xea$J\\xfe\\xe1\\xb5\\x9c\\xb5\\x05\\x8b\\xc6@\\xfa8\\xc3\\xe7\\xb5b\\xd2\\x85Z\\x98B\\xd8HD8\\xa0\\x1d\\xb7\\xd6\\xa9\\xbe\\xa1\\x16x\\x81\\x81\\x04Y\\x0cL:\\x03\\x9c\\xd1d\\xb6\\x85\\xd57(n\\x05\\xab\\x946\\xb7\\x14\\x88P\\xb3\\x0e\\n/O\\xa3\\xc8Ge\\x0cF\\x1c\\xd9\\x06\\x90\\x86;\\xff n\\xf5s\\xa2\\xc2\\\"\\x81(/\\xbe\\x1c\\xb7\\xf5\\xd8\\xcfd\\x8c\\xc14\\xeaU#\\xc13RWY\\xd9\\xabf\\x8f\\xd5\\r\\xe3\\x12y\\x12\\xc7d\\xad \\xc0\\x81S\\xe7\\xd1\\xf1L\\x13\\x01\\x16\\xe4x&BB\\xcf\\xb1\\xb1\\x89\\x9ev\\xf9\\x97Q\\xa4\\xe4\\r7\\xde\\x9fi\\xc9p?\\xb5\\x1f\\xec3T\\xc8&B\\x05\\xa8\\xf5\\x95l\\x84\\xa5j\\xd7\\xbd\\x15\\xc9\\x88\\x0c\\x86N\\x18\\xe8\\xfcs\\xcfw\\x8c\\x9c\\x02 \\xd3f\\xd7:}\\xf8\\xf7uH\\\\\\xb5\\x1al4R\\xeb}\\xd6!A\\x80\\\"4\\xf9\\x14\\x08\\te\\x87\\x0e\\x95\"), Certificate(b\"0\\x82\\x04\\x8d0\\x82\\x03u\\xa0\\x03\\x02\\x01\\x02\\x02\\x10\\r\\x07x*\\x13?\\xc6\\xf9\\xa5r\\x96\\xe11\\xff\\xd1y0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\00a1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02US1\\x150\\x13\\x06\\x03U\\x04\\n\\x13\\x0cDigiCert Inc1\\x190\\x17\\x06\\x03U\\x04\\x0b\\x13\\x10www.digicert.com1 0\\x1e\\x06\\x03U\\x04\\x03\\x13\\x17DigiCert Global Root G20\\x1e\\x17\\r171102122337Z\\x17\\r271102122337Z0`1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02US1\\x150\\x13\\x06\\x03U\\x04\\n\\x13\\x0cDigiCert Inc1\\x190\\x17\\x06\\x03U\\x04\\x0b\\x13\\x10www.digicert.com1\\x1f0\\x1d\\x06\\x03U\\x04\\x03\\x13\\x16GeoTrust TLS RSA CA G10\\x82\\x01\\\"0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x01\\x05\\0\\x03\\x82\\x01\\x0f\\00\\x82\\x01\\n\\x02\\x82\\x01\\x01\\0\\xbe\\x17\\xe8\\xec\\xbe)\\n\\xcb\\xfe\\xb9-a1\\xfd3$\\x082.Y\\xe8!\\xd4\\xd80\\xben\\x10\\xc8\\x84\\xa0?\\xba\\x14\\xe5\\xde\\xfdz\\x8c\\x92\\x1b{\\xce\\x84-\\xf0\\xffx\\xc42\\xe8\\xa9\\xa0}_\\x06\\xda{\\x9bKS\\xa6\\xc6\\x1b\\x02\\x17!\\xe1p;\\xad\\xfb\\x83\\xeb\\x08T\\x81\\xa8\\xde\\x12\\xb2\\xd5\\xc6\\x88\\x960\\xf9\\x02\\xfc9\\xd4\\xbd\\xb8\\\"\\xef\\x80I\\x99\\xd0b\\xb8a\\xd0I\\xde\\xcb\\xc2\\xcb\\x97\\xa51\\x06\\x1b\\xd7\\xd8]\\xc6\\xd3T\\xdeR\\x016*\\r\\xf6\\xde\\xc5\\xb61L\\xcc\\x15%j\\x15o\\xa9k\\x04H\\x0c\\xde\\0A\\xaa(\\x80\\x8b/4\\xd3\\x1b\\xb56\\xad;%\\xd0\\x88B@l6\\x91me\\xb2\\x19\\x86\\xc0\\xd2\\x7f9FX\\xfe0\\x12`P\\xdc\\xee\\xbbs\\xe6W\\x90Z\\xf6\\r\\xca\\xd7\\x04KGjo4\\x1a\\x9d\\x926\\x1a.\\xd9NT\\xedG\\xac\\x0c\\xbf\\xf1\\x80\\xb2\\xba\\xffG{\\xe99\\xc4T\\xc4\\x94T\\x99\\x19\\xf1W\\x99\\xaf\\xe2\\x14\\\"[\\xe8.\\xbbc-\\xba\\xae\\x81\\xbd\\x13\\xdc\\xe6\\x17[\\xe0\\x90SI\\x01\\x02\\x03\\x01\\0\\x01\\xa3\\x82\\x01@0\\x82\\x01<0\\x1d\\x06\\x03U\\x1d\\x0e\\x04\\x16\\x04\\x14\\x94O\\xd4]\\x8b\\xe4\\xa4\\xe2\\xa6\\x80\\xfe\\xfd\\xd8\\xf9\\0\\xef\\xa3\\xbe\\x02W0\\x1f\\x06\\x03U\\x1d#\\x04\\x180\\x16\\x80\\x14N\\\"T \\x18\\x95\\xe6\\xe3n\\xe6\\x0f\\xfa\\xfa\\xb9\\x12\\xed\\x06\\x17\\x8f90\\x0e\\x06\\x03U\\x1d\\x0f\\x01\\x01\\xff\\x04\\x04\\x03\\x02\\x01\\x860\\x1d\\x06\\x03U\\x1d%\\x04\\x160\\x14\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x03\\x01\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x03\\x020\\x12\\x06\\x03U\\x1d\\x13\\x01\\x01\\xff\\x04\\x080\\x06\\x01\\x01\\xff\\x02\\x01\\004\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x01\\x01\\x04(0&0$\\x06\\x08+\\x06\\x01\\x05\\x05\\x070\\x01\\x86\\x18http://ocsp.digicert.com0B\\x06\\x03U\\x1d\\x1f\\x04;0907\\xa05\\xa03\\x861http://crl3.digicert.com/DigiCertGlobalRootG2.crl0=\\x06\\x03U\\x1d \\x0460402\\x06\\x04U\\x1d \\00*0(\\x06\\x08+\\x06\\x01\\x05\\x05\\x07\\x02\\x01\\x16\\x1chttps://www.digicert.com/CPS0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\0\\x03\\x82\\x01\\x01\\0\\x82\\x1c\\x04:\\x82\\xe9\\xc5\\xa9\\xc8e\\x12\\\\\\x08\\xe3\\x01\\xc60\\xb0\\xae\\\"\\x88a{+\\x07\\x86\\xf7\\xb8\\xb5D\\x9c\\xf5\\x93\\x06aF\\x8a:\\xa2\\xb55&\\xd0X\\x9e<\\xc1s\\x8f\\xbf\\xb1y\\xa7\\x1c\\x997\\x9aS\\xf2/\\\\n \\x0b}\\xb0\\xc7\\x82\\xef\\xeb\\xeby\\x12\\x05\\xe7\\x01A\\x0bC\\x027\\x9b\\x1b\\x1f\\x08M7Rs)\\xb8\\x9f5\\xe3\\xf9\\xa3:Yu\\x01f\\x90*>\\x9d\\xe0b)\\x1e\\x87\\xa8\\x80>,\\xc4\\xcc\\x08\\xc3.\\xbfi!\\x18k\\x8f\\x1ekC\\xcd\\xee\\x06\\x98A\\x99\\xb5\\x82\\xf2\\x17\\xc1\\x10\\xa5\\xaeX\\x8c\\xfb\\x95\\xeaM\\x82\\xaf\\xf3w_\\x11iOxQ\\xa6\\xdf\\xf7\\xba\\xc5?e\\xbfp|\\xa3\\xedZ\\x9a3\\x9d\\x9e?\\xe3\\x875\\xa7\\xda\\xf3\\x15\\xc6X\\xadi#\\xdc\\x0f\\xbbL\\xd0I\\x13A\\xa6?g\\xe1^\\x13\\xf5\\x0f\\xf5\\xd5|\\x85\\xbf\\x87L\\x82$a\\\"W\\xd1\\xa5\\x9b\\xfb\\x869\\xad\\xc3\\\\yfl\\x071K \\x91\\xad\\xa1\\xbed\\x19\\0\\xee\\x1e\\x12x\\xce\\x98\\xf2_\\xfb0\\x14i<,\\xfa\\x97\\xc6\"), Certificate(b\"0\\x82\\x03\\x8e0\\x82\\x02v\\xa0\\x03\\x02\\x01\\x02\\x02\\x10\\x03:\\xf1\\xe6\\xa7\\x11\\xa9\\xa0\\xbb(d\\xb1\\x1d\\t\\xfa\\xe50\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\00a1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02US1\\x150\\x13\\x06\\x03U\\x04\\n\\x13\\x0cDigiCert Inc1\\x190\\x17\\x06\\x03U\\x04\\x0b\\x13\\x10www.digicert.com1 0\\x1e\\x06\\x03U\\x04\\x03\\x13\\x17DigiCert Global Root G20\\x1e\\x17\\r130801120000Z\\x17\\r380115120000Z0a1\\x0b0\\t\\x06\\x03U\\x04\\x06\\x13\\x02US1\\x150\\x13\\x06\\x03U\\x04\\n\\x13\\x0cDigiCert Inc1\\x190\\x17\\x06\\x03U\\x04\\x0b\\x13\\x10www.digicert.com1 0\\x1e\\x06\\x03U\\x04\\x03\\x13\\x17DigiCert Global Root G20\\x82\\x01\\\"0\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x01\\x05\\0\\x03\\x82\\x01\\x0f\\00\\x82\\x01\\n\\x02\\x82\\x01\\x01\\0\\xbb7\\xcd4\\xdc{k\\xc9\\xb2h\\x90\\xadJu\\xffF\\xba!\\n\\x08\\x8d\\xf5\\x19T\\xc9\\xfb\\x88\\xdb\\xf3\\xae\\xf2:\\x89\\x91<z\\xe6\\xab\\x06\\x1ak\\xcf\\xac-\\xe8^\\t$D\\xbab\\x9a~\\xd6\\xa3\\xa8~\\xe0Tu \\x05\\xacP\\xb7\\x9cc\\x1al0\\xdc\\xda\\x1f\\x19\\xb1\\xd7\\x1e\\xde\\xfd\\xd7\\xe0\\xcb\\x94\\x837\\xae\\xec\\x1fCN\\xdd{,\\xd2\\xbd.\\xa5/\\xe4\\xa9\\xb8\\xad:\\xd4\\x99\\xa4\\xb6%\\xe9\\x9bk\\0`\\x92`\\xffO!I\\x18\\xf7g\\x90\\xaba\\x06\\x9c\\x8f\\xf2\\xba\\xe9\\xb4\\xe9\\x922k\\xb5\\xf3W\\xe8]\\x1b\\xcd\\x8c\\x1d\\xab\\x95\\x04\\x95I\\xf35-\\x96\\xe3Im\\xddw\\xe3\\xfbIK\\xb4\\xacU\\x07\\xa9\\x8f\\x95\\xb3\\xb4#\\xbbLmE\\xf0\\xf6\\xa9\\xb2\\x950\\xb4\\xfdLU\\x8c'JW\\x14|\\x82\\x9d\\xcds\\x92\\xd3\\x16J\\x06\\x0c\\x8cP\\xd1\\x8f\\x1e\\t\\xbe\\x17\\xa1\\xe6!\\xca\\xfd\\x83\\xe5\\x10\\xbc\\x83\\xa5\\n\\xc4g(\\xf6s\\x14\\x14=Fv\\xc3\\x87\\x14\\x89!4M\\xaf\\x0fE\\x0c\\xa6I\\xa1\\xba\\xbb\\x9c\\xc5\\xb13\\x83)\\x85\\x02\\x03\\x01\\0\\x01\\xa3B0@0\\x0f\\x06\\x03U\\x1d\\x13\\x01\\x01\\xff\\x04\\x050\\x03\\x01\\x01\\xff0\\x0e\\x06\\x03U\\x1d\\x0f\\x01\\x01\\xff\\x04\\x04\\x03\\x02\\x01\\x860\\x1d\\x06\\x03U\\x1d\\x0e\\x04\\x16\\x04\\x14N\\\"T \\x18\\x95\\xe6\\xe3n\\xe6\\x0f\\xfa\\xfa\\xb9\\x12\\xed\\x06\\x17\\x8f90\\r\\x06\\t*\\x86H\\x86\\xf7\\r\\x01\\x01\\x0b\\x05\\0\\x03\\x82\\x01\\x01\\0`g(\\x94o\\x0eHc\\xeb1\\xdd\\xeag\\x18\\xd5\\x89}<\\xc5\\x8bJ\\x7f\\xe9\\xbe\\xdb+\\x17\\xdf\\xb0_sw*2\\x139\\x81gB\\x84#\\xf2Eg5\\xec\\x88\\xbf\\xf8\\x8f\\xb0a\\x0c4\\xa4\\xae L\\x84\\xc6\\xdb\\xf85\\xe1v\\xd9\\xdf\\xa6B\\xbb\\xc7D\\x08\\x86\\x7f6t$Z\\xdal\\r\\x14Y5\\xbd\\xf2I\\xdd\\xb6\\x1f\\xc9\\xb3\\rG*=\\x99/\\xbb\\\\\\xbb\\xb5\\xd4 \\xe1\\x99_SF\\x15\\xdbh\\x9b\\xf0\\xf30\\xd5>1\\xe2\\x8d\\x84\\x9e\\xe3\\x8a\\xda\\xda\\x96>5\\x13\\xa5_\\xf0\\xf9pPpGA\\x11W\\x19N\\xc0\\x8f\\xae\\x06\\xc4\\x95\\x13\\x17/\\x1b%\\x9fu\\xf2\\xb1\\x8e\\x99\\xa1o\\x13\\xb1Aq\\xfe\\x88*\\xc8O\\x10 U\\xd7\\xf3\\x14E\\xe5\\xe0D\\xf4\\xea\\x87\\x952\\x93\\x0e\\xfeSF\\xfa,\\x9d\\xff\\x8b\\\"\\xb9K\\xd9\\tE\\xa4\\xde\\xa4\\xb8\\x9aX\\xdd\\x1b}R\\x9f\\x8eYC\\x88\\x81\\xa4\\x9e&\\xd5o\\xad\\xdd\\r\\xc67}\\xed\\x03\\x92\\x1b\\xe5w_v\\xee<\\x8d\\xc4]V[\\xa2\\xd9fn\\xb357\\xe52\\xb6\")]",
+  "fields": {
+    "log.file": "F:\\Users\\schu\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.21.12\\src\\client\\tls13.rs",
+    "span_path": "websocket_connection > connect > connect_once",
+    "log.module_path": "rustls::client::tls13",
+    "log.target": "rustls::client::tls13",
+    "log.line": 679
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.030Z",
+  "level": "DEBUG",
+  "target": "websocket连接",
+  "message": "✅ TLS连接已建立"
+}
+{
+  "timestamp": "2025-07-29T16:38:25.030Z",
+  "level": "DEBUG",
+  "target": "websocket连接",
+  "message": "执行WebSocket握手...",
+  "fields": {
+    "span_path": "websocket_connection > connect > connect_once"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.108Z",
+  "level": "DEBUG",
+  "target": "websocket连接",
+  "message": "WebSocket握手成功",
+  "fields": {
+    "span_path": "websocket_connection > connect > connect_once"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.108Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.098 @ 118662.80",
+  "message": "连接 1 已建立",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:25.108Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "🔗 AggTradeClient 完整连接信息 - URL: wss://fstream.binance.com:443/stream?streams=btcusdt@aggTrade",
+  "fields": {
+    "stream_count": 1,
+    "connection_id": 1,
+    "log_type": "low_freq",
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.108Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 使用 /stream 端点，品种已在URL中指定: 1 个品种",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.108Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 品种列表: [\"btcusdt@aggTrade\"]",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.108Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "📋 /stream 端点将返回combined格式的消息",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.153Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.026 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.153Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "BTCUSDT",
-    "fields": {
-      "price": 118662.8,
-      "symbol": "BTCUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 118662.8
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.537Z",
+  "timestamp": "2025-07-29T16:38:25.153Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
+    "kline_offset": 0,
+    "global_symbol_index": 0,
     "span_path": "run_aggregation_loop > process_trade",
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 0,
-      "period_index": 0
-    },
     "period_index": 0,
-    "is_final": false,
-    "global_symbol_index": 0,
-    "kline_offset": 0
+    "is_final": true
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.153Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
-    "period_index": 1,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 1,
-      "period_index": 1
-    },
-    "span_path": "run_aggregation_loop > process_trade",
     "is_final": false,
+    "kline_offset": 1,
+    "period_index": 1,
     "global_symbol_index": 0,
-    "kline_offset": 1
+    "span_path": "run_aggregation_loop > process_trade"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.153Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
     "is_final": false,
     "period_index": 2,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 2,
-      "period_index": 2
-    },
-    "global_symbol_index": 0,
     "kline_offset": 2,
+    "global_symbol_index": 0,
     "span_path": "run_aggregation_loop > process_trade"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.153Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
-    "kline_offset": 3,
     "period_index": 3,
+    "is_final": false,
+    "global_symbol_index": 0,
+    "kline_offset": 3,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.153Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
     "span_path": "run_aggregation_loop > process_trade",
     "global_symbol_index": 0,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 3,
-      "period_index": 3
-    },
+    "is_final": false,
+    "period_index": 4,
+    "kline_offset": 4
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.153Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 5,
+    "global_symbol_index": 0,
+    "span_path": "run_aggregation_loop > process_trade",
+    "is_final": false,
+    "kline_offset": 5
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.153Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "global_symbol_index": 0,
+    "is_final": false,
+    "period_index": 6,
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 6
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.192Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.020 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.192Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.200Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.200Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.351Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 1.061 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.351Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.426Z",
+  "level": "DEBUG",
+  "target": "计算核心",
+  "message": "收到增量数据请求",
+  "fields": {
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.426Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到增量数据请求，开始扫描脏标记...",
+  "fields": {
+    "span_path": "run_aggregation_loop > process_deltas_request"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.426Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "增量数据打包完成，准备发送",
+  "fields": {
+    "dirty_kline_found": 7,
+    "span_path": "run_aggregation_loop > process_deltas_request"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.426Z",
+  "level": "TRACE",
+  "target": "网关任务",
+  "message": "从聚合器拉取到增量数据",
+  "fields": {
+    "span_path": "klagg_visual_test_lifecycle > run_visual_test_app > gateway_task",
+    "kline_count": 7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.426Z",
+  "level": "TRACE",
+  "target": "Pusher",
+  "message": "拉取到增量K线数据",
+  "fields": {
+    "kline_count": 7,
+    "batch_id": 1,
+    "span_path": "pusher_task"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.437Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.429 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.438Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.438Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "period_index": 0,
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 0,
+    "global_symbol_index": 0,
     "is_final": false
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.438Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
-    "is_final": false,
-    "span_path": "run_aggregation_loop > process_trade",
     "global_symbol_index": 0,
-    "period_index": 4,
-    "kline_offset": 4,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 4,
-      "period_index": 4
-    }
+    "is_final": false,
+    "period_index": 1,
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 1
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.438Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
-    "is_final": false,
     "global_symbol_index": 0,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 5,
-      "period_index": 5
-    },
-    "period_index": 5,
-    "kline_offset": 5,
+    "is_final": false,
+    "kline_offset": 2,
+    "period_index": 2,
     "span_path": "run_aggregation_loop > process_trade"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.538Z",
+  "timestamp": "2025-07-29T16:38:25.438Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "设置脏标记",
   "fields": {
-    "period_index": 6,
-    "fields": {
-      "global_symbol_index": 0,
-      "is_final": false,
-      "kline_offset": 6,
-      "period_index": 6
-    },
+    "global_symbol_index": 0,
+    "span_path": "run_aggregation_loop > process_trade",
+    "period_index": 3,
+    "kline_offset": 3,
+    "is_final": false
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.438Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "span_path": "run_aggregation_loop > process_trade",
+    "kline_offset": 4,
+    "global_symbol_index": 0,
+    "is_final": false,
+    "period_index": 4
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.438Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
+    "kline_offset": 5,
+    "global_symbol_index": 0,
+    "is_final": false,
+    "period_index": 5,
+    "span_path": "run_aggregation_loop > process_trade"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.438Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "设置脏标记",
+  "fields": {
     "is_final": false,
     "kline_offset": 6,
+    "span_path": "run_aggregation_loop > process_trade",
     "global_symbol_index": 0,
-    "span_path": "run_aggregation_loop > process_trade"
+    "period_index": 6
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.652Z",
+  "timestamp": "2025-07-29T16:38:25.586Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 8.259 @ 3854.40",
+  "message": "收到归集交易: BTCUSDT 0.928 @ 116988.70",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.652Z",
+  "timestamp": "2025-07-29T16:38:25.586Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "fields": {
-      "price": 3854.4,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.4
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.798Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 5.760 @ 3854.40",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.798Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.4,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.4
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.814Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.004 @ 118662.70",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.814Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "BTCUSDT",
-    "price": 118662.7,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 118662.7,
-      "symbol": "BTCUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.841Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 2.108 @ 3854.39",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.841Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.39,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.39,
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.858Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 31.369 @ 3854.40",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.859Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 1.410 @ 3854.41",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.859Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.4,
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.4,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.859Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.41,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.41,
-    "symbol": "ETHUSDT",
+    "global_index": 0,
+    "price": 116988.7,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.860Z",
+  "timestamp": "2025-07-29T16:38:25.624Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.42",
+  "message": "收到归集交易: BTCUSDT 0.027 @ 116988.70",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.860Z",
+  "timestamp": "2025-07-29T16:38:25.624Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.012 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.023 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "price": 3854.42,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.42,
-      "symbol": "ETHUSDT"
-    },
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.046 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.011 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.165 @ 3854.48",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.80",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
+    "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "price": 3854.48,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.48,
-      "symbol": "ETHUSDT"
-    },
+    "price": 116988.7,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.52",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "ETHUSDT",
-    "price": 3854.52,
-    "fields": {
-      "price": 3854.52,
-      "symbol": "ETHUSDT"
-    },
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.087 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.53",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "fields": {
-      "price": 3854.53,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.53,
+    "global_index": 0,
     "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT"
+    "price": 116988.8
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.866Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.54",
+  "message": "收到归集交易: BTCUSDT 0.100 @ 116988.70",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.867Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "span_path": "run_aggregation_loop",
-    "price": 3854.54,
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.54,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.870Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.067 @ 3854.57",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.870Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.57,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.57
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.876Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.58",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.58,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.58,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.080 @ 3854.58",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.58,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.58,
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.59",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.59,
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.59,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.61",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.61,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.61
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.036 @ 3854.63",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.63,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.63,
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.877Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.64",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.64,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "price": 3854.64,
+    "price": 116988.8,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.65",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.65,
-    "fields": {
-      "price": 3854.65,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.050 @ 3854.67",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.67,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.67,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.022 @ 3854.68",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.68,
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.68,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.69",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.69,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.69
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.70",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 3854.7,
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.7,
-      "symbol": "ETHUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.878Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.015 @ 3854.71",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.879Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.71,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "price": 3854.71
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.883Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.394 @ 3854.72",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.884Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "ETHUSDT",
-    "fields": {
-      "price": 3854.72,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.72,
+    "global_index": 0,
+    "price": 116988.7,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.955Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.026 @ 118662.80",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
+    "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.955Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "fields": {
-      "price": 118662.8,
-      "symbol": "BTCUSDT"
-    },
-    "symbol": "BTCUSDT",
-    "price": 118662.8,
+    "global_index": 0,
+    "price": 116988.8,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.955Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118662.90",
+  "message": "收到归集交易: BTCUSDT 0.044 @ 116988.80",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.955Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "BTCUSDT",
-    "price": 118662.9,
-    "fields": {
-      "price": 118662.9,
-      "symbol": "BTCUSDT"
-    },
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.956Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 15.249 @ 3854.73",
+  "message": "收到归集交易: BTCUSDT 0.007 @ 116988.70",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.956Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "ETHUSDT",
-    "price": 3854.73,
+    "price": 116988.7,
     "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.73,
-      "symbol": "ETHUSDT"
-    }
+    "global_index": 0
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118663.40",
+  "message": "收到归集交易: BTCUSDT 0.090 @ 116988.80",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "price": 118663.4,
-    "span_path": "run_aggregation_loop",
-    "symbol": "BTCUSDT",
-    "fields": {
-      "price": 118663.4,
-      "symbol": "BTCUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.10",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "symbol": "BTCUSDT",
-    "price": 118664.1,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 118664.1,
-      "symbol": "BTCUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.30",
-  "fields": {
-    "fields": {},
-    "span_path": "websocket_connection"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 118664.3,
-    "fields": {
-      "price": 118664.3,
-      "symbol": "BTCUSDT"
-    },
-    "symbol": "BTCUSDT",
+    "price": 116988.8,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118664.70",
+  "message": "收到归集交易: BTCUSDT 0.009 @ 116988.70",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "price": 118664.7,
-    "symbol": "BTCUSDT",
-    "fields": {
-      "price": 118664.7,
-      "symbol": "BTCUSDT"
-    },
+    "price": 116988.7,
+    "global_index": 0,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118665.40",
+  "message": "收到归集交易: BTCUSDT 0.180 @ 116988.80",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 118665.4,
-    "symbol": "BTCUSDT",
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 118665.4,
-      "symbol": "BTCUSDT"
-    }
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.002 @ 118665.50",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "span_path": "run_aggregation_loop",
-    "symbol": "BTCUSDT",
-    "fields": {
-      "price": 118665.5,
-      "symbol": "BTCUSDT"
-    },
-    "price": 118665.5
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: BTCUSDT 0.001 @ 118665.60",
-  "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.958Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "price": 118665.6,
-    "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 118665.6,
-      "symbol": "BTCUSDT"
-    },
-    "symbol": "BTCUSDT"
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.962Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.010 @ 3854.74",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.70",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.963Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.74,
-      "symbol": "ETHUSDT"
-    },
-    "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT",
-    "price": 3854.74
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.963Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.76",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.963Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.77",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.963Z",
-  "level": "TRACE",
-  "target": "计算核心",
-  "message": "收到交易数据",
-  "fields": {
-    "fields": {
-      "price": 3854.76,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "span_path": "run_aggregation_loop",
-    "price": 3854.76
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.963Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.036 @ 3854.80",
-  "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.963Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
+    "price": 116988.8,
     "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.77,
-      "symbol": "ETHUSDT"
-    },
-    "symbol": "ETHUSDT",
-    "price": 3854.77
+    "global_index": 0
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.963Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.012 @ 3854.81",
+  "message": "收到归集交易: BTCUSDT 0.020 @ 116988.80",
   "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.963Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "ETHUSDT",
-    "price": 3854.8,
-    "fields": {
-      "price": 3854.8,
-      "symbol": "ETHUSDT"
-    },
+    "global_index": 0,
+    "price": 116988.7,
     "span_path": "run_aggregation_loop"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.963Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "symbol": "ETHUSDT",
     "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.81,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.81
+    "global_index": 0,
+    "price": 116988.8
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.965Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.060 @ 3854.82",
+  "message": "收到归集交易: BTCUSDT 0.068 @ 116988.70",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.965Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.83",
-  "fields": {
-    "fields": {},
     "span_path": "websocket_connection"
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.965Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.039 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "fields": {
-      "price": 3854.82,
-      "symbol": "ETHUSDT"
-    },
-    "price": 3854.82,
     "span_path": "run_aggregation_loop",
-    "symbol": "ETHUSDT"
+    "global_index": 0,
+    "price": 116988.7
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.966Z",
-  "level": "INFO",
-  "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.006 @ 3854.84",
-  "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
-  }
-}
-{
-  "timestamp": "2025-07-28T13:45:50.966Z",
+  "timestamp": "2025-07-29T16:38:25.625Z",
   "level": "TRACE",
   "target": "计算核心",
   "message": "收到交易数据",
   "fields": {
-    "price": 3854.83,
-    "symbol": "ETHUSDT",
     "span_path": "run_aggregation_loop",
-    "fields": {
-      "price": 3854.83,
-      "symbol": "ETHUSDT"
-    }
+    "global_index": 0,
+    "price": 116988.8
   }
 }
 {
-  "timestamp": "2025-07-28T13:45:50.966Z",
+  "timestamp": "2025-07-29T16:38:25.672Z",
   "level": "INFO",
   "target": "归集交易",
-  "message": "连接 1 收到归集交易: ETHUSDT 0.030 @ 3854.85",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.70",
   "fields": {
-    "span_path": "websocket_connection",
-    "fields": {}
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.672Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.005 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.672Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.121 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.672Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.003 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.010 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7,
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.018 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.149 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.644 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.102 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.072 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.009 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.028 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.041 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.089 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.005 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.003 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.010 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.009 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.158 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.333 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.071 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.002 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.082 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.167 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.212 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.050 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.003 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.008 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.004 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.103 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.008 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.152 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.044 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.080 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.003 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.017 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.035 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.006 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.088 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.017 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.007 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.033 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.009 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8,
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.020 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.110 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.064 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7,
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.055 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.149 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.673Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.001 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.149 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.013 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.149 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 116988.7,
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.054 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "global_index": 0,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.007 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.049 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.454 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "price": 116988.8,
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.004 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "global_index": 0,
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 1.200 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.004 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.7,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.014 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "price": 116988.8,
+    "span_path": "run_aggregation_loop",
+    "global_index": 0
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.103 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.491 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.8
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.048 @ 116988.70",
+  "fields": {
+    "span_path": "websocket_connection"
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "TRACE",
+  "target": "计算核心",
+  "message": "收到交易数据",
+  "fields": {
+    "span_path": "run_aggregation_loop",
+    "global_index": 0,
+    "price": 116988.7
+  }
+}
+{
+  "timestamp": "2025-07-29T16:38:25.678Z",
+  "level": "INFO",
+  "target": "归集交易",
+  "message": "收到归集交易: BTCUSDT 0.178 @ 116988.80",
+  "fields": {
+    "span_path": "websocket_connection"
   }
 }

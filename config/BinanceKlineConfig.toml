@@ -11,7 +11,8 @@ supported_intervals = ["1m", "5m", "30m", "1h", "4h", "1d", "1w"]
 # 系统设计的最大品种数量。这是一个硬性上限，
 # Gateway 和 Worker 的内存分配都将基于此值。
 # 它必须足够大以容纳所有当前和未来可能上市的品种。
-max_symbols = 10000
+# 临时调整为较小值以避免栈溢出
+max_symbols = 10
 
 # 缓冲区切换间隔（毫秒）
 buffer_swap_interval_ms = 1000
@@ -79,7 +80,7 @@ timeout_alert_threshold = 5
 [logging]
 # 日志系统总开关
 enabled = true
-log_level = "info"
+log_level = "trace"
 log_transport = "named_pipe"
 pipe_name = "kline_mcp_log_pipe"
 # 是否启用完全追踪功能（包括跨线程上下文传递）
@@ -98,4 +99,4 @@ mcp_port = 9001
 # ============================================================
 [build]
 # 编译模式: "debug" 或 "release"
-mode = "release"
+mode = "debug"

@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use chrono::Utc;
 
+/// EMA平滑因子，值越小，平滑效果越强，对瞬时抖动越不敏感
+const EMA_ALPHA: f64 = 0.2;
+
 /// 服务器时间同步管理器
 ///
 /// 负责两个主要任务：
@@ -21,6 +24,8 @@ pub struct ServerTimeSyncManager {
     network_delay: Arc<AtomicI64>,
     /// 最后一次同步时间（毫秒时间戳）
     last_sync_time: Arc<AtomicI64>,
+    /// 指数移动平均网络延迟（毫秒）
+    avg_network_delay: Arc<AtomicI64>,
 }
 
 impl ServerTimeSyncManager {
@@ -32,6 +37,7 @@ impl ServerTimeSyncManager {
             time_diff: Arc::new(AtomicI64::new(0)), // 初始时间差为0
             network_delay: Arc::new(AtomicI64::new(0)), // 初始网络延迟为0
             last_sync_time: Arc::new(AtomicI64::new(0)), // 初始最后同步时间为0
+            avg_network_delay: Arc::new(AtomicI64::new(0)), // 初始平均网络延迟为0
         }
     }
 
@@ -45,6 +51,12 @@ impl ServerTimeSyncManager {
     #[instrument(target = "服务器校时", skip_all)]
     pub fn get_network_delay(&self) -> i64 {
         self.network_delay.load(Ordering::SeqCst)
+    }
+
+    /// 获取平均网络延迟
+    #[instrument(target = "服务器校时", skip_all)]
+    pub fn get_avg_network_delay(&self) -> i64 {
+        self.avg_network_delay.load(Ordering::SeqCst)
     }
 
     /// 获取最后一次同步时间
@@ -102,6 +114,31 @@ impl ServerTimeSyncManager {
         optimal_send_time
     }
 
+    /// 使用指数移动平均更新网络延迟
+    fn update_ema_delay(&self, new_delay: i64) {
+        // 1. 更新瞬时延迟
+        self.network_delay.store(new_delay, Ordering::SeqCst);
+
+        // 2. 原子地更新指数移动平均延迟
+        let old_avg = self.avg_network_delay.load(Ordering::Relaxed);
+
+        let new_avg = if old_avg == 0 {
+            // 如果是第一次，直接使用当前值
+            new_delay
+        } else {
+            // EMA 公式: new_avg = alpha * new_value + (1 - alpha) * old_avg
+            (EMA_ALPHA * new_delay as f64 + (1.0 - EMA_ALPHA) * old_avg as f64).round() as i64
+        };
+
+        self.avg_network_delay.store(new_avg, Ordering::SeqCst);
+
+        info!(target: "服务器校时",
+            instant_delay = new_delay,
+            ema_delay = new_avg,
+            "网络延迟已更新 (EMA)"
+        );
+    }
+
     /// 只进行一次服务器时间同步，不启动定时任务
     #[instrument(target = "服务器校时", skip_all, err)]
     pub async fn sync_time_once(&self) -> Result<(i64, i64)> {
@@ -117,8 +154,8 @@ impl ServerTimeSyncManager {
         // 计算网络延迟（往返时间的一半）
         let network_delay = start_time.elapsed().as_millis() as i64 / 2;
 
-        // 更新网络延迟
-        self.network_delay.store(network_delay, Ordering::SeqCst);
+        // 使用EMA更新网络延迟
+        self.update_ema_delay(network_delay);
 
         info!(target: "服务器校时", "币安服务器时间: {}, 网络延迟: {}毫秒", server_time.server_time, network_delay);
 
@@ -158,13 +195,21 @@ impl ServerTimeSyncManager {
         Ok(())
     }
 
+    /// 创建用于异步任务的克隆
+    fn clone_for_task(&self) -> Self {
+        Self {
+            api: self.api.clone(),
+            time_diff: self.time_diff.clone(),
+            network_delay: self.network_delay.clone(),
+            last_sync_time: self.last_sync_time.clone(),
+            avg_network_delay: self.avg_network_delay.clone(),
+        }
+    }
+
     /// 启动独立的时间同步任务（每分钟的第30秒运行）
     #[instrument(target = "服务器校时", skip_all, err)]
     async fn start_time_sync_task(&self) -> Result<tokio::task::JoinHandle<()>> {
-        let _api = self.api.clone();
-        let time_diff = self.time_diff.clone();
-        let network_delay = self.network_delay.clone();
-        let last_sync_time = self.last_sync_time.clone();
+        let self_clone = self.clone_for_task();
 
         info!(target: "服务器校时", "启动独立的时间同步任务，将在每分钟的第30秒运行");
 
@@ -202,21 +247,21 @@ impl ServerTimeSyncManager {
                         // 计算网络延迟（往返时间的一半）
                         let new_network_delay = start_time.elapsed().as_millis() as i64 / 2;
 
-                        // 更新网络延迟
-                        let old_network_delay = network_delay.swap(new_network_delay, Ordering::SeqCst);
+                        // 使用EMA更新网络延迟
+                        self_clone.update_ema_delay(new_network_delay);
 
                         // 计算时间差值
                         let local_time = Utc::now().timestamp_millis();
                         let new_time_diff = server_time.server_time - local_time;
 
                         // 更新共享的时间差值
-                        let old_time_diff = time_diff.swap(new_time_diff, Ordering::SeqCst);
+                        let old_time_diff = self_clone.time_diff.swap(new_time_diff, Ordering::SeqCst);
 
                         // 更新最后同步时间
-                        last_sync_time.store(local_time, Ordering::SeqCst);
+                        self_clone.last_sync_time.store(local_time, Ordering::SeqCst);
 
-                        info!(target: "服务器校时", "时间同步任务: 更新时间差值: {}毫秒 (原差值: {}毫秒), 网络延迟: {}毫秒 (原延迟: {}毫秒)",
-                            new_time_diff, old_time_diff, new_network_delay, old_network_delay);
+                        info!(target: "服务器校时", "时间同步任务: 更新时间差值: {}毫秒 (原差值: {}毫秒)",
+                            new_time_diff, old_time_diff);
                     },
                     Err(e) => {
                         error!(target: "服务器校时", "时间同步任务: 获取服务器时间失败: {}", e);

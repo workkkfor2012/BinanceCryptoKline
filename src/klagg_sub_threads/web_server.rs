@@ -6,6 +6,7 @@
 use crate::{
     klagg_sub_threads::{DeltaBatch, KlineData},
 };
+use rust_decimal::prelude::*;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -134,11 +135,11 @@ async fn pusher_task(
                         klines_by_symbol.entry(symbol.clone()).or_default().push(ApiKline {
                             period: period.clone(),
                             open_time: kline.open_time,
-                            open: kline.open,
-                            high: kline.high,
-                            low: kline.low,
-                            close: kline.close,
-                            volume: kline.volume,
+                            open: kline.open.to_f64().unwrap_or(0.0),
+                            high: kline.high.to_f64().unwrap_or(0.0),
+                            low: kline.low.to_f64().unwrap_or(0.0),
+                            close: kline.close.to_f64().unwrap_or(0.0),
+                            volume: kline.volume.to_f64().unwrap_or(0.0),
                             is_final: kline.is_final,
                         });
                     }

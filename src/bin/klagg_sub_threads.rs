@@ -11,6 +11,8 @@
 
 use anyhow::Result;
 use chrono;
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use kline_server::klagg_sub_threads::{self as klagg, DeltaBatch, InitialKlineData, WorkerCmd};
 use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
@@ -35,7 +37,6 @@ use tracing::{error, info, instrument, span, warn, trace, Instrument, Level};
 
 // --- 常量定义 ---
 const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
-const CLOCK_SAFETY_MARGIN_MS: u64 = 10;
 const MIN_SLEEP_MS: u64 = 10;
 const HEALTH_CHECK_INTERVAL_S: u64 = 10; // 新的监控间隔
 
@@ -52,8 +53,37 @@ const HEALTH_CHECK_INTERVAL_S: u64 = 10; // 新的监控间隔
 
 
 
+/// 启动器 main 函数
+/// 它的唯一职责是创建一个具有更大栈空间的线程来运行我们的应用主逻辑。
 fn main() -> Result<()> {
+    // 检查一个环境变量，以防止在新线程中再次创建线程，从而导致无限递归。
+    if std::env::var("KLINE_MAIN_THREAD").is_err() {
+        // 设置环境变量作为标记。
+        std::env::set_var("KLINE_MAIN_THREAD", "1");
 
+        // 使用 Builder 创建一个新线程，并为其分配一个更大的栈。
+        // 32MB 栈空间，确保足够的空间处理复杂的初始化逻辑
+        let handle = std::thread::Builder::new()
+            .name("main-with-large-stack".to_string())
+            .stack_size(32 * 1024 * 1024) // 32MB 栈空间
+            .spawn(move || {
+                // 在这个拥有充裕栈空间的新线程中，执行我们真正的 main 逻辑。
+                actual_main()
+            })?;
+
+        // 等待新线程执行结束，并返回其结果。
+        // 这里的 unwrap 是安全的，因为如果子线程 panic，我们期望主程序也随之 panic 并退出。
+        return handle.join().unwrap();
+    }
+
+    // 如果环境变量已设置，说明我们已经在正确的线程中，直接执行主逻辑。
+    actual_main()
+}
+
+/// 应用程序的实际主函数 (由原来的 main 函数重命名而来)
+fn actual_main() -> Result<()> {
+    // [调试] 确认我们在正确的线程中
+    eprintln!("🔍 [调试] actual_main 开始执行，线程名: {:?}", std::thread::current().name());
 
     // 1. ==================== 日志系统必须最先初始化 ====================
     // 使用 block_on 是因为 init_ai_logging 是 async 的
@@ -63,6 +93,8 @@ fn main() -> Result<()> {
         .build()
         .unwrap()
         .block_on(init_ai_logging())?;
+
+    eprintln!("🔍 [调试] 日志系统初始化完成");
 
     // 设置一个 panic hook 来捕获未处理的 panic
     let original_hook = std::panic::take_hook();
@@ -494,17 +526,23 @@ async fn run_clock_task(
             continue;
         }
 
-        // 【核心修改】计算下一个服务器时间整分钟点
+        // 【核心修改】计算动态等待窗口：平均网络延迟 * 2 + 100ms
+        let avg_delay = time_sync_manager.get_avg_network_delay();
+        let dynamic_grace_period_ms = (avg_delay * 2 + 100).max(100); // 确保至少100ms
+
+        // 计算下一个服务器时间整分钟点
         let next_tick_point = (now / CLOCK_INTERVAL_MS + 1) * CLOCK_INTERVAL_MS;
-        let wakeup_time = next_tick_point + CLOCK_SAFETY_MARGIN_MS as i64;
+        let wakeup_time = next_tick_point + dynamic_grace_period_ms;
         let sleep_duration_ms = (wakeup_time - now).max(MIN_SLEEP_MS as i64) as u64;
 
         trace!(target: "全局时钟",
             now,
+            avg_network_delay = avg_delay,
+            dynamic_grace_period_ms,
             next_tick_point,
             wakeup_time,
             sleep_duration_ms,
-            "计算下一次唤醒时间"
+            "计算下一次唤醒时间（动态等待窗口）"
         );
         sleep(Duration::from_millis(sleep_duration_ms)).await;
 
@@ -622,11 +660,11 @@ async fn run_symbol_manager(
         }
     });
 
-    // 辅助函数，用于安全地解析浮点数字符串
-    let parse_or_zero = |s: &str, field_name: &str, symbol: &str| -> f64 {
-        s.parse::<f64>().unwrap_or_else(|_| {
-            warn!(target: "品种管理器", %symbol, field_name, value = %s, "无法解析新品种的初始数据，将使用0.0");
-            0.0
+    // 辅助函数，用于安全地解析 Decimal 字符串
+    let parse_or_zero = |s: &str, field_name: &str, symbol: &str| -> Decimal {
+        Decimal::from_str(s).unwrap_or_else(|_| {
+            warn!(target: "品种管理器", %symbol, field_name, value = %s, "无法解析新品种的初始数据，将使用 Decimal::ZERO");
+            Decimal::ZERO
         })
     };
 

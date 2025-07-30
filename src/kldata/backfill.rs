@@ -31,8 +31,8 @@ static API_REQUEST_STATS: Lazy<(AtomicUsize, AtomicUsize, AtomicUsize)> = Lazy::
 
 // 日志间隔，每30秒输出一次摘要
 const BACKFILL_LOG_INTERVAL: u64 = 30;
-const CONCURRENCY: usize = 50; // 第一次补齐并发数
-const SECOND_ROUND_CONCURRENCY: usize = 400; // 第二次补齐并发数
+const CONCURRENCY: usize = 20; // 第一次补齐并发数
+const SECOND_ROUND_CONCURRENCY: usize = 200; // 第二次补齐并发数
 
 // [新增] 连接池相关常量
 const POOL_TARGET_SIZE: usize = 200; // 目标池大小
@@ -290,9 +290,25 @@ impl KlineBackfiller {
         let exchange_info = if self.test_mode {
             None // 测试模式下不需要获取交易所信息
         } else {
-            // [修改] 使用临时客户端获取交易所信息
+            // [修改] 使用临时客户端获取交易所信息，并添加错误处理
             let temp_client = BinanceApi::create_new_client()?;
-            Some(BinanceApi::get_exchange_info(&temp_client).await?)
+            match BinanceApi::get_exchange_info(&temp_client).await {
+                Ok(info) => Some(info),
+                Err(e) => {
+                    // 添加HTTP错误状态码调试信息
+                    if let AppError::HttpError(ref re) = e {
+                        if let Some(status) = re.status() {
+                            warn!(
+                                log_type = "low_freq",
+                                message = "获取交易所信息HTTP错误状态码调试",
+                                status_code = status.as_u16(),
+                                error_message = %e,
+                            );
+                        }
+                    }
+                    return Err(e);
+                }
+            }
         };
 
         let all_symbols = self.get_symbols_with_exchange_info(exchange_info.as_ref()).await?;
@@ -527,10 +543,7 @@ impl KlineBackfiller {
         Ok(())
     }
 
-    /// 执行一批下载任务，并返回失败的任务列表
-    async fn execute_tasks(&self, tasks: Vec<DownloadTask>, _loop_name: &str) -> Vec<(DownloadTask, AppError)> {
-        self.execute_tasks_with_concurrency(tasks, _loop_name, CONCURRENCY).await
-    }
+
 
     /// 执行一批下载任务，并返回失败的任务列表（可指定并发数）
     async fn execute_tasks_with_concurrency(&self, tasks: Vec<DownloadTask>, _loop_name: &str, concurrency: usize) -> Vec<(DownloadTask, AppError)> {
@@ -684,20 +697,42 @@ impl KlineBackfiller {
                 TaskResult::Success(count)
             },
             Err(e) => {
-                // ✨ [修改] 扩展错误检查，当发生连接、超时、429或418错误时，剔除当前客户端
-                if let AppError::HttpError(ref re) = e {
-                    let is_fatal_error = re.is_connect() || re.is_timeout();
-
-                    let is_ban_error = if let Some(status) = re.status() {
-                        // 429 Too Many Requests 或 418 I'm a teapot (通常表示IP被封禁)
-                        status.as_u16() == 429 || status.as_u16() == 418
+                // ✨ [修改] HTTP错误和包含"error"的响应都剔除客户端，确保连接池的健康性
+                let should_remove_client = if let AppError::HttpError(ref re) = e {
+                    if let Some(status) = re.status() {
+                        let status_code = status.as_u16();
+                        // 打印状态码用于调试
+                        warn!(
+                            log_type = "low_freq",
+                            message = "HTTP错误状态码调试",
+                            status_code = status_code,
+                            error_message = %e,
+                        );
+                    } else {
+                        warn!(
+                            log_type = "low_freq",
+                            message = "HTTP错误但无状态码",
+                            error_message = %e,
+                        );
+                    }
+                    true // 所有HTTP错误都移除客户端
+                } else {
+                    // 检查错误消息是否包含"error"关键词
+                    let error_msg = e.to_string().to_lowercase();
+                    if error_msg.contains("error") {
+                        warn!(
+                            log_type = "low_freq",
+                            message = "错误消息包含error关键词，移除客户端",
+                            error_message = %e,
+                        );
+                        true
                     } else {
                         false
-                    };
-
-                    if is_fatal_error || is_ban_error {
-                        self.remove_client_from_pool(&client).await;
                     }
+                };
+
+                if should_remove_client {
+                    self.remove_client_from_pool(&client).await;
                 }
                 TaskResult::Failure { task, error: e }
             }
@@ -1170,160 +1205,7 @@ impl KlineBackfiller {
         }
     }
 
-    /// 验证补齐完整性：检查所有品种的所有周期是否都补齐到最新
-    /// 使用BTCUSDT作为标准，检查其他品种是否与BTCUSDT的最新时间戳一致
-    async fn verify_backfill_completeness(&self) -> Result<()> {
-        info!(log_type = "low_freq", message = "开始验证补齐完整性，使用BTCUSDT作为标准...");
 
-        // 获取当前活跃的交易对列表
-        let temp_client = BinanceApi::create_new_client()?;
-        let (active_symbols, _delisted_symbols) = BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?;
-
-        // 获取数据库中所有已存在的K线表
-        let all_existing_tables = self.get_existing_kline_tables()?;
-
-        // 只验证当前活跃的交易对
-        let existing_tables: Vec<(String, String)> = all_existing_tables
-            .into_iter()
-            .filter(|(symbol, _interval)| active_symbols.contains(symbol))
-            .collect();
-
-        info!(
-            log_type = "low_freq",
-            message = "过滤后的验证范围",
-            active_symbols_count = active_symbols.len(),
-            tables_to_verify = existing_tables.len(),
-        );
-
-        if existing_tables.is_empty() {
-            return Err(AppError::InitializationError("数据库中没有找到任何K线表".to_string()));
-        }
-
-        // 按周期分组存储最后一根K线的时间戳
-        let mut interval_timestamps = std::collections::HashMap::new();
-
-        // 遍历所有表，获取最后一根K线的时间戳
-        for (symbol, interval) in &existing_tables {
-            if let Some(last_timestamp) = self.db.get_latest_kline_timestamp(symbol, interval)? {
-                interval_timestamps
-                    .entry(interval.clone())
-                    .or_insert_with(std::collections::HashMap::new)
-                    .insert(symbol.clone(), last_timestamp);
-            }
-        }
-
-        // 使用BTCUSDT作为标准检查所有品种的时间戳
-        let reference_symbol = "BTCUSDT";
-        let mut verification_errors = Vec::new();
-        let mut total_symbols_checked = 0;
-        let mut inconsistent_symbols_count = 0;
-
-        // 获取所有周期并排序
-        let mut intervals: Vec<String> = interval_timestamps.keys().cloned().collect();
-        intervals.sort();
-
-        for interval in &intervals {
-            if let Some(symbols_data) = interval_timestamps.get(interval) {
-                // 检查BTCUSDT是否存在于此周期
-                if let Some(&btc_timestamp) = symbols_data.get(reference_symbol) {
-                    let btc_datetime = self.timestamp_to_datetime(btc_timestamp);
-
-                    // 统计与BTCUSDT时间戳不一致的品种
-                    let mut inconsistent_symbols = Vec::new();
-
-                    for (symbol, &timestamp) in symbols_data {
-                        if symbol == reference_symbol {
-                            continue;
-                        }
-                        total_symbols_checked += 1;
-
-                        if timestamp != btc_timestamp {
-                            inconsistent_symbols.push((symbol.clone(), timestamp));
-                            inconsistent_symbols_count += 1;
-                        }
-                    }
-
-                    if !inconsistent_symbols.is_empty() {
-                        let error_msg = format!(
-                            "周期 {} 中有 {} 个品种的时间戳与 {} 不一致 (标准时间: {})",
-                            interval,
-                            inconsistent_symbols.len(),
-                            reference_symbol,
-                            btc_datetime
-                        );
-                        verification_errors.push(error_msg);
-
-                        // 为每个不一致的品种单独输出日志
-                        for (symbol, timestamp) in &inconsistent_symbols {
-                            let timestamp_str = self.timestamp_to_datetime(*timestamp);
-                            let time_diff_hours = (btc_timestamp - timestamp) / (1000 * 60 * 60);
-                            let time_diff_desc = if time_diff_hours > 0 {
-                                format!("落后{}小时", time_diff_hours)
-                            } else if time_diff_hours < 0 {
-                                format!("超前{}小时", -time_diff_hours)
-                            } else {
-                                "时间相同但毫秒不同".to_string()
-                            };
-
-                            warn!(
-                                log_type = "low_freq",
-                                message = "品种时间戳不一致",
-                                symbol = symbol,
-                                interval = interval,
-                                symbol_timestamp = timestamp_str,
-                                reference_symbol = reference_symbol,
-                                reference_timestamp = btc_datetime,
-                                time_difference = time_diff_desc,
-                            );
-                        }
-                    } else {
-                        info!(
-                            log_type = "low_freq",
-                            message = "周期验证通过",
-                            interval = interval,
-                            symbols_count = symbols_data.len() - 1, // 减去BTCUSDT本身
-                            reference_timestamp = btc_datetime,
-                        );
-                    }
-                } else {
-                    let error_msg = format!("周期 {} 中没有找到标准品种 {} 的数据", interval, reference_symbol);
-                    verification_errors.push(error_msg);
-                    warn!(
-                        log_type = "low_freq",
-                        message = "标准品种缺失",
-                        interval = interval,
-                        reference_symbol = reference_symbol,
-                    );
-                }
-            }
-        }
-
-        // 输出验证结果摘要
-        info!(
-            log_type = "low_freq",
-            message = "补齐完整性验证结果摘要",
-            total_intervals_checked = intervals.len(),
-            total_symbols_checked = total_symbols_checked,
-            inconsistent_symbols_count = inconsistent_symbols_count,
-            verification_errors_count = verification_errors.len(),
-            consistency_rate = if total_symbols_checked > 0 {
-                format!("{:.1}%", ((total_symbols_checked - inconsistent_symbols_count) as f64 / total_symbols_checked as f64) * 100.0)
-            } else {
-                "N/A".to_string()
-            },
-        );
-
-        if !verification_errors.is_empty() {
-            let combined_error = format!(
-                "补齐完整性验证发现 {} 个问题：{}",
-                verification_errors.len(),
-                verification_errors.join("; ")
-            );
-            return Err(AppError::InitializationError(combined_error));
-        }
-
-        Ok(())
-    }
 
 
 
@@ -1414,6 +1296,17 @@ impl KlineBackfiller {
         let exchange_info = match BinanceApi::get_exchange_info(&temp_client).await {
             Ok(info) => info,
             Err(e) => {
+                // 添加HTTP错误状态码调试信息
+                if let AppError::HttpError(ref re) = e {
+                    if let Some(status) = re.status() {
+                        warn!(
+                            log_type = "low_freq",
+                            message = "清理时获取交易所信息HTTP错误状态码调试",
+                            status_code = status.as_u16(),
+                            error_message = %e,
+                        );
+                    }
+                }
                 warn!(
                     log_type = "low_freq",
                     message = "无法获取交易所信息以进行清理，跳过本次清理",

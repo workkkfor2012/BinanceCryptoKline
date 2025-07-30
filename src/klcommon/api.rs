@@ -115,15 +115,8 @@ impl BinanceApi {
 
         let response = request.send().await.map_err(AppError::from)?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await?;
-            let api_error = AppError::ApiError(format!(
-                "从fapi获取交易所信息失败: {} - {}",
-                status, text
-            ));
-            return Err(api_error);
-        }
+        // ✨ [修改] 使用error_for_status()来保留HTTP状态码信息，便于上游进行精细化错误处理
+        let response = response.error_for_status().map_err(AppError::from)?;
 
         let response_text = response.text().await?;
         let exchange_info: ExchangeInfo = serde_json::from_str(&response_text)

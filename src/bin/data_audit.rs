@@ -629,7 +629,7 @@ async fn fetch_binance_klines_with_pool(
                 let status = resp.status();
 
                 // 检查是否需要移除客户端
-                if status.as_u16() == 429 || status.as_u16() == 418 {
+                if status.as_u16() == 429 || status.as_u16() == 418 || status.as_u16() == 451 {
                     auditor.remove_client_from_pool(&client).await;
                 }
 
