@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, trace}; // 导入 error, info 和 trace 宏
+use tracing::{error, info, trace, warn}; // 导入 error, info, trace 和 warn 宏
 use kline_macros::perf_profile;
 use chrono::TimeZone; // 添加TimeZone导入
 
@@ -125,81 +125,156 @@ impl BinanceApi {
         Ok(exchange_info)
     }
 
-    /// [重构] 获取正在交易的U本位永续合约，同时返回需要删除的已下架品种 - 接受 client 作为参数
+    /// [新增] 通用的交易所信息获取重试方法 - 每次重试都创建新连接
     #[perf_profile]
-    pub async fn get_trading_usdt_perpetual_symbols(client: &Client) -> Result<(Vec<String>, Vec<String>)> {
-        const MAX_RETRIES: usize = 5;
-        const RETRY_INTERVAL: u64 = 1;
+    pub async fn retry_get_exchange_info(
+        max_retries: usize,
+        retry_interval_secs: u64,
+        context: &str
+    ) -> Result<ExchangeInfo> {
+        let mut last_error = None;
 
-        for retry in 0..MAX_RETRIES {
-            match Self::get_exchange_info(client).await {
+        for retry in 0..max_retries {
+            // 每次重试都创建新的客户端连接
+            let client = match Self::create_new_client() {
+                Ok(client) => client,
+                Err(e) => {
+                    warn!(
+                        log_type = "low_freq",
+                        message = "创建HTTP客户端失败",
+                        context = context,
+                        error_message = %e,
+                        retry_attempt = retry + 1,
+                        max_retries = max_retries,
+                    );
+                    last_error = Some(e);
+
+                    // 如果不是最后一次重试，等待后继续
+                    if retry < max_retries - 1 {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_interval_secs)).await;
+                    }
+                    continue;
+                }
+            };
+
+            match Self::get_exchange_info(&client).await {
                 Ok(exchange_info) => {
-                    let mut trading_symbols = Vec::new();
-                    let mut delisted_symbols = Vec::new();
-
-                    for symbol in &exchange_info.symbols {
-                        let is_usdt = symbol.symbol.ends_with("USDT");
-                        let is_perpetual = symbol.contract_type == "PERPETUAL";
-
-                        // 只处理USDT永续合约
-                        if !is_usdt  || !is_perpetual {
-                            continue;
-                        }
-
-                        // ✨ [修改] 根据状态进行不同处理
-                        match symbol.status.as_str() {
-                            "TRADING" => {
-                                // 正常交易状态，加入交易列表
-                                trading_symbols.push(symbol.symbol.clone());
-                            },
-                            "CLOSE" | "SETTLING" => {
-                                // 已下架状态（包括CLOSE和SETTLING），加入删除列表
-                                delisted_symbols.push(symbol.symbol.clone());
-                                // 注意：这里只是发现已下架品种，具体是否需要删除数据
-                                // 要等到backfill模块检查数据库中是否存在相关数据后才能确定
-                            },
-                            _ => {
-                                // 其他未知状态，记录日志
-                                info!(
-                                    log_type = "low_freq",
-                                    message = "发现未知状态的品种",
-                                    symbol = %symbol.symbol,
-                                    status = %symbol.status,
-                                    note = "非TRADING、CLOSE或SETTLING状态，需要关注",
-                                );
-                            }
-                        }
+                    if retry > 0 {
+                        info!(
+                            log_type = "low_freq",
+                            message = "获取交易所信息重试成功",
+                            context = context,
+                            retry_count = retry,
+                        );
                     }
-
-                    if trading_symbols.is_empty() {
-                        if retry == MAX_RETRIES - 1 {
-                            return Err(AppError::ApiError("获取U本位永续合约交易对失败，已重试5次但未获取到任何交易对".to_string()));
-                        }
-                    } else {
-                        return Ok((trading_symbols, delisted_symbols));
-                    }
+                    return Ok(exchange_info);
                 },
                 Err(e) => {
-                    if retry == MAX_RETRIES - 1 {
-                        let final_error = AppError::ApiError(format!("获取交易所信息失败，已重试{}次: {}", MAX_RETRIES, e));
-                        // ✨ [新增] 记录决策变量和错误链
-                        error!(
-                            log_type = "low_freq", // 这是一个低频但关键的失败事件
-                            max_retries = MAX_RETRIES,
-                            error_chain = format!("{:#}", e),
-                            message = "获取交易所信息失败，已达到最大重试次数"
+                    // 添加HTTP错误状态码调试信息
+                    if let AppError::HttpError(ref re) = e {
+                        if let Some(status) = re.status() {
+                            warn!(
+                                log_type = "low_freq",
+                                message = "获取交易所信息HTTP错误状态码调试",
+                                context = context,
+                                status_code = status.as_u16(),
+                                error_message = %e,
+                                retry_attempt = retry + 1,
+                                max_retries = max_retries,
+                            );
+                        }
+                    } else {
+                        warn!(
+                            log_type = "low_freq",
+                            message = "获取交易所信息失败",
+                            context = context,
+                            error_message = %e,
+                            retry_attempt = retry + 1,
+                            max_retries = max_retries,
                         );
-                        return Err(final_error);
+                    }
+
+                    last_error = Some(e);
+
+                    // 如果不是最后一次重试，等待后继续
+                    if retry < max_retries - 1 {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_interval_secs)).await;
                     }
                 }
             }
+        }
 
-            if retry < MAX_RETRIES - 1 {
-                tokio::time::sleep(tokio::time::Duration::from_secs(RETRY_INTERVAL)).await;
+        // 如果所有重试都失败了，返回最后一个错误
+        if let Some(e) = last_error {
+            error!(
+                log_type = "low_freq",
+                context = context,
+                max_retries = max_retries,
+                error_chain = format!("{:#}", e),
+                message = "获取交易所信息失败，已达到最大重试次数"
+            );
+            return Err(e);
+        }
+
+        // 理论上不会到达这里，但为了完整性
+        Err(AppError::ApiError("获取交易所信息失败，未知错误".to_string()))
+    }
+
+    /// [重构] 获取正在交易的U本位永续合约，同时返回需要删除的已下架品种 - 每次重试都创建新连接
+    #[perf_profile]
+    pub async fn get_trading_usdt_perpetual_symbols() -> Result<(Vec<String>, Vec<String>)> {
+        const MAX_RETRIES: usize = 20;
+        const RETRY_INTERVAL: u64 = 1;
+
+        // 使用通用重试方法获取交易所信息（每次重试都创建新连接）
+        let exchange_info = Self::retry_get_exchange_info(
+            MAX_RETRIES,
+            RETRY_INTERVAL,
+            "get_trading_usdt_perpetual_symbols"
+        ).await?;
+
+        let mut trading_symbols = Vec::new();
+        let mut delisted_symbols = Vec::new();
+
+        for symbol in &exchange_info.symbols {
+            let is_usdt = symbol.symbol.ends_with("USDT");
+            let is_perpetual = symbol.contract_type == "PERPETUAL";
+
+            // 只处理USDT永续合约
+            if !is_usdt  || !is_perpetual {
+                continue;
+            }
+
+            // ✨ [修改] 根据状态进行不同处理
+            match symbol.status.as_str() {
+                "TRADING" => {
+                    // 正常交易状态，加入交易列表
+                    trading_symbols.push(symbol.symbol.clone());
+                },
+                "CLOSE" | "SETTLING" => {
+                    // 已下架状态（包括CLOSE和SETTLING），加入删除列表
+                    delisted_symbols.push(symbol.symbol.clone());
+                    // 注意：这里只是发现已下架品种，具体是否需要删除数据
+                    // 要等到backfill模块检查数据库中是否存在相关数据后才能确定
+                },
+                _ => {
+                    // 其他未知状态，记录日志
+                    info!(
+                        log_type = "low_freq",
+                        message = "发现未知状态的品种",
+                        symbol = %symbol.symbol,
+                        status = %symbol.status,
+                        note = "非TRADING、CLOSE或SETTLING状态，需要关注",
+                    );
+                }
             }
         }
 
-        Err(AppError::ApiError("获取U本位永续合约交易对失败，已达到最大重试次数".to_string()))
+        if trading_symbols.is_empty() {
+            return Err(AppError::ApiError("获取U本位永续合约交易对失败，未获取到任何交易对".to_string()));
+        }
+
+        Ok((trading_symbols, delisted_symbols))
     }
 
     /// [重构] 下载连续合约K线数据 - 接受 client 作为参数
@@ -271,7 +346,7 @@ impl BinanceApi {
     pub async fn get_server_time(client: &Client) -> Result<ServerTime> {
         let api_url = "https://fapi.binance.com";
         let fapi_url = format!("{}/fapi/v1/time", api_url);
-        const MAX_RETRIES: usize = 5;
+        const MAX_RETRIES: usize = 20;
         const RETRY_INTERVAL: u64 = 1;
 
         for retry in 0..MAX_RETRIES {

@@ -23,14 +23,34 @@ path = "src/bin/klagg_sub_threads.rs"
 [[bin]]
 name = "klagg_visual_test"
 path = "src/bin/klagg_visual_test.rs"
+# 审计功能现在可以通过 --features full-audit 选择性启用
 
 [[bin]]
 name = "data_audit"
 path = "src/bin/data_audit.rs"
 
-[[bin]]
-name = "websocket_capacity_test"
-path = "src/bin/websocket_capacity_test.rs"
+# 性能测试文件 - 已完成 f64 迁移，暂时注释掉
+# [[bin]]
+# name = "decimal_performance_test"
+# path = "src/bin/decimal_performance_test.rs"
+
+# [[bin]]
+# name = "advanced_numeric_performance_test"
+# path = "src/bin/advanced_numeric_performance_test.rs"
+
+# [[bin]]
+# name = "precision_accumulation_test"
+# path = "src/bin/precision_accumulation_test.rs"
+
+# [[bin]]
+# name = "btc_kline_precision_test"
+# path = "src/bin/btc_kline_precision_test.rs"
+
+# [[bin]]
+# name = "kline_precision_test"
+# path = "src/bin/kline_precision_test.rs"
+
+
 
 
 
@@ -175,8 +195,9 @@ md5 = "0.7"
 async-trait = "0.1.88"
 rand = "0.9.1"
 wide = { version = "0.7", optional = true }
-rust_decimal = { version = "1.35", features = ["serde-with-str"] }
-rust_decimal_macros = "1.35"
+
+glam = { version = "0.30.5", features = ["bytemuck", "mint", "rand", "serde"] }
+simba = { version = "0.9.0", features = ["wide"] }
 
 [dev-dependencies]
 
@@ -191,7 +212,11 @@ opt-level = 3
 lto = true
 
 [features]
+# 默认情况下不启用任何审计功能，用于生产环境
 default = []
 simd = ["wide"]
+
+# 定义一个 "full-audit" 功能，它会启用所有用于调试和校验的子系统
+full-audit = []
 
 

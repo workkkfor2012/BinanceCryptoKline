@@ -99,6 +99,11 @@ where
         use crate::klcommon::log::JsonVisitor;
         use serde_json::{json, Value};
 
+        // 0. 屏蔽底层第三方库的trace级别日志
+        if event.metadata().level() == &tracing::Level::TRACE && event.metadata().target() == "log" {
+            return;
+        }
+
         // 1. 将所有业务字段收集到一个独立的 'fields_map' 中。
         //    例如 `总耗时_秒`, `延迟追赶_秒` 等都会在这里。
         let mut fields_map = serde_json::Map::new();

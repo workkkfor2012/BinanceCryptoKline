@@ -17,8 +17,12 @@
 
 use anyhow::Result;
 use chrono;
-use rust_decimal_macros::dec;
-use kline_server::klagg_sub_threads::{self as klagg, DeltaBatch, InitialKlineData, WorkerCmd};
+use kline_server::klagg_sub_threads::{
+    self as klagg,
+    DeltaBatch,
+    InitialKlineData,
+    WorkerCmd,
+};
 use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
     api::BinanceApi,
@@ -36,7 +40,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot, watch, Notify, RwLock};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, instrument, span, warn, trace, Instrument, Level};
+use tracing::{debug, error, info, instrument, span, warn, trace, Instrument, Level};
 
 // --- 常量定义 ---
 const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
@@ -130,6 +134,36 @@ async fn run_visual_test_app(
         "配置文件加载成功"
     );
 
+    // [新增] 显示审计功能状态
+    #[cfg(feature = "full-audit")]
+    {
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_status",
+            audit_enabled = true,
+            "🔍 审计功能已启用 - 包含生命周期事件校验和数据完整性审计"
+        );
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_status",
+            "✅ 生命周期校验器：已启用"
+        );
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_status",
+            "✅ 数据完整性审计器：已启用"
+        );
+    }
+    #[cfg(not(feature = "full-audit"))]
+    {
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_status",
+            audit_enabled = false,
+            "⚠️ 审计功能已禁用 - 使用零成本抽象模式，生产性能最优"
+        );
+    }
+
     let api_client = Arc::new(BinanceApi);
     let db = Arc::new(Database::new_with_config(&config.database.database_path, config.persistence.queue_size)?);
     info!(target: "应用生命周期", log_type = "low_freq", path = %config.database.database_path, "数据库连接成功");
@@ -193,7 +227,7 @@ async fn run_visual_test_app(
     );
 
     log::context::spawn_instrumented_on(
-        run_clock_task(
+        run_test_clock_task(
             config.clone(),
             time_sync_manager.clone(),
             clock_tx.clone(),
@@ -243,7 +277,7 @@ async fn run_visual_test_app(
 
     let all_symbols: Vec<String> = global_index_to_symbol.read().await.clone();
 
-    let (mut aggregator, ws_cmd_rx, trade_rx) = klagg::KlineAggregator::new(
+    let (mut aggregator, mut outputs) = klagg::KlineAggregator::new(
         &all_symbols,
         symbol_to_global_index.clone(),
         periods.clone(),
@@ -252,6 +286,9 @@ async fn run_visual_test_app(
         initial_klines_arc.clone(),
         &config,
     ).await?;
+    let ws_cmd_rx = outputs.ws_cmd_rx;
+    let trade_rx = outputs.trade_rx;
+    let mut finalized_kline_rx = outputs.finalized_kline_rx; // [修改] 变为 mut
 
     let aggregator_read_handle = aggregator.get_read_handle();
     let aggregator_trade_sender = aggregator.get_trade_sender();
@@ -293,15 +330,14 @@ async fn run_visual_test_app(
     // 6. ================= 启动测试专用的聚合与分发任务 ================
     let initial_delta_batch = Arc::new(DeltaBatch::default());
     let (klines_watch_tx, klines_watch_rx) = watch::channel(initial_delta_batch.clone());
-    let (db_queue_tx, _db_queue_rx) = mpsc::channel::<Arc<DeltaBatch>>(config.persistence.queue_size);
+    let (_db_queue_tx, _db_queue_rx) = mpsc::channel::<Arc<DeltaBatch>>(config.persistence.queue_size);
 
     // 启动 Gateway 任务
     info!(target: "应用生命周期", "准备启动Gateway任务（测试模式）...");
     log::context::spawn_instrumented_on(
-        klagg::gateway_task(
+        klagg::gateway_task_for_web(
             aggregator_handles,
             klines_watch_tx,
-            db_queue_tx,
             config.clone(),
             shutdown_rx.clone(),
             watchdog.clone(),
@@ -331,6 +367,52 @@ async fn run_visual_test_app(
         ),
         io_runtime,
     );
+
+    // [增强] 新增一个简单的任务来排空 finalized_kline_rx 通道。
+    // 这可以防止通道被填满，从而确保测试环境的行为与生产环境更一致。
+    tokio::spawn(async move {
+        info!("启动模拟的 finalized_kline 消费者，防止通道阻塞");
+        while let Some(_) = finalized_kline_rx.recv().await {
+            // 什么也不做，只是消费消息
+        }
+        warn!("finalized_kline 通道已关闭，消费者退出");
+    });
+
+    // [修改] 只有在 full-audit 模式下，才处理审计相关的通道和任务
+    #[cfg(feature = "full-audit")]
+    {
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_startup",
+            "🔍 可视化测试模式：启用 full-audit，正在启动审计任务..."
+        );
+
+        let lifecycle_event_rx_for_validator = outputs.lifecycle_event_tx.subscribe();
+
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_startup",
+            "🚀 启动生命周期校验器任务..."
+        );
+        log::context::spawn_instrumented_on(
+            klagg::run_lifecycle_validator_task(lifecycle_event_rx_for_validator, shutdown_rx.clone()),
+            io_runtime,
+        );
+
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_startup",
+            "✅ 所有审计任务启动完成 - 系统现在具备完整的审计能力"
+        );
+    }
+    #[cfg(not(feature = "full-audit"))]
+    {
+        info!(
+            target: "应用生命周期",
+            log_type = "audit_startup",
+            "⚠️ 可视化测试模式：审计功能已禁用，使用零成本抽象模式"
+        );
+    }
 
     // 启动监控中枢
     io_runtime.spawn(
@@ -363,16 +445,16 @@ async fn run_visual_test_app(
     Ok(())
 }
 
-/// 全局时钟任务
-#[instrument(target = "全局时钟", skip_all, name="run_clock_task")]
-async fn run_clock_task(
+/// 测试专用全局时钟任务（5秒间隔）
+#[instrument(target = "全局时钟", skip_all, name="run_test_clock_task")]
+async fn run_test_clock_task(
     _config: Arc<AggregateConfig>,
     time_sync_manager: Arc<ServerTimeSyncManager>,
     clock_tx: watch::Sender<i64>,
     shutdown_notify: Arc<Notify>,
 ) {
-    const CLOCK_INTERVAL_MS: i64 = 60_000; // 60秒
-    info!(target: "全局时钟", log_type="low_freq", interval_ms = CLOCK_INTERVAL_MS, "全局时钟任务已启动，将按整分钟对齐");
+    const CLOCK_INTERVAL_MS: i64 = 5_000; // 5秒
+    info!(target: "全局时钟", log_type="low_freq", interval_ms = CLOCK_INTERVAL_MS, "全局时钟任务已启动，将每5秒输出校准时间");
 
     let mut time_sync_retry_count = 0;
     const MAX_TIME_SYNC_RETRIES: u32 = 10;
@@ -441,6 +523,23 @@ async fn run_clock_task(
         sleep(Duration::from_millis(sleep_duration_ms)).await;
 
         let final_time = time_sync_manager.get_calibrated_server_time();
+        // [日志增强] 在发送时钟信号前，记录关键决策信息
+        debug!(
+            target: "全局时钟",
+            sent_time = final_time,
+            "发送时钟滴答信号"
+        );
+
+        // 输出校准后的服务器时间
+        let datetime = chrono::DateTime::from_timestamp_millis(final_time)
+            .unwrap_or_else(|| chrono::Utc::now());
+        let formatted_time = datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        info!(target: "全局时钟",
+              log_type="checkpoint",
+              server_time_ms = final_time,
+              offset_ms = time_sync_manager.get_time_diff(),
+              "校准后的服务器时间: {}", formatted_time);
+
         if clock_tx.send(final_time).is_err() {
             warn!(target: "全局时钟", "主时钟通道已关闭，任务退出");
             break;
@@ -682,12 +781,12 @@ async fn add_symbol_to_system(
 
     // 创建一个模拟的 InitialKlineData
     let initial_data = InitialKlineData {
-        open: dec!(100.0),
-        high: dec!(101.0),
-        low: dec!(99.0),
-        close: dec!(100.5),
-        volume: dec!(10.0),
-        turnover: dec!(1005.0),
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.5,
+        volume: 10.0,
+        turnover: 1005.0,
     };
 
     let cmd = WorkerCmd::AddSymbol {

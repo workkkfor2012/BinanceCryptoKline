@@ -158,6 +158,12 @@ pub struct PersistenceConfig {
 
     /// 是否启用压缩日志
     pub enable_compressed_logging: bool,
+
+    /// [V8 新增] 高优先级任务的内存缓冲区大小
+    pub finalized_buffer_size: usize,
+
+    /// [V8 新增] 高优先级任务的最大刷盘间隔(毫秒)
+    pub finalized_flush_interval_ms: u64,
 }
 
 /// 网关配置
@@ -245,6 +251,8 @@ impl Default for PersistenceConfig {
             queue_size: 5000,
             write_timeout_secs: 30,
             enable_compressed_logging: true,
+            finalized_buffer_size: 5000,
+            finalized_flush_interval_ms: 1000,
         }
     }
 }

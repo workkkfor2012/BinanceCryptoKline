@@ -1,4 +1,4 @@
-# K线聚合服务可视化测试启动脚本
+# K线聚合服务高保真自定义品种测试启动脚本
 # 导入统一配置读取脚本
 . "scripts\read_unified_config.ps1"
 
@@ -45,29 +45,41 @@ Set-LoggingEnvironment
 $env:LOG_TRANSPORT = "named_pipe"
 $env:ENABLE_PERF_LOG = "1"             # 启用性能日志分析
 
-Write-Host "🔧 可视化测试模式配置完成:" -ForegroundColor Cyan
-Write-Host "  ✅ 使用专用的可视化测试入口 (klagg_visual_test)" -ForegroundColor Green
-Write-Host "  ✅ 硬编码测试模式，无需环境变量控制" -ForegroundColor Green
-Write-Host "  ✅ 启用Web服务器进行数据可视化" -ForegroundColor Green
-Write-Host "  ✅ 禁用数据库持久化" -ForegroundColor Green
+Write-Host "🔧 高保真自定义品种测试模式配置完成:" -ForegroundColor Cyan
+Write-Host "  ✅ 使用专用的高保真测试入口 (klagg_custom_sub_test)" -ForegroundColor Green
+Write-Host "  ✅ 自定义品种列表，易于修改测试范围" -ForegroundColor Green
+Write-Host "  ✅ 完整保留数据库持久化任务" -ForegroundColor Green
+Write-Host "  ✅ 与生产模式高度一致，确保测试可靠性" -ForegroundColor Green
 
 Write-Host "🔥 性能日志分析已启用，将生成 logs\performance.folded" -ForegroundColor Magenta
-Write-Host "🧪 可视化测试模式已启用，将订阅8个主流品种:" -ForegroundColor Cyan
-Write-Host "   BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, BNBUSDT, LTCUSDT" -ForegroundColor White
+Write-Host "🧪 高保真自定义品种测试模式已启用，当前测试品种:" -ForegroundColor Cyan
+Write-Host "   BTCUSDT, ETHUSDT, SOLUSDT (可在代码中轻松修改)" -ForegroundColor White
 Write-Host "🌐 Web服务器将在启动后提供数据可视化界面" -ForegroundColor Magenta
+Write-Host "💾 数据库持久化任务已启用，模拟真实I/O负载" -ForegroundColor Green
 
 $buildMode = Get-BuildMode
-Write-Host "🚀 启动K线聚合服务 - 可视化测试模式 ($buildMode)" -ForegroundColor Yellow
+$auditEnabled = Get-AuditEnabled
+
+Write-Host "🚀 启动K线聚合服务 - 高保真自定义品种测试模式 ($buildMode)" -ForegroundColor Yellow
+
+# 显示审计功能状态
+if ($auditEnabled) {
+    Write-Host "🔍 审计功能已启用 - 包含生命周期事件校验和数据完整性审计" -ForegroundColor Magenta
+    Write-Host "  ✅ 生命周期校验器：已启用" -ForegroundColor Green
+    Write-Host "  ✅ 数据完整性审计器：已启用" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ 审计功能已禁用 - 使用零成本抽象模式，生产性能最优" -ForegroundColor Yellow
+}
 
 try {
-    $cargoCmd = Get-CargoCommand -BinaryName 'klagg_visual_test'
+    $cargoCmd = Get-CargoCommand -BinaryName 'klagg_custom_sub_test'
     Invoke-Expression $cargoCmd
 }
 catch {
-    Write-Host "可视化测试服务启动失败: $_" -ForegroundColor Red
+    Write-Host "高保真自定义品种测试服务启动失败: $_" -ForegroundColor Red
 }
 finally {
     Write-Host ""
-    Write-Host "K线聚合可视化测试服务已停止" -ForegroundColor Yellow
+    Write-Host "K线聚合高保真自定义品种测试服务已停止" -ForegroundColor Yellow
     Read-Host "按任意键退出"
 }

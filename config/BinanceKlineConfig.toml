@@ -12,7 +12,7 @@ supported_intervals = ["1m", "5m", "30m", "1h", "4h", "1d", "1w"]
 # Gateway 和 Worker 的内存分配都将基于此值。
 # 它必须足够大以容纳所有当前和未来可能上市的品种。
 # 临时调整为较小值以避免栈溢出
-max_symbols = 10
+max_symbols = 1000
 
 # 缓冲区切换间隔（毫秒）
 buffer_swap_interval_ms = 1000
@@ -60,6 +60,10 @@ batch_size = 1000
 queue_size = 50000
 write_timeout_secs = 30
 enable_compressed_logging = true
+# [V8 新增] 高优先级任务的内存缓冲区大小
+finalized_buffer_size = 5000
+# [V8 新增] 高优先级任务的最大刷盘间隔(毫秒)
+finalized_flush_interval_ms = 1000
 
 # ============================================================
 # Gateway 配置 - 中心化网关架构
@@ -100,3 +104,8 @@ mcp_port = 9001
 [build]
 # 编译模式: "debug" 或 "release"
 mode = "debug"
+
+# 审计功能开关: true 启用审计功能，false 禁用审计功能
+# 启用时会添加 --features full-audit 参数
+# 包含生命周期事件校验和数据完整性审计
+enable_audit = true

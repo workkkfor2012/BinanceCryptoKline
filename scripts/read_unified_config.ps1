@@ -155,35 +155,60 @@ function Get-BuildMode {
     return "debug"  # 默认值
 }
 
+function Get-AuditEnabled {
+    <#
+    .SYNOPSIS
+    获取审计功能开关状态
+
+    .OUTPUTS
+    返回 $true 或 $false
+    #>
+
+    $config = Read-UnifiedConfig
+    if ($config -and $config.Build.enable_audit) {
+        return $config.Build.enable_audit
+    }
+    return $false  # 默认值
+}
+
 function Get-CargoCommand {
     <#
     .SYNOPSIS
     根据配置生成cargo命令
-    
+
     .PARAMETER BinaryName
     要运行的二进制文件名
-    
+
     .PARAMETER Command
     cargo命令类型 (run 或 build)，默认为 run
-    
+
     .OUTPUTS
     返回完整的cargo命令字符串
     #>
     param(
         [Parameter(Mandatory=$true)]
         [string]$BinaryName,
-        
+
         [Parameter(Mandatory=$false)]
         [string]$Command = "run"
     )
-    
+
     $buildMode = Get-BuildMode
-    
+    $auditEnabled = Get-AuditEnabled
+
+    $cargoCmd = "cargo $Command"
+
     if ($buildMode -eq "release") {
-        return "cargo $Command --release --bin $BinaryName"
-    } else {
-        return "cargo $Command --bin $BinaryName"
+        $cargoCmd += " --release"
     }
+
+    if ($auditEnabled) {
+        $cargoCmd += " --features full-audit"
+    }
+
+    $cargoCmd += " --bin $BinaryName"
+
+    return $cargoCmd
 }
 
 function Get-LoggingConfig {

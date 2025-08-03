@@ -21,13 +21,13 @@ static BATCH_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 
 
-/// Gateway任务 - 中心化聚合与分发
-#[instrument(target = "网关任务", skip_all, name = "gateway_task")]
-pub async fn gateway_task(
+/// [V8 重命名] Gateway任务 - 仅负责Web推送，不再处理数据库持久化
+#[instrument(target = "网关任务", skip_all, name = "gateway_task_for_web")]
+pub async fn gateway_task_for_web(
     // [修改] 参数类型更新，但保持 Vec 结构以简化调用方代码
     worker_handles: Arc<Vec<AggregatorReadHandle>>,
     klines_watch_tx: watch::Sender<Arc<DeltaBatch>>, // [修改]
-    db_queue_tx: mpsc::Sender<Arc<DeltaBatch>>,     // [修改]
+    // [V8 移除] db_queue_tx: mpsc::Sender<Arc<DeltaBatch>>,     // [移除] 不再处理数据库队列
     config: Arc<AggregateConfig>,
     mut shutdown_rx: watch::Receiver<bool>,
     _watchdog: Arc<WatchdogV2>,
@@ -71,12 +71,26 @@ pub async fn gateway_task(
                  // 时间到，执行拉取逻辑
                  match tokio::time::timeout(pull_timeout, handle.request_deltas()).await {
                     Ok(Ok(deltas)) => {
-                        // [新增日志] 无论数据是否为空，都记录本次拉取的结果
-                        trace!(target: "网关任务", kline_count = deltas.len(), "从聚合器拉取到增量数据");
+                        // 【修改此处】
+                        let kline_count = deltas.len();
+                        trace!(target: "网关任务", kline_count, "从聚合器拉取到增量数据");
+
                         if !deltas.is_empty() {
-                            let deltas_len = deltas.len();
+                            let batch_id = BATCH_ID_COUNTER.load(Ordering::Relaxed); // 提前读取，用于日志
+
+                            // 增加详细的数据内容摘要日志
+                            trace!(
+                                target: "网关数据内容", // 使用新target便于过滤
+                                batch_id,
+                                kline_count,
+                                // 记录批次中第一条和最后一条K线的关键信息
+                                first_kline = ?deltas.first(),
+                                last_kline = ?deltas.last(),
+                                "增量批次内容摘要"
+                            );
+
                             // [最终决策] 增加批次ID溢出归零的完备性处理
-                            let batch_id = BATCH_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                            let batch_id = BATCH_ID_COUNTER.fetch_add(1, Ordering::Relaxed); // batch_id在这里才递增
                             if batch_id == u64::MAX {
                                 warn!(target: "网关任务", "批次ID计数器已溢出并重置为0");
                                 BATCH_ID_COUNTER.store(0, Ordering::Relaxed);
@@ -86,30 +100,16 @@ pub async fn gateway_task(
                                 klines: deltas,
                                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
                                 batch_id,
-                                size: deltas_len,
+                                size: kline_count,
                             });
 
                             // 更新统计计数
                             batches_pulled_count += 1;
-                            klines_processed_count += deltas_len as u64;
+                            klines_processed_count += kline_count as u64;
 
-                            // 高频发送给 Web 服务器
-                            if klines_watch_tx.send(delta_batch_arc.clone()).is_err() {
+                            // [V8 修改] 仅发送给 Web 服务器，不再处理数据库队列
+                            if klines_watch_tx.send(delta_batch_arc).is_err() {
                                 warn!(target: "网关任务", "实时(watch)通道已关闭");
-                            }
-
-                            // 高频发送给 DB 写入任务（DB任务自己会节流）
-                            if let Err(e) = db_queue_tx.try_send(delta_batch_arc) {
-                                match e {
-                                    mpsc::error::TrySendError::Full(batch) => {
-                                        warn!(target: "网关任务", batch_id = batch.batch_id, batch_size = batch.size, "持久化队列已满，此批次数据被丢弃！");
-                                        // TODO: 在此增加监控指标，例如: METRICS.db_batches_dropped.inc();
-                                    },
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        error!(target: "网关任务", "持久化通道已关闭，系统出现严重故障");
-                                        break; // 退出循环
-                                    }
-                                }
                             }
                         }
                     }
@@ -191,59 +191,166 @@ pub async fn db_writer_task(
     warn!(target: "持久化任务", "数据库写入任务已退出");
 }
 
-/// [核心修改] 辅助函数，封装持久化逻辑，现在接收 &[KlineData]
+/// [V8 修改] 辅助函数，封装持久化逻辑，现在接收 &[KlineData]
 async fn persist_kline_data(
     db: Arc<Database>,
     klines: &[super::KlineData], // 修改输入类型
-    index_to_symbol: &Arc<RwLock<Vec<String>>>,
-    periods: &Arc<Vec<String>>,
+    _index_to_symbol: &Arc<RwLock<Vec<String>>>, // [V8] 不再需要，但保留参数兼容性
+    _periods: &Arc<Vec<String>>, // [V8] 不再需要，但保留参数兼容性
 ) {
     if klines.is_empty() {
         return;
     }
 
-    let index_guard = index_to_symbol.read().await;
-
     let klines_to_save: Vec<(String, String, DbKline)> = klines.iter()
         .filter(|k| k.open_time > 0)
-        .filter_map(|kline_data| {
-            // 将 KlineData 转换为 (symbol, interval, DbKline)
-            if kline_data.global_symbol_index < index_guard.len()
-                && kline_data.period_index < periods.len() {
+        .map(|kline_data| {
+            // [V8 简化] 直接使用 KlineData 中的 symbol 和 period 字段
+            let db_kline = DbKline {
+                open_time: kline_data.open_time,
+                open: kline_data.open.to_string(),
+                high: kline_data.high.to_string(),
+                low: kline_data.low.to_string(),
+                close: kline_data.close.to_string(),
+                volume: kline_data.volume.to_string(),
+                close_time: kline_data.open_time + crate::klcommon::api::interval_to_milliseconds(&kline_data.period) - 1,
+                quote_asset_volume: kline_data.turnover.to_string(),
+                number_of_trades: kline_data.trade_count,
+                taker_buy_base_asset_volume: kline_data.taker_buy_volume.to_string(),
+                taker_buy_quote_asset_volume: kline_data.taker_buy_turnover.to_string(),
+                ignore: "0".to_string(),
+            };
 
-                let symbol = index_guard[kline_data.global_symbol_index].clone();
-                let period = periods[kline_data.period_index].clone();
-
-                let db_kline = DbKline {
-                    open_time: kline_data.open_time,
-                    open: kline_data.open.to_string(),
-                    high: kline_data.high.to_string(),
-                    low: kline_data.low.to_string(),
-                    close: kline_data.close.to_string(),
-                    volume: kline_data.volume.to_string(),
-                    close_time: kline_data.open_time + crate::klcommon::api::interval_to_milliseconds(&period) - 1,
-                    quote_asset_volume: kline_data.turnover.to_string(),
-                    number_of_trades: kline_data.trade_count,
-                    taker_buy_base_asset_volume: kline_data.taker_buy_volume.to_string(),
-                    taker_buy_quote_asset_volume: kline_data.taker_buy_turnover.to_string(),
-                    ignore: "0".to_string(),
-                };
-
-                Some((symbol, period, db_kline))
-            } else {
-                error!(target: "持久化任务",
-                       global_symbol_index = kline_data.global_symbol_index,
-                       "发现无效的 global_symbol_index，该条数据被丢弃");
-                None
-            }
+            (kline_data.symbol.clone(), kline_data.period.clone(), db_kline)
         })
         .collect();
 
     if !klines_to_save.is_empty() {
+        // [日志增强] 在这里添加实际写入数据库前的日志
+        info!(
+            target: "持久化任务",
+            count = klines_to_save.len(),
+            "准备批量写入 {} 条K线数据到数据库",
+            klines_to_save.len()
+        );
         if let Err(e) = db.upsert_klines_batch(klines_to_save) {
             error!(target: "持久化任务", error = ?e, "持久化K线到数据库失败");
         }
     }
+}
+
+/// [V8 新增] 高优先级持久化任务 - 处理已完成的K线
+#[instrument(target = "持久化任务", skip_all, name = "finalized_writer_task")]
+pub async fn finalized_writer_task(
+    db: Arc<Database>,
+    mut finalized_kline_rx: mpsc::Receiver<super::KlineData>,
+    index_to_symbol: Arc<RwLock<Vec<String>>>,
+    periods: Arc<Vec<String>>,
+    config: Arc<AggregateConfig>, // [V8] 新增config参数
+    mut shutdown_rx: watch::Receiver<bool>,
+    _watchdog: Arc<WatchdogV2>,
+) {
+    info!(target: "持久化任务", "高优先级 Finalized-Writer 任务已启动");
+
+    // [V8] 从配置读取参数
+    let buffer_max_size = config.persistence.finalized_buffer_size;
+    let flush_interval = Duration::from_millis(config.persistence.finalized_flush_interval_ms);
+
+    let mut buffer: Vec<super::KlineData> = Vec::with_capacity(buffer_max_size);
+    let mut interval = tokio::time::interval(flush_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            // 优雅关闭分支
+            _ = shutdown_rx.changed() => {
+                info!(target: "持久化任务", "收到关闭信号，开始优雅关闭高优先级持久化任务");
+
+                // [V8 关键] 处理缓冲区中的剩余数据
+                while let Ok(kline) = finalized_kline_rx.try_recv() {
+                    buffer.push(kline);
+                }
+
+                if !buffer.is_empty() {
+                    info!(target: "持久化任务", count = buffer.len(), "优雅关闭：持久化缓冲区中的剩余数据");
+                    persist_kline_data(db.clone(), &buffer, &index_to_symbol, &periods).await;
+                }
+
+                break;
+            }
+
+            // 接收已完成的K线
+            Some(kline) = finalized_kline_rx.recv() => {
+                buffer.push(kline);
+
+                // 如果缓冲区满了，立即刷盘
+                if buffer.len() >= buffer_max_size {
+                    trace!(target: "持久化任务", count = buffer.len(), "缓冲区已满，立即刷盘");
+                    persist_kline_data(db.clone(), &buffer, &index_to_symbol, &periods).await;
+                    buffer.clear();
+                }
+            }
+
+            // 定时刷盘
+            _ = interval.tick() => {
+                if !buffer.is_empty() {
+                    trace!(target: "持久化任务", count = buffer.len(), "定时刷盘");
+                    persist_kline_data(db.clone(), &buffer, &index_to_symbol, &periods).await;
+                    buffer.clear();
+                }
+            }
+        }
+    }
+
+    warn!(target: "持久化任务", "高优先级 Finalized-Writer 任务已退出");
+}
+
+/// [V8 新增] 低优先级持久化任务 - 处理进行中K线的快照
+#[instrument(target = "持久化任务", skip_all, name = "snapshot_writer_task")]
+pub async fn snapshot_writer_task(
+    db: Arc<Database>,
+    aggregator_handle: AggregatorReadHandle,
+    index_to_symbol: Arc<RwLock<Vec<String>>>,
+    periods: Arc<Vec<String>>,
+    mut clock_rx: watch::Receiver<i64>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    _watchdog: Arc<WatchdogV2>,
+) {
+    info!(target: "持久化任务", "低优先级 Snapshot-Writer 任务已启动");
+
+    loop {
+        tokio::select! {
+            // 优雅关闭分支
+            _ = shutdown_rx.changed() => {
+                info!(target: "持久化任务", "收到关闭信号，低优先级持久化任务开始退出");
+                break;
+            }
+
+            // 时钟触发分支
+            result = clock_rx.changed() => {
+                if result.is_err() {
+                    warn!(target: "持久化任务", "时钟通道已关闭，低优先级持久化任务退出");
+                    break;
+                }
+
+                trace!(target: "持久化任务", "收到时钟信号，开始拉取进行中K线快照");
+
+                match aggregator_handle.request_full_snapshot().await {
+                    Ok(klines) => {
+                        let snapshots: Vec<_> = klines.into_iter().filter(|k| !k.is_final).collect();
+                        if !snapshots.is_empty() {
+                            info!(target: "持久化任务", count = snapshots.len(), "拉取到 {} 条进行中K线快照进行持久化", snapshots.len());
+                            persist_kline_data(db.clone(), &snapshots, &index_to_symbol, &periods).await;
+                        }
+                    },
+                    Err(e) => {
+                        error!(target: "持久化任务", "拉取全量快照失败: {}", e);
+                    }
+                }
+            },
+        }
+    }
+    warn!(target: "持久化任务", "低优先级 Snapshot-Writer 任务已退出");
 }
 
 

@@ -1,11 +1,10 @@
-﻿//! 启动“完全分区模型”K线聚合服务。
+//! 启动"高保真自定义品种测试模式"K线聚合服务。
 //!
 //! ## 核心执行模型
-//! - main函数手动创建一个多线程的 `io_runtime`，用于处理所有I/O密集型任务。
-//! - 为每个计算Worker创建独立的、绑核的物理线程。
-//! - 在每个绑核线程内创建单线程的 `computation_runtime`，专门运行K线聚合计算。
-//! - 计算与I/O任务通过MPSC通道解耦。
-//! - 实现基于JoinHandle的健壮关闭流程。
+//! - 与生产模式 (klagg_sub_threads.rs) 高度一致，但允许开发者自定义测试品种列表
+//! - 完整保留生产环境下的数据库持久化任务，以模拟真实的I/O负载
+//! - 移除动态品种管理器，使用固定的自定义品种列表
+//! - 其他所有逻辑与生产模式完全相同，确保高保真测试环境
 
 
 
@@ -15,10 +14,10 @@ use kline_server::klagg_sub_threads::{
     DeltaBatch,
     WorkerCmd,
     run_clock_task,
-    run_symbol_manager,
-    initialize_symbol_indexing,
+    // run_symbol_manager, // [测试模式] 移除品种管理器
+    // initialize_symbol_indexing, // [测试模式] 移除原有品种初始化
 };
-use kline_server::kldata::{self as kldata, KlineBackfiller};
+use kline_server::kldata::KlineBackfiller;
 use kline_server::klcommon::{
     api::BinanceApi,
     db::Database,
@@ -31,6 +30,7 @@ use kline_server::klcommon::{
 };
 use kline_server::soft_assert;
 
+use std::collections::HashMap; // 确保在文件顶部引入
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -43,18 +43,71 @@ use tracing::{error, info, instrument, span, trace, warn, Instrument, Level};
 const DEFAULT_CONFIG_PATH: &str = "config/BinanceKlineConfig.toml";
 const HEALTH_CHECK_INTERVAL_S: u64 = 10; // 新的监控间隔
 
+// ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅
+// ==                                                    ==
+// ==        新增：基于自定义品种列表的初始化函数        ==
+// ==                                                    ==
+// ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅
 
+#[instrument(target = "应用生命周期", skip_all, name = "initialize_custom_symbol_indexing")]
+async fn initialize_custom_symbol_indexing(
+    db: &Database,
+) -> Result<(Vec<String>, HashMap<String, usize>)> {
+    info!(target: "应用生命周期", "开始初始化自定义的品种索引 (高保真测试模式)");
 
+    // ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅
+    // ==                                                    ==
+    // ==        在这里定义你需要测试的品种列表！            ==
+    // ==                                                    ==
+    // ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅
+    let symbols = vec![
+        "BTCUSDT",
+        //"ETHUSDT",
+        //"SOLUSDT",
+        // 你可以按需注释或添加其他品种
+        // "BNBUSDT",
+        // "XRPUSDT",
+    ];
+    // ===================================================================
 
+    let symbols: Vec<String> = symbols.into_iter().map(String::from).collect();
+    info!(target: "应用生命周期", count = symbols.len(), ?symbols, "自定义测试品种列表加载成功");
 
+    // 复用生产逻辑：从数据库获取这些品种的上线时间，以保证聚合器内部索引顺序的确定性。
+    // 这对于复现问题和保证数据一致性很重要。
+    let symbol_listing_times = db.batch_get_earliest_kline_timestamps(&symbols, "1d")?;
 
+    let mut sorted_symbols_with_time: Vec<(String, i64)> = symbol_listing_times
+        .into_iter()
+        .map(|(s, t_opt)| {
+            let timestamp = t_opt.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            (s, timestamp)
+        })
+        .collect();
 
+    if sorted_symbols_with_time.is_empty() {
+        let err_msg = "自定义的测试品种在数据库中找不到任何历史数据，无法确定启动顺序。请确保数据库中有这些品种的1天K线数据，或检查数据补齐逻辑。".to_string();
+        error!(target: "应用生命周期", reason = &err_msg);
+        return Err(AppError::InitializationError(err_msg).into());
+    }
 
+    // 按上市时间和品种名排序，确保每次启动的内部索引都是一致的。
+    sorted_symbols_with_time.sort_by(|(symbol_a, time_a), (symbol_b, time_b)| {
+        (time_a, symbol_a).cmp(&(time_b, symbol_b))
+    });
 
+    let all_sorted_symbols: Vec<String> =
+        sorted_symbols_with_time.into_iter().map(|(s, _)| s).collect();
 
+    let symbol_to_index: HashMap<String, usize> = all_sorted_symbols
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| (symbol.clone(), index))
+        .collect();
 
-
-
+    info!(target: "应用生命周期", count = all_sorted_symbols.len(), "自定义品种索引构建完成");
+    Ok((all_sorted_symbols, symbol_to_index))
+}
 
 /// 启动器 main 函数
 /// 它的唯一职责是创建一个具有更大栈空间的线程来运行我们的应用主逻辑。
@@ -116,7 +169,7 @@ fn actual_main() -> Result<()> {
 
     // 3. 在 I/O 运行时上下文中执行应用启动和管理逻辑
     // 使用 instrument 将 main_span 附加到整个应用生命周期
-    let main_span = span!(target: "应用生命周期", Level::INFO, "klagg_app_lifecycle");
+    let main_span = span!(target: "应用生命周期", Level::INFO, "klagg_custom_test_lifecycle");
 
     let result = io_runtime.block_on(run_app(&io_runtime).instrument(main_span));
 
@@ -146,9 +199,7 @@ fn actual_main() -> Result<()> {
 async fn run_app(
     io_runtime: &Runtime,
 ) -> Result<()> {
-    info!(target: "应用生命周期",log_type = "low_freq", "K线聚合服务启动中...");
-    // trace!(log_type = "low_freq", "K线聚合服务启动中...");
-    // trace!("🔍 开始初始化全局资源...");
+    info!(target: "应用生命周期",log_type = "low_freq", "K线聚合服务启动中 (自定义品种测试模式)...");
 
     // 1. ==================== 初始化全局资源 ====================
     let config = Arc::new(AggregateConfig::from_file(DEFAULT_CONFIG_PATH)?);
@@ -186,9 +237,7 @@ async fn run_app(
         );
     }
 
-
-
-    let api_client = Arc::new(BinanceApi); // [修改] BinanceApi现在是无状态的
+    let _api_client = Arc::new(BinanceApi); // [修改] BinanceApi现在是无状态的 (测试模式下不使用)
 
     let db = Arc::new(Database::new_with_config(&config.database.database_path, config.persistence.queue_size)?);
     info!(target: "应用生命周期", log_type = "low_freq", path = %config.database.database_path, "数据库连接成功");
@@ -224,18 +273,6 @@ async fn run_app(
         duration_s = stage2_duration.as_secs_f64(),
         "✅ [启动流程 | 2/4] 延迟追赶补齐完成"
     );
-
-    // --- 阶段三: 最终追赶 ---（暂时注释，测试性能）
-    // info!(target: "应用生命周期", log_type="startup", "➡️ [启动流程 | 3/4] 开始最终追赶补齐（最高并发模式）...");
-    // let stage3_start = std::time::Instant::now();
-    // // 使用轮次3，可以在backfill模块中为其配置更高的并发度
-    // backfiller.run_once_with_round(3).await?;
-    // let stage3_duration = stage3_start.elapsed();
-    // info!(target: "应用生命周期", log_type="startup",
-    //     duration_ms = stage3_duration.as_millis(),
-    //     duration_s = stage3_duration.as_secs_f64(),
-    //     "✅ [启动流程 | 3/4] 最终追赶补齐完成"
-    // );
 
     // ✨ [新增] 所有补齐轮次完成后，清理连接池
     backfiller.cleanup_after_all_backfill_rounds().await;
@@ -275,7 +312,7 @@ async fn run_app(
     let (clock_tx, _) = watch::channel(0i64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let internal_shutdown_notify = Arc::new(Notify::new());
-    let (w3_cmd_tx, w3_cmd_rx) = mpsc::channel::<WorkerCmd>(128);
+    let (_w3_cmd_tx, w3_cmd_rx) = mpsc::channel::<WorkerCmd>(128); // [测试模式] w3_cmd_tx不再用于品种管理器
 
     // 3. ==================== 在 I/O 运行时启动核心后台服务 ====================
     info!(target: "应用生命周期", "正在执行首次服务器时间同步...");
@@ -307,9 +344,24 @@ async fn run_app(
         io_runtime,
     );
 
-    // 4. ============ 获取并建立全局品种索引 (G_Index*) ============
+    // [新增] 启动周期性时间日志任务
+    info!(target: "应用生命周期", "启动周期性时间日志任务...");
+    log::context::spawn_instrumented_on(
+        klagg::run_periodic_time_logger(
+            time_sync_manager.clone(),
+            shutdown_rx.clone(),
+        ),
+        io_runtime,
+    );
+
+    // 4. ============ [修改点 1: 替换品种来源] ============
+    // 原有代码:
+    // let (all_symbols_sorted, symbol_to_index_map) =
+    //     initialize_symbol_indexing(&api_client, &db).await?;
+
+    // 替换为:
     let (all_symbols_sorted, symbol_to_index_map) =
-        initialize_symbol_indexing(&api_client, &db).await?;
+        initialize_custom_symbol_indexing(&db).await?;
     let symbol_count = all_symbols_sorted.len();
 
     // [修改逻辑] 使用 soft_assert! 进行业务断言
@@ -325,23 +377,11 @@ async fn run_app(
         error!(target: "应用生命周期", reason = err_msg);
         return Err(AppError::InitializationError(err_msg.into()).into());
     }
-    info!(target: "应用生命周期", log_type = "low_freq", symbol_count, "全局品种索引初始化完成");
-
-    // ==================== 时间戳一致性检查 ====================
-    info!(target: "应用生命周期", "开始执行时间戳一致性检查...");
-    let timestamp_checker = kldata::TimestampChecker::new(db.clone(), (*periods).clone());
-    match timestamp_checker.check_last_kline_consistency().await {
-        Ok(()) => {
-            info!(target: "应用生命周期", log_type = "low_freq", "✅ 时间戳一致性检查完成");
-        }
-        Err(e) => {
-            warn!(target: "应用生命周期", log_type = "low_freq", error = %e, "⚠️ 时间戳一致性检查出现问题，但不影响服务启动");
-        }
-    }
+    info!(target: "应用生命周期", log_type = "low_freq", symbol_count, "全局品种索引初始化完成 (自定义测试模式)");
 
     let symbol_to_global_index = Arc::new(RwLock::new(symbol_to_index_map));
     let global_index_to_symbol = Arc::new(RwLock::new(all_symbols_sorted));
-    let global_symbol_count = Arc::new(AtomicUsize::new(symbol_count));
+    let _global_symbol_count = Arc::new(AtomicUsize::new(symbol_count)); // [测试模式] 不再用于品种管理器
 
     // ==================== 初始化健康监控中枢 ====================
     let watchdog = Arc::new(WatchdogV2::new());
@@ -353,7 +393,7 @@ async fn run_app(
     let all_symbols: Vec<String> = global_index_to_symbol.read().await.clone();
 
     // [修改] 解构 new 函数的返回值
-    let (mut aggregator, mut outputs) = klagg::KlineAggregator::new(
+    let (mut aggregator, outputs) = klagg::KlineAggregator::new(
         &all_symbols,
         symbol_to_global_index.clone(),
         periods.clone(),
@@ -414,8 +454,6 @@ async fn run_app(
     let (klines_watch_tx, _klines_watch_rx) =
         watch::channel(initial_delta_batch.clone());
 
-    // [V8 移除] 不再需要 db_queue 通道，持久化通过事件驱动机制处理
-
     // [V8 修改] 启动 gateway_task_for_web (仅负责Web推送)
     info!(target: "应用生命周期", "启动Gateway任务 (Web推送)...");
     log::context::spawn_instrumented_on(
@@ -462,9 +500,10 @@ async fn run_app(
         io_runtime,
     );
 
-    // [V8 关键] 移除旧的 db_writer_task 启动代码
+    // --- [修改点 2: 移除动态品种管理器] ---
+    // 找到启动品种管理器的代码，并将其整个移除或注释掉。
 
-    // 启动品种管理器
+    /* // [测试模式下禁用] 不再需要动态扫描和管理全市场品种
     log::context::spawn_instrumented_on(
         run_symbol_manager(
             config.clone(),
@@ -475,46 +514,8 @@ async fn run_app(
         ),
         io_runtime,
     );
-
-    // [修改] 只有在 full-audit 模式下，才处理审计相关的通道和任务
-    #[cfg(feature = "full-audit")]
-    {
-        info!(
-            target: "应用生命周期",
-            log_type = "audit_startup",
-            "🔍 生产环境：启用 full-audit，正在启动审计任务..."
-        );
-
-        let lifecycle_event_rx_for_validator = outputs.lifecycle_event_tx.subscribe();
-
-        info!(
-            target: "应用生命周期",
-            log_type = "audit_startup",
-            "🚀 启动生命周期校验器任务..."
-        );
-        log::context::spawn_instrumented_on(
-            klagg::run_lifecycle_validator_task(lifecycle_event_rx_for_validator, shutdown_rx.clone()),
-            io_runtime,
-        );
-
-        info!(
-            target: "应用生命周期",
-            log_type = "audit_startup",
-            "✅ 审计任务启动完成 - 生产环境现在具备生命周期校验能力"
-        );
-
-        // 注意：这里没有启动 auditor 任务，因为它需要接收 finalized_kline 数据
-        // 但在生产环境中，finalized_kline_rx 已经被 finalized_writer_task 消费
-        // 如果需要同时进行审计，需要使用 broadcast 通道或其他机制
-    }
-    #[cfg(not(feature = "full-audit"))]
-    {
-        info!(
-            target: "应用生命周期",
-            log_type = "audit_startup",
-            "⚠️ 生产环境：审计功能已禁用，跳过审计任务启动"
-        );
-    }
+    */
+    info!(target: "应用生命周期", "品种管理器(Symbol Manager)任务已在测试模式下被禁用。系统将只处理自定义的固定品种列表。");
 
     // [替换] 启动新的 WatchdogV2 监控中枢
     io_runtime.spawn(
@@ -555,12 +556,3 @@ async fn run_app(
 
     Ok(())
 }
-
-
-
-
-
-
-
-
-

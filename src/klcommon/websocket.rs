@@ -16,8 +16,6 @@ use tokio::time::sleep;
 use tokio_socks::tcp::Socks5Stream;
 use serde_json::json;
 use serde::Deserialize;
-use rust_decimal::Decimal;
-use std::str::FromStr;
 use crate::klagg_sub_threads::{AggTradePayload, RawTradePayload};
 
 use bytes::Bytes;
@@ -250,9 +248,9 @@ pub struct AggTradeData {
     /// 交易品种
     pub symbol: String,
     /// 成交价格
-    pub price: Decimal,
+    pub price: f64,
     /// 成交数量
-    pub quantity: Decimal,
+    pub quantity: f64,
     /// 成交时间戳（毫秒）
     pub timestamp_ms: i64,
     /// 买方是否为做市商
@@ -272,8 +270,8 @@ impl AggTradeData {
     pub fn from_binance_raw(raw: &BinanceRawAggTrade) -> Self {
         Self {
             symbol: raw.symbol.clone(),
-            price: Decimal::from_str(&raw.price).unwrap_or(Decimal::ZERO),
-            quantity: Decimal::from_str(&raw.quantity).unwrap_or(Decimal::ZERO),
+            price: raw.price.parse::<f64>().unwrap_or(0.0),
+            quantity: raw.quantity.parse::<f64>().unwrap_or(0.0),
             timestamp_ms: raw.trade_time as i64,
             is_buyer_maker: raw.is_buyer_maker,
             agg_trade_id: raw.aggregate_trade_id as i64,
@@ -342,10 +340,10 @@ impl AggTradeMessageHandler {
         };
 
         // 【新增】添加交易数据接收日志
-        info!(target: AGG_TRADE_TARGET, "收到归集交易: {} {} @ {}",
-            raw_trade.symbol, raw_trade.quantity, raw_trade.price);
+        // info!(target: AGG_TRADE_TARGET, "收到归集交易: {} {} @ {}",
+        //     raw_trade.symbol, raw_trade.quantity, raw_trade.price);
 
-        let price = match Decimal::from_str(raw_trade.price) {
+        let price = match raw_trade.price.parse::<f64>() {
             Ok(p) => p,
             Err(_) => {
                 warn!(target: AGG_TRADE_TARGET, "解析价格失败: {}", raw_trade.price);
@@ -353,7 +351,7 @@ impl AggTradeMessageHandler {
                 return Ok(());
             }
         };
-        let quantity = match Decimal::from_str(raw_trade.quantity) {
+        let quantity = match raw_trade.quantity.parse::<f64>() {
             Ok(q) => q,
             Err(_) => {
                 warn!(target: AGG_TRADE_TARGET, "解析数量失败: {}", raw_trade.quantity);
@@ -370,9 +368,23 @@ impl AggTradeMessageHandler {
             is_buyer_maker: raw_trade.is_buyer_maker,
         };
 
+        // 【增加此处】测量发送到MPSC通道的等待时间
+        let send_start = std::time::Instant::now();
+
         if let Err(e) = self.sender.send(agg_payload).await {
             error!(target: AGG_TRADE_TARGET, "发送解析后的交易到计算核心失败: {}", e);
             self.error_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // 【增加此处】检测通道背压
+        let send_duration_micros = send_start.elapsed().as_micros();
+        if send_duration_micros > 500 { // 等待超过500微秒就值得关注
+            warn!(
+                target: AGG_TRADE_TARGET,
+                log_type = "performance_alert",
+                wait_micros = send_duration_micros,
+                "发送交易到计算核心的通道出现等待，可能存在背压！"
+            );
         }
 
         Ok(())

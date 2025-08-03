@@ -290,25 +290,15 @@ impl KlineBackfiller {
         let exchange_info = if self.test_mode {
             None // 测试模式下不需要获取交易所信息
         } else {
-            // [修改] 使用临时客户端获取交易所信息，并添加错误处理
-            let temp_client = BinanceApi::create_new_client()?;
-            match BinanceApi::get_exchange_info(&temp_client).await {
-                Ok(info) => Some(info),
-                Err(e) => {
-                    // 添加HTTP错误状态码调试信息
-                    if let AppError::HttpError(ref re) = e {
-                        if let Some(status) = re.status() {
-                            warn!(
-                                log_type = "low_freq",
-                                message = "获取交易所信息HTTP错误状态码调试",
-                                status_code = status.as_u16(),
-                                error_message = %e,
-                            );
-                        }
-                    }
-                    return Err(e);
-                }
-            }
+            // [修改] 使用统一的重试方法获取交易所信息（每次重试都创建新连接）
+            const MAX_RETRIES: usize = 20;
+            const RETRY_INTERVAL: u64 = 2;
+
+            Some(BinanceApi::retry_get_exchange_info(
+                MAX_RETRIES,
+                RETRY_INTERVAL,
+                "backfill_run"
+            ).await?)
         };
 
         let all_symbols = self.get_symbols_with_exchange_info(exchange_info.as_ref()).await?;
@@ -781,9 +771,8 @@ impl KlineBackfiller {
             // ✨ [优化] 使用已获取的交易所信息，避免重复网络请求
             self.parse_symbols_from_exchange_info(info)
         } else {
-            // 兜底：如果没有交易所信息，使用临时客户端获取
-            let temp_client = BinanceApi::create_new_client()?;
-            BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await?
+            // 兜底：如果没有交易所信息，直接获取（每次重试都创建新连接）
+            BinanceApi::get_trading_usdt_perpetual_symbols().await?
         };
 
         // 处理已下架的品种
@@ -1291,28 +1280,26 @@ impl KlineBackfiller {
     async fn cleanup_delisted_symbols(&self) -> Result<usize> {
         info!(log_type = "low_freq", message = "开始检查并清理已下架品种的数据...");
 
-        // ✨ [修改] 关键修正：直接获取完整的交易所信息，而不是依赖过滤后的活跃列表
-        let temp_client = BinanceApi::create_new_client()?;
-        let exchange_info = match BinanceApi::get_exchange_info(&temp_client).await {
-            Ok(info) => info,
-            Err(e) => {
-                // 添加HTTP错误状态码调试信息
-                if let AppError::HttpError(ref re) = e {
-                    if let Some(status) = re.status() {
-                        warn!(
-                            log_type = "low_freq",
-                            message = "清理时获取交易所信息HTTP错误状态码调试",
-                            status_code = status.as_u16(),
-                            error_message = %e,
-                        );
-                    }
+        // ✨ [修改] 使用统一的重试方法获取完整的交易所信息
+        const MAX_RETRIES: usize = 3;
+        const RETRY_INTERVAL: u64 = 2;
+
+        let exchange_info = {
+            match BinanceApi::retry_get_exchange_info(
+                MAX_RETRIES,
+                RETRY_INTERVAL,
+                "cleanup_delisted_symbols"
+            ).await {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        log_type = "low_freq",
+                        message = "无法获取交易所信息以进行清理，已达到最大重试次数，跳过本次清理",
+                        max_retries = MAX_RETRIES,
+                        error_chain = format!("{:#}", e),
+                    );
+                    return Ok(0); // 无法获取信息则不进行任何操作
                 }
-                warn!(
-                    log_type = "low_freq",
-                    message = "无法获取交易所信息以进行清理，跳过本次清理",
-                    error = %e
-                );
-                return Ok(0); // 无法获取信息则不进行任何操作
             }
         };
 

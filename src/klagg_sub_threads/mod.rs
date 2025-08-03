@@ -14,8 +14,38 @@ mod tests;
 // 新增: Gateway 模块，用于组织新代码
 mod gateway;
 
-// 新增: 导出新的任务
-pub use gateway::{db_writer_task, gateway_task};
+// 新增: 全局时钟模块
+mod global_clock;
+
+// 新增: 品种管理器模块
+mod symbol_manager;
+
+// [修改] 只有在 full-audit 模式下才编译和声明这些模块
+#[cfg(feature = "full-audit")]
+mod auditor;
+#[cfg(feature = "full-audit")]
+mod lifecycle_validator;
+
+// [V8 修改] 导出新的任务
+pub use gateway::{db_writer_task, gateway_task_for_web, finalized_writer_task, snapshot_writer_task};
+
+// 导出全局时钟和品种管理器
+pub use global_clock::{run_clock_task, run_periodic_time_logger};
+pub use symbol_manager::{run_symbol_manager, initialize_symbol_indexing};
+
+// [修改] 同样，也只在 full-audit 模式下导出它们
+#[cfg(feature = "full-audit")]
+pub use auditor::run_completeness_auditor_task;
+#[cfg(feature = "full-audit")]
+pub use lifecycle_validator::{run_lifecycle_validator_task, KlineLifecycleEvent, LifecycleTrigger};
+
+// [新增] 在非 full-audit 模式下提供存根类型定义
+#[cfg(not(feature = "full-audit"))]
+#[derive(Debug, Clone, Copy)]
+pub enum LifecycleTrigger {
+    Trade,
+    Clock,
+}
 
 
 
@@ -30,13 +60,13 @@ use crate::klcommon::{
     AggregateConfig,
 };
 use serde::{Deserialize, Serialize};
-use rust_decimal::Decimal;
-use std::str::FromStr;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
+#[cfg(feature = "full-audit")]
+use tokio::sync::broadcast;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -75,8 +105,8 @@ pub struct RawTradePayload<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AggTradePayload {
     pub global_symbol_index: usize,
-    pub price: Decimal,
-    pub quantity: Decimal,
+    pub price: f64,
+    pub quantity: f64,
     pub timestamp_ms: i64,
     pub is_buyer_maker: bool,
 }
@@ -84,44 +114,45 @@ pub struct AggTradePayload {
 /// 用于封装 AddSymbol 指令携带的初始K线数据
 #[derive(Debug, Clone, Copy)]
 pub struct InitialKlineData {
-    pub open: Decimal,
-    pub high: Decimal,
-    pub low: Decimal,
-    pub close: Decimal,
-    pub volume: Decimal,
-    pub turnover: Decimal,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub turnover: f64,
 }
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct KlineState {
     pub open_time: i64,
-    pub open: Decimal,
-    pub high: Decimal,
-    pub low: Decimal,
-    pub close: Decimal,
-    pub volume: Decimal,
-    pub turnover: Decimal,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub turnover: f64,
     pub trade_count: i64, // 这个字段现在是区分临时K线的关键：0表示临时，>0表示有真实交易
-    pub taker_buy_volume: Decimal,
-    pub taker_buy_turnover: Decimal,
+    pub taker_buy_volume: f64,
+    pub taker_buy_turnover: f64,
     pub is_final: bool,
     pub is_initialized: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KlineData {
-    pub global_symbol_index: usize,
-    pub period_index: usize,
+    // [V8 修改] 使用字符串字段替代索引字段，便于持久化任务直接使用
+    pub symbol: String,
+    pub period: String,
     pub open_time: i64,
-    pub open: Decimal,
-    pub high: Decimal,
-    pub low: Decimal,
-    pub close: Decimal,
-    pub volume: Decimal,
-    pub turnover: Decimal,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub turnover: f64,
     pub trade_count: i64,
-    pub taker_buy_volume: Decimal,
-    pub taker_buy_turnover: Decimal,
+    pub taker_buy_volume: f64,
+    pub taker_buy_turnover: f64,
     pub is_final: bool,
     // is_updated 字段被移除，现在 KlineData 是纯粹的数据载体
 }
@@ -272,6 +303,15 @@ impl HealthReporter for IoHealthReporter {
 
 // --- 3. Worker 核心实现 ---
 
+// [新增] 定义统一的输出结构体
+pub struct AggregatorOutputs {
+    pub ws_cmd_rx: mpsc::Receiver<WsCmd>,
+    pub trade_rx: mpsc::Receiver<AggTradePayload>,
+    pub finalized_kline_rx: mpsc::Receiver<KlineData>,
+    #[cfg(feature = "full-audit")]
+    pub lifecycle_event_tx: broadcast::Sender<KlineLifecycleEvent>,
+}
+
 // 【重构】: 使用脏标记机制替代缓冲区机制
 pub struct KlineAggregator {
     periods: Arc<Vec<String>>,     // [保留] 用于非热路径，如日志和初始化
@@ -303,6 +343,10 @@ pub struct KlineAggregator {
     deltas_req_rx: mpsc::Receiver<oneshot::Sender<Vec<KlineData>>>,
     ws_cmd_tx: mpsc::Sender<WsCmd>,
     trade_tx: mpsc::Sender<AggTradePayload>,
+    // [V8 新增] 专用于非阻塞地推送已完成K线到持久化任务
+    finalized_kline_tx: mpsc::Sender<KlineData>,
+    #[cfg(feature = "full-audit")]
+    lifecycle_event_tx: broadcast::Sender<KlineLifecycleEvent>,
     last_clock_tick: i64,
     clock_rx: watch::Receiver<i64>,
     // [保留] 动态计算的创世周期索引
@@ -320,11 +364,18 @@ impl KlineAggregator {
         clock_rx: watch::Receiver<i64>,
         initial_klines: Arc<HashMap<(String, String), DbKline>>,
         config: &AggregateConfig,
-    ) -> Result<(Self, mpsc::Receiver<WsCmd>, mpsc::Receiver<AggTradePayload>)> {
+    ) -> Result<(Self, AggregatorOutputs)> {
         let (full_snapshot_req_tx, full_snapshot_req_rx) = mpsc::channel(8);
         let (deltas_req_tx, deltas_req_rx) = mpsc::channel(8);
         let (ws_cmd_tx, ws_cmd_rx) = mpsc::channel(8);
         let (trade_tx, trade_rx) = mpsc::channel::<AggTradePayload>(10240);
+        // [V8 新增] 创建大容量通道用于推送已完成的K线
+        let (finalized_kline_tx, finalized_kline_rx) = mpsc::channel(10000);
+
+        // [修改] 只有在 full-audit 模式下才创建真实通道，并增加容量
+        #[cfg(feature = "full-audit")]
+        let (lifecycle_event_tx, _) = broadcast::channel(4096);
+
         let num_periods = periods.len();
 
         // [核心修改] 在初始化时一次性计算所有周期的毫秒数
@@ -386,16 +437,16 @@ impl KlineAggregator {
                     global_index_to_symbol_cache[global_index] = symbol.clone();
                 }
 
-                let parse_or_warn = |value: &str, field_name: &str| -> Decimal {
-                    Decimal::from_str(value).unwrap_or_else(|e| {
+                let parse_or_warn = |value: &str, field_name: &str| -> f64 {
+                    value.parse::<f64>().unwrap_or_else(|e| {
                         warn!(
                             target: "计算核心",
                             symbol,
                             field_name,
                             error = ?e,
-                            "解析DbKline字段失败，使用Decimal::ZERO作为默认值"
+                            "解析DbKline字段失败，使用0.0作为默认值"
                         );
-                        Decimal::ZERO
+                        0.0
                     })
                 };
 
@@ -491,6 +542,9 @@ impl KlineAggregator {
             deltas_req_rx,
             ws_cmd_tx,
             trade_tx,
+            finalized_kline_tx, // [V8] 赋值
+            #[cfg(feature = "full-audit")]
+            lifecycle_event_tx: lifecycle_event_tx.clone(),
             last_clock_tick: 0,
             clock_rx,
             genesis_period_index, // [保留]
@@ -502,7 +556,16 @@ impl KlineAggregator {
             total_slots,
             "KlineAggregator 实例已创建并完成初始状态填充和索引构建"
         );
-        Ok((aggregator, ws_cmd_rx, trade_rx))
+        // [修改] 创建新的 AggregatorOutputs 结构体
+        let outputs = AggregatorOutputs {
+            ws_cmd_rx,
+            trade_rx,
+            finalized_kline_rx,
+            #[cfg(feature = "full-audit")]
+            lifecycle_event_tx,
+        };
+
+        Ok((aggregator, outputs))
     }
 
     pub fn get_read_handle(&self) -> AggregatorReadHandle {
@@ -514,6 +577,43 @@ impl KlineAggregator {
 
     pub fn get_trade_sender(&self) -> mpsc::Sender<AggTradePayload> {
         self.trade_tx.clone()
+    }
+
+    // [最终版] 这是在 full-audit 模式下使用的真实实现，具有最精确的日志
+    #[cfg(feature = "full-audit")]
+    fn publish_lifecycle_event(&mut self, kline_offset: usize, old_kline_state: KlineState, trigger: LifecycleTrigger) {
+        use tokio::sync::broadcast::error::SendError;
+
+        let event = KlineLifecycleEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            global_symbol_index: kline_offset / self.periods.len(),
+            period_index: kline_offset % self.periods.len(),
+            kline_offset,
+            old_kline_state,
+            new_kline_state: self.kline_states[kline_offset].clone(),
+            trigger,
+        };
+
+        if let Err(SendError(_)) = self.lifecycle_event_tx.send(event) {
+            // 使用 receiver_count() 来精确判断错误原因
+            if self.lifecycle_event_tx.receiver_count() == 0 {
+                // 这种情况是良性的，只是没有审计任务在运行。
+                debug!(target: "计算核心", "生命周期事件无人监听，已跳过发送");
+            } else {
+                // 这意味着有监听者，但通道满了，是需要关注的性能问题。
+                warn!(
+                    target: "计算核心",
+                    log_type = "performance_alert",
+                    "生命周期事件通道已满，可能存在慢速的审计任务，事件已被丢弃！"
+                );
+            }
+        }
+    }
+
+    // [修改] 这是在 非 full-audit 模式下使用的"存根"实现
+    #[cfg(not(feature = "full-audit"))]
+    fn publish_lifecycle_event(&mut self, _kline_offset: usize, _old_kline_state: KlineState, _trigger: LifecycleTrigger) {
+        // Do nothing. This function call will be compiled away.
     }
 
     #[instrument(target = "计算核心", skip_all, name = "run_aggregation_loop", fields())]
@@ -556,7 +656,17 @@ impl KlineAggregator {
                     klines_updated_count = 0;
                 },
                 Some(trade) = trade_rx.recv() => {
-                    trace!(target: "计算核心", global_index = trade.global_symbol_index, price = %trade.price, "收到交易数据");
+                    // 【修改此处】增加更丰富的交易数据上下文
+                    // trace!(
+                    //     target: "计算核心",
+                    //     global_index = trade.global_symbol_index,
+                    //     price = %trade.price,
+                    //     quantity = %trade.quantity,
+                    //     trade_timestamp_ms = trade.timestamp_ms,
+                    //     is_buyer_maker = trade.is_buyer_maker,
+                    //     "收到交易数据"
+                    // );
+
                     self.process_trade(trade);
                     trades_count += 1;
                     klines_updated_count += 1; // 简化统计，每个交易都可能更新K线
@@ -638,8 +748,8 @@ impl KlineAggregator {
                             kline.taker_buy_turnover = trade.price * trade.quantity;
                         } else {
                             // 确保在没有买方主动成交时清零
-                            kline.taker_buy_volume = Decimal::ZERO;
-                            kline.taker_buy_turnover = Decimal::ZERO;
+                            kline.taker_buy_volume = 0.0;
+                            kline.taker_buy_turnover = 0.0;
                         }
                     } else {
                         // 非首笔交易，执行常规更新
@@ -821,18 +931,86 @@ impl KlineAggregator {
 
         // 播种最终的目标K线，它可能由交易触发(Some(trade))，也可能由时钟触发(None)
         self.seed_kline(kline_offset, new_open_time, last_close, trade_opt);
+
+        // 【逻辑修复】
+        // 无论是由交易还是时钟触发，新播种的K线都必须立即被标记为脏数据，
+        // 以确保下游消费者（如Web Gateway）能立刻拉取到这根新的、正在进行的K线。
+        // is_final 设置为 false，因为它是一根正在进行的K线。
+        let new_close = self.kline_states[kline_offset].close;
+        self.finalize_and_snapshot_kline(kline_offset, new_close, false);
     }
 
     /// 辅助函数：终结当前K线并写入快照
     /// is_final: 标记这是否是一根完整的、已结束的K线
-    fn finalize_and_snapshot_kline(&mut self, kline_offset: usize, final_close: Decimal, is_final: bool) {
-        let old_kline = &mut self.kline_states[kline_offset];
+    fn finalize_and_snapshot_kline(&mut self, kline_offset: usize, final_close: f64, is_final: bool) {
+        let kline = &mut self.kline_states[kline_offset];
 
         // 如果是标记为final的调用，并且K线已经是final状态，则跳过
-        if old_kline.is_final && is_final { return; }
+        if kline.is_final && is_final { return; }
 
-        old_kline.close = final_close;
-        old_kline.is_final = is_final;
+        kline.close = final_close;
+        kline.is_final = is_final;
+
+        // [V8 核心] 如果K线已最终完成，则立即、非阻塞地推送到持久化通道
+        if is_final {
+            let global_symbol_index = kline_offset / self.periods.len();
+            let period_index = kline_offset % self.periods.len();
+
+            if let (Some(symbol), Some(period)) = (
+                self.global_index_to_symbol_cache.get(global_symbol_index),
+                self.periods.get(period_index)
+            ) {
+                let kline_data = KlineData {
+                    symbol: symbol.clone(),
+                    period: period.clone(),
+                    open_time: kline.open_time,
+                    open: kline.open,
+                    high: kline.high,
+                    low: kline.low,
+                    close: kline.close,
+                    volume: kline.volume,
+                    turnover: kline.turnover,
+                    trade_count: kline.trade_count,
+                    taker_buy_volume: kline.taker_buy_volume,
+                    taker_buy_turnover: kline.taker_buy_turnover,
+                    is_final: kline.is_final,
+                };
+
+                match self.finalized_kline_tx.try_send(kline_data.clone()) { // .clone()以便日志使用
+                    Ok(_) => {
+                        // [日志增强] 记录被发送K线的详细信息
+                        trace!(
+                            target: "计算核心",
+                            symbol = %kline_data.symbol,
+                            period = %kline_data.period,
+                            open_time = kline_data.open_time,
+                            log_type = "kline_finalized",
+                            "已完成的K线被发送到持久化通道"
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        error!(
+                            target: "计算核心",
+                            log_type = "DATA_LOSS",
+                            "高优先级持久化通道已满！一条已完成的K线数据被丢弃！这表明系统出现严重问题，请立即检查数据库写入性能！"
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        warn!(target: "计算核心", "高优先级持久化通道已关闭，无法发送已完成的K线");
+                    }
+                }
+            }
+        }
+
+        // 【增加此处】数据一致性校验，在debug模式下生效，无性能损耗
+        debug_assert!(
+            kline.high >= kline.low &&
+            kline.high >= kline.open &&
+            kline.high >= kline.close &&
+            kline.low <= kline.open &&
+            kline.low <= kline.close,
+            "K线数据完整性检查失败 for offset {}: {:?}", kline_offset, kline
+        );
 
         if kline_offset < self.dirty_flags.len() {
             // --- [核心修改] 只有当标记不是脏的时候，才去设置它并记录索引 ---
@@ -840,17 +1018,24 @@ impl KlineAggregator {
                 self.dirty_flags[kline_offset] = true;
                 self.dirty_indices.push(kline_offset);
 
-                // 这条日志现在只会在状态从 "干净" -> "脏" 的瞬间打印一次
                 let global_symbol_index = kline_offset / self.periods.len();
                 let period_index = kline_offset % self.periods.len();
-                trace!(
-                    target: "计算核心",
-                    global_symbol_index,
-                    period_index,
-                    kline_offset,
-                    is_final,
-                    "设置脏标记"
-                );
+
+                // 【修改此处】将原日志修改为包含完整上下文
+                // trace!(
+                //     target: "计算核心",
+                //     global_symbol_index,
+                //     period_index,
+                //     kline_offset,
+                //     is_final, // <-- 这是关键，我们需要观察它的值
+                //     open_time = kline.open_time,
+                //     open = %kline.open,
+                //     high = %kline.high,
+                //     low = %kline.low,
+                //     close = %kline.close,
+                //     volume = %kline.volume,
+                //     "设置脏标记"
+                // );
             }
         } else {
             error!(
@@ -864,22 +1049,44 @@ impl KlineAggregator {
     }
 
     /// 辅助函数：播种一根新的K线
-    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: Decimal, trade_opt: Option<&AggTradePayload>) {
+    fn seed_kline(&mut self, kline_offset: usize, open_time: i64, last_close: f64, trade_opt: Option<&AggTradePayload>) {
         let new_kline_state = match trade_opt {
-            Some(trade) => KlineState { // 事件驱动：K线是确定的
-                open_time, open: trade.price, high: trade.price, low: trade.price, close: trade.price,
-                volume: trade.quantity, turnover: trade.price * trade.quantity,
-                trade_count: 1, // 由真实交易创建，trade_count从1开始
-                taker_buy_volume: if !trade.is_buyer_maker { trade.quantity } else { Decimal::ZERO },
-                taker_buy_turnover: if !trade.is_buyer_maker { trade.price * trade.quantity } else { Decimal::ZERO },
-                is_final: false, is_initialized: true,
+            Some(trade) => { // 事件驱动：K线是确定的
+                // [日志增强] 明确记录事件驱动的K线生成
+                trace!(
+                    target: "计算核心",
+                    reason = "事件驱动",
+                    kline_offset,
+                    open_time,
+                    price = %trade.price,
+                    "播种新K线 (由新交易触发)"
+                );
+                KlineState {
+                    open_time, open: trade.price, high: trade.price, low: trade.price, close: trade.price,
+                    volume: trade.quantity, turnover: trade.price * trade.quantity,
+                    trade_count: 1, // 由真实交易创建，trade_count从1开始
+                    taker_buy_volume: if !trade.is_buyer_maker { trade.quantity } else { 0.0 },
+                    taker_buy_turnover: if !trade.is_buyer_maker { trade.price * trade.quantity } else { 0.0 },
+                    is_final: false, is_initialized: true,
+                }
             },
-            None => KlineState { // 时钟驱动 / 空K线：K线是临时的
-                open_time, open: last_close, high: last_close, low: last_close, close: last_close,
-                volume: Decimal::ZERO, turnover: Decimal::ZERO,
-                trade_count: 0, // 时钟驱动创建，trade_count为0自然表示"临时"
-                taker_buy_volume: Decimal::ZERO, taker_buy_turnover: Decimal::ZERO,
-                is_final: false, is_initialized: true,
+            None => { // 时钟驱动 / 空K线：K线是临时的
+                // [日志增强] 明确记录时钟驱动的K线生成
+                trace!(
+                    target: "计算核心",
+                    reason = "时钟驱动",
+                    kline_offset,
+                    open_time,
+                    seed_price = %last_close,
+                    "播种新K线 (由时钟触发或用于填充空洞)"
+                );
+                KlineState {
+                    open_time, open: last_close, high: last_close, low: last_close, close: last_close,
+                    volume: 0.0, turnover: 0.0,
+                    trade_count: 0, // 时钟驱动创建，trade_count为0自然表示"临时"
+                    taker_buy_volume: 0.0, taker_buy_turnover: 0.0,
+                    is_final: false, is_initialized: true,
+                }
             },
         };
 
@@ -943,8 +1150,8 @@ impl KlineAggregator {
                             volume: initial_data.volume,
                             turnover: initial_data.turnover,
                             trade_count: 1,
-                            taker_buy_volume: Decimal::ZERO,
-                            taker_buy_turnover: Decimal::ZERO,
+                            taker_buy_volume: 0.0,
+                            taker_buy_turnover: 0.0,
                             is_final: false,
                             is_initialized: true,
                         };
@@ -1058,9 +1265,17 @@ impl KlineAggregator {
                     let global_symbol_index = offset / self.periods.len();
                     let period_index = offset % self.periods.len();
 
+                    // [V8 修改] 使用字符串字段替代索引字段
+                    let symbol = self.global_index_to_symbol_cache.get(global_symbol_index)
+                        .cloned()
+                        .unwrap_or_else(|| format!("UNKNOWN_{}", global_symbol_index));
+                    let period = self.periods.get(period_index)
+                        .cloned()
+                        .unwrap_or_else(|| "UNKNOWN".to_string());
+
                     KlineData {
-                        global_symbol_index,
-                        period_index,
+                        symbol,
+                        period,
                         open_time: state.open_time,
                         open: state.open,
                         high: state.high,
@@ -1109,9 +1324,18 @@ impl KlineAggregator {
                 let state = &self.kline_states[i];
                 let global_symbol_index = i / self.periods.len();
                 let period_index = i % self.periods.len();
+
+                // [V8 修改] 使用字符串字段替代索引字段
+                let symbol = self.global_index_to_symbol_cache.get(global_symbol_index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("UNKNOWN_{}", global_symbol_index));
+                let period = self.periods.get(period_index)
+                    .cloned()
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
+
                 KlineData {
-                    global_symbol_index,
-                    period_index,
+                    symbol,
+                    period,
                     open_time: state.open_time,
                     open: state.open,
                     high: state.high,

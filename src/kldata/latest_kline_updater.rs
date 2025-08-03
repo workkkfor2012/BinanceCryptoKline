@@ -93,9 +93,8 @@ impl LatestKlineUpdater {
 
     /// 更新所有品种、所有周期的最新一根K线
     async fn update_latest_klines(&self) -> Result<usize> {
-        // 1. 获取所有正在交易的U本位永续合约交易对
-        let temp_client = BinanceApi::create_new_client()?;
-        let (all_symbols, delisted_symbols) = match BinanceApi::get_trading_usdt_perpetual_symbols(&temp_client).await {
+        // 1. 获取所有正在交易的U本位永续合约交易对（每次重试都创建新连接）
+        let (all_symbols, delisted_symbols) = match BinanceApi::get_trading_usdt_perpetual_symbols().await {
             Ok((trading, delisted)) => (trading, delisted),
             Err(e) => {
                 error!("获取交易对信息失败: {}", e);

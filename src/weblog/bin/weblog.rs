@@ -26,7 +26,7 @@ struct Cli {
     // 移除日志级别命令行参数，改为在代码中直接设置
 
     /// 最大保留的日志条目数量
-    #[arg(long, default_value = "10000")]
+    #[arg(long, default_value = "10000000")]
     max_logs: usize,
 
     /// 最大保留的Trace数量
@@ -38,7 +38,7 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    // 初始化日志 - 从统一配置文件读取日志级别
+    // 初始化日志 - 从weblog专用配置文件读取日志级别
     let log_level = load_weblog_log_level();
     tracing_subscriber::fmt()
         .with_env_filter(&log_level)
@@ -205,7 +205,8 @@ async fn create_named_pipe_server(pipe_name: &str) -> Result<tokio::net::windows
     use tokio::net::windows::named_pipe::ServerOptions;
 
     // 定义一个更大的缓冲区大小，例如 1MB
-    const PIPE_BUFFER_SIZE: u32 = 1024 * 1024 * 1024;
+   
+    const PIPE_BUFFER_SIZE: u32 = u32::MAX;
 
     // 尝试不同的管道名称格式
     let pipe_formats = vec![
@@ -327,56 +328,28 @@ struct WebLogServiceConfig {
     log_level: String,
 }
 
-/// 读取WebLog日志级别配置 - 从统一配置文件读取
+/// 读取WebLog日志级别配置 - 从weblog专用配置文件读取
 fn load_weblog_log_level() -> String {
-    // 尝试从统一配置文件读取
-    let possible_paths = vec![
-        std::path::PathBuf::from("config/BinanceKlineConfig.toml"),  // 相对于当前工作目录
-        std::path::PathBuf::from("../config/BinanceKlineConfig.toml"),  // 上级目录的config
-        std::path::PathBuf::from("../../config/BinanceKlineConfig.toml"),  // 再上级目录的config
-    ];
+    // weblog专用配置文件路径（相对于weblog根目录）
+    let config_path = std::path::PathBuf::from("config/logging_config.toml");
 
-    for config_path in possible_paths {
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            // 首先尝试读取 [logging.services] 部分的 weblog 配置
-            let lines: Vec<&str> = content.lines().collect();
-            let mut in_services_section = false;
-
-            for line in lines.iter() {
-                let trimmed = line.trim();
-                if trimmed == "[logging.services]" {
-                    in_services_section = true;
-                } else if trimmed.starts_with('[') && trimmed != "[logging.services]" {
-                    in_services_section = false;
-                } else if in_services_section && trimmed.starts_with("weblog") {
-                    if let Some(value) = trimmed.split('=').nth(1) {
-                        let log_level = value.trim().trim_matches('"').trim_matches('\'');
-                        eprintln!("从统一配置文件读取WebLog日志级别: {} (路径: {:?})", log_level, config_path);
-                        return log_level.to_string();
-                    }
-                }
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        // 解析TOML配置文件
+        match toml::from_str::<WebLogLoggingConfig>(&content) {
+            Ok(config) => {
+                eprintln!("从weblog专用配置文件读取日志级别: {} (路径: {:?})",
+                         config.weblog.log_level, config_path);
+                return config.weblog.log_level;
             }
-
-            // 如果没有找到 weblog 特定配置，回退到 [logging] 部分的 log_level
-            let mut in_logging_section = false;
-            for line in lines {
-                let trimmed = line.trim();
-                if trimmed == "[logging]" {
-                    in_logging_section = true;
-                } else if trimmed.starts_with('[') && trimmed != "[logging]" {
-                    in_logging_section = false;
-                } else if in_logging_section && trimmed.starts_with("log_level") {
-                    if let Some(value) = trimmed.split('=').nth(1) {
-                        let log_level = value.trim().trim_matches('"').trim_matches('\'');
-                        eprintln!("从统一配置文件读取默认日志级别: {} (路径: {:?})", log_level, config_path);
-                        return log_level.to_string();
-                    }
-                }
+            Err(e) => {
+                eprintln!("解析weblog配置文件失败: {} (路径: {:?})", e, config_path);
             }
         }
+    } else {
+        eprintln!("无法读取weblog配置文件: {:?}", config_path);
     }
 
-    // 所有路径都失败，使用默认值
-    eprintln!("未找到统一配置文件，使用默认日志级别 info");
+    // 配置文件读取失败，使用默认值
+    eprintln!("使用默认日志级别: info");
     "info".to_string()
 }

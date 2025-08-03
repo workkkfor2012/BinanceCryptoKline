@@ -6,7 +6,6 @@
 use crate::{
     klagg_sub_threads::{DeltaBatch, KlineData},
 };
-use rust_decimal::prelude::*;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -128,18 +127,18 @@ async fn pusher_task(
                 let klines_by_symbol: DashMap<String, Vec<ApiKline>> = DashMap::new();
 
                 for kline in all_klines {
-                    if let (Some(symbol), Some(period)) = (
-                        index_guard.get(kline.global_symbol_index),
-                        state.periods.get(kline.period_index),
-                    ) {
+                    // [V8 修改] 直接使用 KlineData 中的 symbol 和 period 字段
+                    {
+                        let symbol = &kline.symbol;
+                        let period = &kline.period;
                         klines_by_symbol.entry(symbol.clone()).or_default().push(ApiKline {
                             period: period.clone(),
                             open_time: kline.open_time,
-                            open: kline.open.to_f64().unwrap_or(0.0),
-                            high: kline.high.to_f64().unwrap_or(0.0),
-                            low: kline.low.to_f64().unwrap_or(0.0),
-                            close: kline.close.to_f64().unwrap_or(0.0),
-                            volume: kline.volume.to_f64().unwrap_or(0.0),
+                            open: kline.open,
+                            high: kline.high,
+                            low: kline.low,
+                            close: kline.close,
+                            volume: kline.volume,
                             is_final: kline.is_final,
                         });
                     }

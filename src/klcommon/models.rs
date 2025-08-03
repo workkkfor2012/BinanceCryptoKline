@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -57,8 +56,8 @@ pub struct BinanceRawAggTrade {
 #[derive(Debug, Clone)]
 pub struct AppAggTrade {
     pub symbol: String,
-    pub price: Decimal,
-    pub quantity: Decimal,
+    pub price: f64,
+    pub quantity: f64,
     pub timestamp_ms: i64,
     pub is_buyer_maker: bool,
 }
