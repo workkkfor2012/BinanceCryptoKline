@@ -32,5 +32,4 @@ config.local.toml
 
 /logs
 /src/Log-MCP-Server/target
-/docs
 /.kiro

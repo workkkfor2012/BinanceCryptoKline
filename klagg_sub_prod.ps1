@@ -66,6 +66,8 @@ Write-Host "🚀 启动K线聚合服务 - 分区聚合版架构 [$buildMode 模�
 
 try {
     $cargoCmd = Get-CargoCommand -BinaryName 'klagg_sub_threads'
+    Write-Host "执行命令: $cargoCmd" -ForegroundColor Cyan
+    
     Invoke-Expression $cargoCmd
 }
 catch {

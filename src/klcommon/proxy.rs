@@ -27,7 +27,7 @@ pub const DEFAULT_PROXY_TYPE: ProxyType = ProxyType::Socks5;
 pub fn get_proxy_url() -> String {
     match DEFAULT_PROXY_TYPE {
         ProxyType::Http => format!("http://{}:{}", PROXY_HOST, PROXY_PORT),
-        ProxyType::Socks5 => format!("socks5://{}:{}", PROXY_HOST, PROXY_PORT),
+        ProxyType::Socks5 => format!("socks5h://{}:{}", PROXY_HOST, PROXY_PORT),
     }
 }
 
@@ -78,7 +78,7 @@ impl ProxyConfig {
     pub fn get_url(&self) -> String {
         match self.proxy_type {
             ProxyType::Http => format!("http://{}:{}", self.host, self.port),
-            ProxyType::Socks5 => format!("socks5://{}:{}", self.host, self.port),
+            ProxyType::Socks5 => format!("socks5h://{}:{}", self.host, self.port),
         }
     }
 }
