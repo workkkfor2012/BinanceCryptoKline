@@ -29,99 +29,11 @@ path = "src/bin/klagg_visual_test.rs"
 name = "data_audit"
 path = "src/bin/data_audit.rs"
 
-# 性能测试文件 - 已完成 f64 迁移，暂时注释掉
-# [[bin]]
-# name = "decimal_performance_test"
-# path = "src/bin/decimal_performance_test.rs"
-
-# [[bin]]
-# name = "advanced_numeric_performance_test"
-# path = "src/bin/advanced_numeric_performance_test.rs"
-
-# [[bin]]
-# name = "precision_accumulation_test"
-# path = "src/bin/precision_accumulation_test.rs"
-
-# [[bin]]
-# name = "btc_kline_precision_test"
-# path = "src/bin/btc_kline_precision_test.rs"
-
-# [[bin]]
-# name = "kline_precision_test"
-# path = "src/bin/kline_precision_test.rs"
+[[bin]]
+name = "builtin_proxy_service"
+path = "src/bin/builtin_proxy_service.rs"
 
 
-
-
-
-
-
-
-
-
-
-
-
-# 暂时注释掉缺失的测试二进制文件
-# [[bin]]
-# name = "test_cerberus"
-# path = "src/bin/test_cerberus.rs"
-
-# [[bin]]
-# name = "test_soft_assert"
-# path = "src/bin/test_soft_assert.rs"
-
-
-
-# 测试文件配置 - 暂时注释掉缺失的测试文件
-# [[test]]
-# name = "test_binance_ws"
-# path = "tests/test_binance_ws.rs"
-# harness = false
-
-# [[test]]
-# name = "test_binance_kline_ws"
-# path = "tests/test_binance_kline_ws.rs"
-# harness = false
-
-# [[test]]
-# name = "test_binance_continuous_kline_ws"
-# path = "tests/test_binance_continuous_kline_ws.rs"
-# harness = false
-
-# [[test]]
-# name = "test_binance_ws_multi_libs"
-# path = "tests/test_binance_ws_multi_libs.rs"
-# harness = false
-
-# [[test]]
-# name = "test_binance_async_tungstenite"
-# path = "tests/test_binance_async_tungstenite.rs"
-# harness = false
-
-# 聚合交易测试
-# [[test]]
-# name = "test_binance_aggtrade_fastws"
-# path = "tests/test_binance_aggtrade_fastws.rs"
-# harness = false
-
-# fastwebsockets 测试
-# [[test]]
-# name = "test_binance_fasws"
-# path = "tests/test_binance_fasws.rs"
-# harness = false
-
-# 服务器时间测试 - 暂时注释掉缺失的测试文件
-# [[test]]
-# name = "test_server_time"
-# path = "tests/test_server_time.rs"
-# harness = false
-
-# 服务器时间同步测试
-# [[test]]
-# name = "test_server_time_sync"
-# path = "tests/test_server_time_sync.rs"
-# harness = false
 
 
 [lib]
@@ -133,6 +45,8 @@ tokio = { version = "1.28", features = ["full"] }
 reqwest = { version = "0.11", features = ["json", "socks"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
+shadowsocks-service = { version = "1.23.6", features = ["local", "server"] }
 chrono = "0.4"
 core_affinity = "0.8"
 clap = { version = "4.3", features = ["derive"] }
@@ -146,7 +60,11 @@ futures-util = "0.3.28"
 tokio-stream = "0.1"
 csv = "1.2"
 tracing = { version = "0.1", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "json",
+    "time",
+] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
 # 追踪上下文传递支持
@@ -158,7 +76,10 @@ rusqlite = { version = "0.29", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.22"
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-async-tungstenite = { version = "0.23", features = ["tokio-runtime", "tokio-native-tls"] }
+async-tungstenite = { version = "0.23", features = [
+    "tokio-runtime",
+    "tokio-native-tls",
+] }
 tungstenite = { version = "0.20", features = ["native-tls"] }
 tokio-native-tls = "0.3"
 ws = "0.9"
@@ -174,7 +95,9 @@ hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 tokio-rustls = "0.24"
-rustls = { version = "0.21", features = ["dangerous_configuration"] } # dangerous_configuration might be needed for custom cert verification if required later
+rustls = { version = "0.21", features = [
+    "dangerous_configuration",
+] } # dangerous_configuration might be needed for custom cert verification if required later
 rustls-native-certs = "0.6"
 webpki = "0.22"
 webpki-roots = "0.22"
@@ -218,5 +141,3 @@ simd = ["wide"]
 
 # 定义一个 "full-audit" 功能，它会启用所有用于调试和校验的子系统
 full-audit = []
-
-

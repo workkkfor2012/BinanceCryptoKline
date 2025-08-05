@@ -1,0 +1,5 @@
+PS F:\work\github\BinanceCryptoKline> .\test_proxy.ps1
+测试内置代理服务...
+
+✗ 代理服务未启动或无法连接到 127.0.0.1:78900
+请先运行 start_proxy_.ps1 启动代理服务
