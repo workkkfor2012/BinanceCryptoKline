@@ -148,7 +148,7 @@ impl ServerTimeSyncManager {
         let start_time = Instant::now();
 
         // 与币安服务器时间同步
-        let temp_client = BinanceApi::create_new_client()?;
+        let temp_client = BinanceApi::create_new_client(false)?;
         let server_time = BinanceApi::get_server_time(&temp_client).await?;
 
         // 计算网络延迟（往返时间的一半）
@@ -235,7 +235,7 @@ impl ServerTimeSyncManager {
                 let start_time = Instant::now();
 
                 // 获取服务器时间
-                let temp_client = match BinanceApi::create_new_client() {
+                let temp_client = match BinanceApi::create_new_client(false) {
                     Ok(client) => client,
                     Err(e) => {
                         error!(target: "服务器校时", "创建HTTP客户端失败: {}", e);

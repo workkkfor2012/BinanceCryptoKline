@@ -181,7 +181,7 @@ impl ConcurrentAuditor {
                     continue;
                 }
 
-                if let Ok(new_client) = BinanceApi::create_new_client() {
+                if let Ok(new_client) = BinanceApi::create_new_client(false) {
                     let mut pool_guard = pool_clone.write().await;
                     if pool_guard.len() < POOL_TARGET_SIZE {
                         pool_guard.push(Arc::new(new_client));
@@ -717,7 +717,7 @@ async fn fetch_binance_klines(
     start_time: i64,
     end_time: i64,
 ) -> Result<Vec<Kline>> {
-    let client = BinanceApi::create_new_client()?;
+    let client = BinanceApi::create_new_client(false)?;
 
     // 构建URL参数
     let url_params = format!(

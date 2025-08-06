@@ -162,7 +162,8 @@ impl KlineBackfiller {
                     continue;
                 }
 
-                if let Ok(new_client) = BinanceApi::create_new_client() {
+                // [修改] 创建客户端时，传入 true 以使用高并发代理 (10808端口)
+                if let Ok(new_client) = BinanceApi::create_new_client(true) {
                     // [修复] 移除不必要的健康检查，新建的client本身就是健康的
                     let mut pool_guard = pool_clone.write().await;
                     if pool_guard.len() < POOL_TARGET_SIZE {

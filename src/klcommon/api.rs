@@ -1,4 +1,4 @@
-use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result, get_proxy_url};
+use crate::klcommon::{AppError, DownloadTask, ExchangeInfo, Kline, Result, proxy::{self, ProxyType}};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -90,13 +90,23 @@ pub struct ServerTime {
 pub struct BinanceApi; // 不再有任何字段
 
 impl BinanceApi {
-    /// 创建一个新的 reqwest::Client 实例（启用连接池）
-    pub fn create_new_client() -> Result<Client> {
+    /// [修改] 创建一个新的 reqwest::Client 实例（启用连接池），可选择高并发代理
+    pub fn create_new_client(use_high_concurrency_proxy: bool) -> Result<Client> {
         let client_builder = Client::builder()
             .timeout(Duration::from_secs(5))        // [优化] 总超时从30秒减少到15秒
             .connect_timeout(Duration::from_secs(2)); // [优化] 连接超时从10秒减少到5秒
 
-        let proxy_url = get_proxy_url();
+        let port = if use_high_concurrency_proxy {
+            proxy::PROXY_PORT_HIGH_CONCURRENCY
+        } else {
+            proxy::PROXY_PORT
+        };
+
+        let proxy_url = match proxy::DEFAULT_PROXY_TYPE {
+            ProxyType::Http => format!("http://{}:{}", proxy::PROXY_HOST, port),
+            ProxyType::Socks5 => format!("socks5h://{}:{}", proxy::PROXY_HOST, port),
+        };
+
         match reqwest::Proxy::all(&proxy_url) {
             Ok(proxy) => client_builder.proxy(proxy).build(),
             Err(_) => client_builder.build(),
@@ -135,8 +145,8 @@ impl BinanceApi {
         let mut last_error = None;
 
         for retry in 0..max_retries {
-            // 每次重试都创建新的客户端连接
-            let client = match Self::create_new_client() {
+            // [修改] 每次重试都创建新的客户端连接（使用默认代理）
+            let client = match Self::create_new_client(false) {
                 Ok(client) => client,
                 Err(e) => {
                     warn!(

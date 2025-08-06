@@ -184,7 +184,7 @@ impl LatestKlineUpdater {
                 let interval = task.interval.clone();
 
                 // 下载任务
-                let temp_client = match BinanceApi::create_new_client() {
+                let temp_client = match BinanceApi::create_new_client(false) {
                     Ok(client) => client,
                     Err(e) => {
                         error!("{}/{}: 创建HTTP客户端失败: {}", symbol, interval, e);

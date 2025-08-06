@@ -10,6 +10,9 @@ pub const PROXY_HOST: &str = "127.0.0.1";
 /// 代理服务器端口
 pub const PROXY_PORT: u16 = 1080;
 
+/// [新增] 高并发下载专用的代理服务器端口
+pub const PROXY_PORT_HIGH_CONCURRENCY: u16 = 10808;
+
 /// 代理类型枚举
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProxyType {

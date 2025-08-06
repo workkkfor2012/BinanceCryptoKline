@@ -29,9 +29,7 @@ path = "src/bin/klagg_visual_test.rs"
 name = "data_audit"
 path = "src/bin/data_audit.rs"
 
-[[bin]]
-name = "builtin_proxy_service"
-path = "src/bin/builtin_proxy_service.rs"
+
 
 
 

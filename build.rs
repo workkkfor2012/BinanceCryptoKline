@@ -10,9 +10,7 @@ fn main() {
     let target_dir = Path::new(&manifest_dir).join("target").join(profile);
 
     // --- 定义所有需要拷贝的资源 ---
-    let resources_to_copy = [
-        "obfs-local.exe",
-        "libwinpthread-1.dll",
+    let resources_to_copy: [&str; 0] = [
         // 如果未来还有其他dll，直接在这里加
     ];
 
