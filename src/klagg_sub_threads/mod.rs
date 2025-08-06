@@ -612,6 +612,7 @@ impl KlineAggregator {
 
     // [修改] 这是在 非 full-audit 模式下使用的"存根"实现
     #[cfg(not(feature = "full-audit"))]
+    #[allow(dead_code)]
     fn publish_lifecycle_event(&mut self, _kline_offset: usize, _old_kline_state: KlineState, _trigger: LifecycleTrigger) {
         // Do nothing. This function call will be compiled away.
     }
@@ -1018,8 +1019,8 @@ impl KlineAggregator {
                 self.dirty_flags[kline_offset] = true;
                 self.dirty_indices.push(kline_offset);
 
-                let global_symbol_index = kline_offset / self.periods.len();
-                let period_index = kline_offset % self.periods.len();
+                let _global_symbol_index = kline_offset / self.periods.len();
+                let _period_index = kline_offset % self.periods.len();
 
                 // 【修改此处】将原日志修改为包含完整上下文
                 // trace!(

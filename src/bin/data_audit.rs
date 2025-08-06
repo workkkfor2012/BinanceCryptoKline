@@ -20,10 +20,12 @@ use kline_server::klcommon::{
 // 高并发配置常量
 const POOL_TARGET_SIZE: usize = 100; // 稽核工具使用较小的连接池
 const AUDIT_CONCURRENCY: usize = 50; // 稽核并发数
+#[allow(dead_code)]
 const MAX_RETRIES: u32 = 3; // 最多重试次数
 
 // 任务执行结果枚举
 #[derive(Debug)]
+#[allow(dead_code)]
 enum AuditTaskResult {
     Success((Vec<MismatchDetail>, AuditStats)),
     Failure {
@@ -264,7 +266,7 @@ async fn execute_audit_tasks_concurrently(
             let current_success = success_clone.load(Ordering::Relaxed);
 
             let req_rate = (current_requests - last_requests) as f64 / 10.0;
-            let success_rate = (current_success - last_success) as f64 / 10.0;
+            let _success_rate = (current_success - last_success) as f64 / 10.0;
 
             println!(
                 "📊 稽核进度: {}/{} | 速率: {:.1}/s | 成功率: {:.1}%",
@@ -658,6 +660,7 @@ async fn fetch_binance_klines_with_pool(
 }
 
 /// 稽核单个交易对和周期的数据（保留原函数作为兼容）
+#[allow(dead_code)]
 async fn audit_symbol_interval(
     symbol: String,
     interval: String,
@@ -711,6 +714,7 @@ async fn audit_symbol_interval(
 }
 
 /// 从币安API获取K线数据
+#[allow(dead_code)]
 async fn fetch_binance_klines(
     symbol: &str,
     interval: &str,
@@ -892,12 +896,14 @@ fn klines_match(binance_kline: &Kline, local_kline: &Kline) -> bool {
 }
 
 /// 解析日期字符串为时间戳（毫秒）
+#[allow(dead_code)]
 fn parse_date_to_timestamp(date_str: &str) -> Result<i64> {
     let naive_date = NaiveDateTime::parse_from_str(&format!("{} 00:00:00", date_str), "%Y-%m-%d %H:%M:%S")?;
     Ok(naive_date.timestamp() * 1000)
 }
 
 /// 格式化时间戳为可读字符串
+#[allow(dead_code)]
 fn format_timestamp(timestamp: i64) -> String {
     let datetime = chrono::Utc.timestamp_millis(timestamp);
     datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string()

@@ -1,5 +1,5 @@
 use crate::klcommon::{Database, Result};
-use log::{info, warn};
+use log::info;
 use std::sync::Arc;
 use chrono::TimeZone;
 

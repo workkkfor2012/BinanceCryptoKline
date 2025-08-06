@@ -353,7 +353,7 @@ async fn run_app(
     let all_symbols: Vec<String> = global_index_to_symbol.read().await.clone();
 
     // [修改] 解构 new 函数的返回值
-    let (mut aggregator, mut outputs) = klagg::KlineAggregator::new(
+    let (mut aggregator, outputs) = klagg::KlineAggregator::new(
         &all_symbols,
         symbol_to_global_index.clone(),
         periods.clone(),

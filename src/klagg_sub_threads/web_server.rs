@@ -90,6 +90,7 @@ struct ApiKline {
 struct AppState {
     klines_watch_rx: watch::Receiver<Arc<DeltaBatch>>,
     index_to_symbol: Arc<RwLock<Vec<String>>>,
+    #[allow(dead_code)]
     periods: Arc<Vec<String>>,
     subscriptions: Arc<DashMap<String, Vec<mpsc::Sender<String>>>>,
 }
